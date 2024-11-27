@@ -8,6 +8,7 @@ class DefaultCamera(Camera):
     def initialize(self):
         self.camera = cv2.VideoCapture(0, cv2.CAP_DSHOW)
         self.fps = self.camera.get(cv2.CAP_PROP_FPS)
+        self.name = "Default Camera"
         
         print("fps:", self.fps)
 

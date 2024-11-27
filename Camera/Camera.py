@@ -4,14 +4,18 @@ import abc
 class Camera():
     __metaclass__ = abc.ABCMeta
 
+    name = ""
     camera = None
     fps = None
     frame = None
     scale = 1
     width = 0
     height = 0
+    capturePath = ""
 
     def __init__(self, frameWidth, frameHeight):
+        self.width = frameWidth
+        self.height = frameHeight
         self.initialize()
         self.resize(frameWidth, frameHeight)
 
@@ -28,9 +32,16 @@ class Camera():
         pass
 
     @abc.abstractmethod
-    def setFPS(self, fps):
+    def takeStillImage():
+        pass
+
+    @abc.abstractmethod
+    def saveStillImage(self):
         pass
 
     def getFrame(self):
         return pygame.transform.scale_by(pygame.surfarray.make_surface(self.frame), self.scale)
+    
+    def setCapturePath(self, path):
+        self.capturePath = path
 

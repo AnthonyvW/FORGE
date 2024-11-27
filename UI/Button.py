@@ -15,6 +15,10 @@ class Button():
 
         self.background = pygame.Color(32, 128, 32)
 
+    def setPosition(self, x, y):
+        self.x = x
+        self.y = y
+
     def CheckButton(self, mouseX:int, mouseY:int, mouseClick: bool):
         if(mouseX > self.x and mouseX < self.x + self.width and mouseY < self.y + self.height and mouseY > self.y):
             if(mouseClick):

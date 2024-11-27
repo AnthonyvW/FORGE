@@ -1,0 +1,27 @@
+auto_expo: 0
+brightness: -3
+contrast: 10
+curve: Polynomial
+exposure: 16
+fformat: png
+gamma: 100
+hue: 0
+levelrange_high:
+- 255
+- 255
+- 255
+- 255
+levelrange_low:
+- 0
+- 0
+- 0
+- 0
+linear: 1
+saturation: 45
+sharpening: 48
+temp: 10794
+tint: 925
+wbgain:
+- 0
+- 0
+- 0
