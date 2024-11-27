@@ -1,6 +1,6 @@
 import pygame
 
-class Button(object):
+class Button():
     def __init__(self, functionToCall, x:int, y:int, width:int, height:int):
         self.x = x
         self.y = y

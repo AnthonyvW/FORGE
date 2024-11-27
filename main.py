@@ -1,35 +1,23 @@
-import cv2
-import numpy as np
 import pygame
 
 from UI.Button import Button
+from Camera.DefaultCamera import DefaultCamera
+
 
 pygame.init()
 pygame.display.set_caption("Tree Ring Imaging Machine v2")
-screen = pygame.display.set_mode([1280,720])
-#0 Is the built in camera
-cap = cv2.VideoCapture(0)
-#Gets fps of your camera
-fps = cap.get(cv2.CAP_PROP_FPS)
-print("fps:", fps)
-#If your camera can achieve 60 fps
-#Else just have this be 1-30 fps
-cap.set(cv2.CAP_PROP_FPS, 60)
+width, height = (1280,720)
+#scale = min(width/src.width, height/src.height)
+screen = pygame.display.set_mode((width, height), pygame.RESIZABLE)
+
 # A clock to limit the frame rate.
 clock = pygame.time.Clock()  
-# Font
-defaultFont = pygame.font.SysFont("Arial", 30)
-
-# Draws Text on screen at x, y
-def draw_text(text, _x, _y, color=(255, 255, 255), font=defaultFont):
-    img = font.render(text, True, color)
-    screen.blit(img, (_x, _y))
-
 
 def say():
     print("Hello")
 
 button = Button(say, 1000, 500, 40, 40)
+camera = DefaultCamera(width-500,height)
 
 running = True
 while running:
@@ -40,29 +28,22 @@ while running:
     for event in pygame.event.get():
         if event.type == pygame.QUIT:
             running = False
-        if event.type == pygame.MOUSEBUTTONDOWN:
+        elif event.type == pygame.VIDEORESIZE:
+            width, height = screen.get_size()
+            camera.resize(width-500, height)
+            print(width, height)
+        elif event.type == pygame.MOUSEBUTTONDOWN:
             button.CheckButton(pos[0], pos[1], True)
-        if event.type == pygame.KEYDOWN:
+        elif event.type == pygame.KEYDOWN:
             if event.key == pygame.K_ESCAPE:
                 running = False
-        if event.type == pygame.KEYUP:
+        elif event.type == pygame.KEYUP:
             background_color = pygame.Color(255,0,0)
             screen.fill(background_color)
 
     # Update
-
+    camera.update()
     button.CheckButton(pos[0], pos[1], False)
-
-    success, frame = cap.read()
-    if not success:
-        break
-    # The video uses BGR colors and PyGame needs RGB
-    frame = cv2.cvtColor(frame, cv2.COLOR_BGR2RGB)
-    #for some reasons the frames appeared inverted
-    frame = np.fliplr(frame)
-    frame = np.rot90(frame)
-    surf = pygame.surfarray.make_surface(frame)
-
 
     # Rendering
 
@@ -70,7 +51,7 @@ while running:
 
     button.draw(screen)
     
-    screen.blit(surf, (0,0))
+    screen.blit(camera.getFrame(), (0,0))
     pygame.display.flip()
     pygame.display.update()
 
