@@ -28,3 +28,6 @@ class DefaultCamera(Camera):
     def setFPS(self, fps):
         self.fps = fps
         print("fps:", fps)
+
+    def saveStillImage(self):
+        pass

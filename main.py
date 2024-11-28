@@ -4,7 +4,7 @@ import time
 from UI.Button import Button
 from Camera.DefaultCamera import DefaultCamera
 from Camera.AmScopeCamera import AmscopeCamera
-
+from printer import printer
 
 pygame.init()
 pygame.display.set_caption("Tree Ring Imaging Machine v2")
@@ -15,28 +15,23 @@ screen = pygame.display.set_mode((width, height), pygame.RESIZABLE)
 # A clock to limit the frame rate.
 clock = pygame.time.Clock()  
 
-def sayLeft():
-    print("Left")
+movementSystem = printer()
+camera = DefaultCamera(width-500,height)
+time.sleep(1.5)
+camera.resize(width - 500, height)
 
-def sayRight():
-    print("Right")
-
-def sayUp():
-    print("Up")
-
-def sayDown():
-    print("Down")
+def func1():
+    pass
 
 buttons = [
-    Button(sayLeft , width - 400, 500, 40, 40),
-    Button(sayRight, width - 300, 500, 40, 40),
-    Button(sayUp   , width - 350, 450, 40, 40),
-    Button(sayDown , width - 350, 550, 40, 40),
+    Button(movementSystem.moveXLeft    , width - 400, 500, 40, 40),
+    Button(movementSystem.moveXRight   , width - 300, 500, 40, 40),
+    Button(movementSystem.moveYForward, width - 350, 450, 40, 40),
+    Button(movementSystem.moveYBackward , width - 350, 550, 40, 40),
+    Button(movementSystem.moveZUp      , width - 250, 475, 40, 40),
+    Button(movementSystem.moveZDown    , width - 250, 525, 40, 40),
+    Button(camera.takeStillImage       , width - 350, 350, 40, 40),
     ]
-
-camera = AmscopeCamera(width-500,height)
-time.sleep(0.5)
-camera.resize(width - 500, height)
 
 running = True
 while running:
@@ -56,6 +51,9 @@ while running:
             buttons[1].setPosition(width - 300, 500)
             buttons[2].setPosition(width - 350, 450)
             buttons[3].setPosition(width - 350, 550)
+            buttons[4].setPosition(width - 250, 475)
+            buttons[5].setPosition(width - 250, 525)
+            buttons[6].setPosition(width - 350, 350)
 
             print(width, height)
         elif event.type == pygame.MOUSEBUTTONDOWN:

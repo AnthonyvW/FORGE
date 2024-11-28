@@ -3,10 +3,11 @@ import sys
 import yaml
 import cv2
 import pygame
-import numpy
-
+import numpy as np
+from PIL import Image
 from Camera.Camera import Camera
 import Camera.amcam.amcam as amcam
+import io
 
 class AmscopeCamera(Camera):
     camera = None
@@ -19,6 +20,8 @@ class AmscopeCamera(Camera):
     frame = None
     buffer = []
     
+    capturePath = "./output/test2.png"
+
     _autoExposure = False
     _exposure = 120 # Optimal is 120
     _temp = 11616
@@ -70,7 +73,7 @@ class AmscopeCamera(Camera):
     @staticmethod
     def cameraCallback(event, _self: 'Camera'):
         if event == amcam.AMCAM_EVENT_STILLIMAGE:
-            _self.save_still_image()
+            _self.saveStillImage()
         elif event == amcam.AMCAM_EVENT_IMAGE:
             _self.stream()
         elif event == amcam.AMCAM_EVENT_EXPO_START:
@@ -260,15 +263,14 @@ class AmscopeCamera(Camera):
 
     def resize(self, frameWidth, frameHeight):
         if(self.frame != None):
-            width  = self.frame.get_width()
-            height = self.frame.get_height()
-            self.scale = min(frameWidth/width, frameHeight/height)
+            self.scale = min(frameWidth/self.frame.get_width(), frameHeight/self.frame.get_height())
 
     def stream(self):
         try:
             self.camera.PullImageV2(self.buffer, 24, None)
         except amcam.HRESULTException as e: print(e)
         else:
+            self.width, self.height = self.camera.get_Size()
             self.frame = pygame.image.frombuffer(self.buffer, [self.width, self.height], 'RGB')
 
     def getFrame(self):
@@ -278,18 +280,33 @@ class AmscopeCamera(Camera):
         return self.frame
 
     def takeStillImage(self):
+        print("Taking Image")
         self.camera.Snap(0)
 
     def saveStillImage(self):
-        self.width = self.camera.get_StillResolution(0)[0]
-        self.height = self.camera.get_StillResolution(0)[1]
+        camWidth = self.camera.get_StillResolution(0)[0]
+        camHeight = self.camera.get_StillResolution(0)[1]
 
         try:
-            buffer_size = self.width * self.height * 24
+            buffer_size = camWidth * camHeight * 24
             buf = bytes(buffer_size)
             self.camera.PullStillImageV2(buf, 24, None)
+            print("Saving")
+            decoded = np.frombuffer(buf, np.uint8)
+            decoded = decoded.reshape((camHeight, camWidth, 3))
+            img = Image.fromarray(decoded)
+            img.save(self.capturePath)
+
+
+            #image = numpy.frombuffer(buf, dtype=numpy.uint16)
+            #
+            cv2.imwrite(self.capturePath, decoded)
+            print("Saving complete")
+            #print(len(buf), camWidth * camHeight, camWidth, camHeight)
+            #output = pygame.image.frombuffer(buf, [camWidth, camHeight], 'RGB')
+            #pygame.image.save(output, self.capturePath)
         except amcam.HRESULTException as e: print(e)
-    
+
     def close(self):
         self.camera.Close()
         self.camera = None

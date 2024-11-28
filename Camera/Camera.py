@@ -11,7 +11,7 @@ class Camera():
     scale = 1
     width = 0
     height = 0
-    capturePath = ""
+    capturePath = "output/"
 
     def __init__(self, frameWidth, frameHeight):
         self.width = frameWidth

@@ -1,7 +1,7 @@
 import serial
 import time
 
-printer_serial = serial.Serial('COM6', 115200)
+printer_serial = serial.Serial('COM3', 115200)
 time.sleep(1)
 while True:
     input_user = input('Enter Command : ')
