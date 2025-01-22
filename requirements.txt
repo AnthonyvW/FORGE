@@ -7,3 +7,4 @@ pygame-ce==2.5.2
 pyserial==3.5
 PyYAML==6.0.2
 stitching==0.6.1
+pillow==11.1.0

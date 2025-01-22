@@ -16,7 +16,7 @@ screen = pygame.display.set_mode((width, height), pygame.RESIZABLE)
 clock = pygame.time.Clock()  
 
 movementSystem = printer()
-camera = DefaultCamera(width-500,height)
+camera = AmscopeCamera(width-500,height)
 time.sleep(1.5)
 camera.resize(width - 500, height)
 
@@ -26,8 +26,8 @@ def func1():
 buttons = [
     Button(movementSystem.moveXLeft    , width - 400, 500, 40, 40),
     Button(movementSystem.moveXRight   , width - 300, 500, 40, 40),
-    Button(movementSystem.moveYForward, width - 350, 450, 40, 40),
-    Button(movementSystem.moveYBackward , width - 350, 550, 40, 40),
+    Button(movementSystem.moveYForward , width - 350, 450, 40, 40),
+    Button(movementSystem.moveYBackward, width - 350, 550, 40, 40),
     Button(movementSystem.moveZUp      , width - 250, 475, 40, 40),
     Button(movementSystem.moveZDown    , width - 250, 525, 40, 40),
     Button(camera.takeStillImage       , width - 350, 350, 40, 40),

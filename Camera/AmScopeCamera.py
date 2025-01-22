@@ -288,8 +288,9 @@ class AmscopeCamera(Camera):
         camHeight = self.camera.get_StillResolution(0)[1]
 
         try:
-            buffer_size = camWidth * camHeight * 24
+            buffer_size = camWidth * camHeight * 3
             buf = bytes(buffer_size)
+            print("getting image")
             self.camera.PullStillImageV2(buf, 24, None)
             print("Saving")
             decoded = np.frombuffer(buf, np.uint8)
@@ -297,14 +298,8 @@ class AmscopeCamera(Camera):
             img = Image.fromarray(decoded)
             img.save(self.capturePath)
 
-
-            #image = numpy.frombuffer(buf, dtype=numpy.uint16)
-            #
             cv2.imwrite(self.capturePath, decoded)
             print("Saving complete")
-            #print(len(buf), camWidth * camHeight, camWidth, camHeight)
-            #output = pygame.image.frombuffer(buf, [camWidth, camHeight], 'RGB')
-            #pygame.image.save(output, self.capturePath)
         except amcam.HRESULTException as e: print(e)
 
     def close(self):
