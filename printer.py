@@ -13,7 +13,7 @@ class printer():
 
     def __init__(self):
         self.commandQueue.put("G1 Z0")
-        self.printerSerial = serial.Serial('COM3', 115200)
+        self.printerSerial = serial.Serial('COM3', 115200) #250000
         threading.Thread(target=self.startThread, daemon=True).start()
 
     def startThread(self):

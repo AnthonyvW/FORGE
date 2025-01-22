@@ -19,8 +19,8 @@ class AmscopeCamera(Camera):
 
     frame = None
     buffer = []
-    
-    capturePath = "./output/test2.png"
+    captureIndex = 1
+    capturePath = "./output/test"
 
     _autoExposure = False
     _exposure = 120 # Optimal is 120
@@ -296,9 +296,8 @@ class AmscopeCamera(Camera):
             decoded = np.frombuffer(buf, np.uint8)
             decoded = decoded.reshape((camHeight, camWidth, 3))
             img = Image.fromarray(decoded)
-            img.save(self.capturePath)
-
-            cv2.imwrite(self.capturePath, decoded)
+            img.save(self.capturePath + str(self.captureIndex) + "." + self._image_file_format)
+            self.captureIndex += 1
             print("Saving complete")
         except amcam.HRESULTException as e: print(e)
 
