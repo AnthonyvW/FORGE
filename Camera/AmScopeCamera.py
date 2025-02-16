@@ -57,7 +57,6 @@ class AmscopeCamera(Camera):
             self.width, self.height = self.camera.get_Size()
             self.buffer = bytes((self.width * 24 + 31) // 32 * 4) * self.height
             print(f"Number of still resolutions supported: {self.camera.StillResolutionNumber()}")
-            print(f"Supported Resolutions: {self.camera.resolutions}")
             try:
                 if sys.platform == 'win32':
                     self.camera.put_Option(amcam.AMCAM_OPTION_BYTEORDER, 0) # QImage.Format_RGB888

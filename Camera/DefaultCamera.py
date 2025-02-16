@@ -31,3 +31,6 @@ class DefaultCamera(Camera):
 
     def saveStillImage(self, position):
         pass
+
+    def isBlack(self):
+        return False

@@ -2,6 +2,7 @@ import serial
 import time
 import queue
 import threading
+import re  # Import regex to extract X, Y, Z values
 
 class printer():
 
@@ -17,54 +18,77 @@ class printer():
         self.printerSerial = serial.Serial('COM6', 115200) #250000
         self.paused = False
         self.camera = camera
-        self.move_times = deque(maxlen=10)  # Store last 10 move times
         threading.Thread(target=self.startThread, daemon=True).start()
+        self.isAutomated = False
 
     def startThread(self):
         time.sleep(1)
-        while(True):
-            if(not self.paused):
+        last_image_black = False  # Track if the last image was black
+        z_start = 4380
+        z_end = 4780
+        z_step = 4
+        z_dir = 1  # 1 for increasing Z, -1 for decreasing Z
+
+        while True:
+            if not self.paused:
                 command = self.commandQueue.get()
-                if command.startswith("G"):  # Only send move commands to the printer
-                    start_time = time.time()
+
+                if command.startswith("G"):
                     self.sendCommand(command)
 
+                    # Extract X, Y, Z positions from the command
+                    match = re.search(r'X([\d\.]+)', command)
+                    if match:
+                        self.X = int(float(match.group(1)) * 100)  # Convert back to internal units
+
+                    match = re.search(r'Y([\d\.]+)', command)
+                    if match:
+                        self.Y = int(float(match.group(1)) * 100)
+
+                    match = re.search(r'Z([\d\.]+)', command)
+                    if match:
+                        self.Z = int(float(match.group(1)) * 100)
+
+                    # Wait for printer response
                     response = self.printerSerial.readline().decode().strip()
                     while response.lower() != 'ok':
                         response = self.printerSerial.readline().decode().strip()
-                        if(response != "echo:busy: processing"):
-                            print("printer response:", response)
-                    
-                    move_time = time.time() - start_time  # Calculate actual move time
-                    self.move_times.append(move_time)  # Store in queue
 
-                # Execute CameraStill after the move
-                if command.startswith("CAMERASTILL"):
-                    # Send M400 to wait for all moves to finish
-                    self.sendCommand("M400")
-                    response = self.printerSerial.readline().decode().strip()
-                    while response.lower() != 'ok':
-                        response = self.printerSerial.readline().decode().strip()
+                    if(self.isAutomated):
+                        # Handle Z moves dynamically in a zig-zag pattern
+                        z_range = range(z_start, z_end + z_step, z_step) if z_dir > 0 else range(z_end, z_start - z_step, -z_step)
 
-                    start_time = time.time()
-                    time.sleep(0.1) # Let camera stabilize
-                    self.camera.takeStillImage([self.getPosition()])
-                    while self.camera.isTakingImage:
-                        time.sleep(0.01)  # Short sleep to avoid excessive CPU usage
+                        for z in z_range:
+                            self.sendCommand(f"G0 Z{z / 100}")  # Move Z
+                            self.Z = z
+                            response = self.printerSerial.readline().decode().strip()
+                            while response.lower() != 'ok':
+                                response = self.printerSerial.readline().decode().strip()
 
-                    capture_time = time.time() - start_time  # Time the image took to capture
+                            # Take picture after Z move
+                            self.sendCommand("M400")  # Wait for all moves to finish
+                            self.printerSerial.readline().decode().strip()
+                            time.sleep(0.1)  # Let camera stabilize
+                            self.camera.takeStillImage([self.getPosition()])
 
-                    # Estimate remaining time
-                    remaining_commands = self.commandQueue.qsize()
-                    avg_move_time = sum(self.move_times) / len(self.move_times) if self.move_times else 0.1
-                    estimated_seconds = remaining_commands * (avg_move_time + capture_time)
-                    estimated_minutes = estimated_seconds / 60
-                    estimated_hours = estimated_minutes / 60
+                            while self.camera.isTakingImage:
+                                time.sleep(0.01)  # Avoid excessive CPU usage
+
+                            # If image is black, stop further Z moves
+                            if self.camera.isBlack():
+                                print(f"Skipping remaining Z moves at X/Y position")
+                                last_image_black = True
+                                break
+                        else:
+                            last_image_black = False  # Reset if full Z range was processed
+                        
+                        # Flip Z direction for next Y move
+                        z_dir *= -1
 
 
         
     def getPosition(self):
-        print((self.X, self.Y, self.Z))
+        #print((self.X, self.Y, self.Z))
         return (self.X, self.Y, self.Z)
 
     def sendCommand(self, command):
@@ -86,40 +110,30 @@ class printer():
         print("Cleared Queue")
 
     def startAutomation(self):
-        #self.camera.takeStillImage([self.getPosition()])
         x_start = 10000
         y_start = 10500
-        z_start  = 4380
+        z_start = 4380
 
         x_end = 16500
         y_end = 16900
-        z_end  = 4780
 
-        x_step = 20
-        y_step = 20
-        z_step = 4
-        
+        x_step = 200
+        y_step = 200
+
         y_dir = 1  # Zig-zag direction for Y-axis
-        z_dir = 1  # Zig-zag direction for Z-axis
 
         self.commandQueue.put(f"G0 X{x_start / 100} Y{y_start / 100} Z{z_start / 100}")
         x_range = range(x_start, x_end + x_step, x_step) if x_start < x_end else range(x_start, x_end - x_step, -x_step)
         y_range = range(y_start, y_end + y_step, y_step)
-        z_range = range(z_start, z_end + z_step, z_step)
 
         for x in x_range:
             if x != x_start:
                 y_dir *= -1  # Flip y-direction
             for y in (y_range if y_dir > 0 else reversed(y_range)):
-                if y != y_start:
-                    z_dir *= -1  # Flip z-direction
-
-                for z in (z_range if z_dir > 0 else reversed(z_range)):
-                    self.commandQueue.put(f"G0 X{x/ 100} Y{y/ 100} Z{z/ 100}")
-                    self.commandQueue.put("CAMERASTILL")  # Send G-code command
+                self.commandQueue.put(f"G0 X{x/100} Y{y/100}")  # Queue only X/Y moves
 
         print("Automation Queued")
-        #self.commandQueue.put(f"G0 X{destX / 100} Y{destY / 100} Z{destZ / 100}")
+        self.isAutomated = True
 
     def moveZUp(self):
         self.Z += self.speed * 2
