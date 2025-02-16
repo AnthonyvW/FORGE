@@ -17,6 +17,9 @@ class AmscopeCamera(Camera):
     name = ""
     runtime = 0
 
+    printerPosition = (0, 0, 0)
+    isTakingImage = False
+
     frame = None
     buffer = []
     captureIndex = 1
@@ -54,6 +57,7 @@ class AmscopeCamera(Camera):
             self.width, self.height = self.camera.get_Size()
             self.buffer = bytes((self.width * 24 + 31) // 32 * 4) * self.height
             print(f"Number of still resolutions supported: {self.camera.StillResolutionNumber()}")
+            print(f"Supported Resolutions: {self.camera.resolutions}")
             try:
                 if sys.platform == 'win32':
                     self.camera.put_Option(amcam.AMCAM_OPTION_BYTEORDER, 0) # QImage.Format_RGB888
@@ -279,8 +283,10 @@ class AmscopeCamera(Camera):
     def update(self):
         return self.frame
 
-    def takeStillImage(self):
-        print("Taking Image")
+    def takeStillImage(self, position):
+        print("Taking Image", position[0])
+        self.printerPosition = position[0]
+        self.isTakingImage = True
         self.camera.Snap(0)
 
     def saveStillImage(self):
@@ -296,10 +302,14 @@ class AmscopeCamera(Camera):
             decoded = np.frombuffer(buf, np.uint8)
             decoded = decoded.reshape((camHeight, camWidth, 3))
             img = Image.fromarray(decoded)
-            img.save(self.capturePath + str(self.captureIndex) + "." + self._image_file_format)
+            img.save(self.capturePath + str(self.captureIndex) + "PX" + str(self.printerPosition[0]) + "Y" + str(self.printerPosition[1]) + "Z" + str(self.printerPosition[2]) + "." + self._image_file_format)
             self.captureIndex += 1
             print("Saving complete")
         except amcam.HRESULTException as e: print(e)
+        self.isTakingImage = False
+
+    def isBlack(self):
+        return True
 
     def close(self):
         self.camera.Close()
