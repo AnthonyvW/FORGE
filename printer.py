@@ -22,24 +22,30 @@ class printer():
         self.isAutomated = False
 
     def startThread(self):
+
+        def processCommand(command):
+            self.sendCommand(command)
+            response = self.printerSerial.readline().decode().strip()
+            while response.lower() != 'ok':
+                response = self.printerSerial.readline().decode().strip()
+
         time.sleep(1)
-        last_image_black = False  # Track if the last image was black
+        last_image_black = False
         z_start = 4380
         z_end = 4780
         z_step = 4
-        z_dir = 1  # 1 for increasing Z, -1 for decreasing Z
+        z_dir = 1
 
         while True:
             if not self.paused:
                 command = self.commandQueue.get()
 
                 if command.startswith("G"):
-                    self.sendCommand(command)
 
                     # Extract X, Y, Z positions from the command
                     match = re.search(r'X([\d\.]+)', command)
                     if match:
-                        self.X = int(float(match.group(1)) * 100)  # Convert back to internal units
+                        self.X = int(float(match.group(1)) * 100)
 
                     match = re.search(r'Y([\d\.]+)', command)
                     if match:
@@ -49,27 +55,25 @@ class printer():
                     if match:
                         self.Z = int(float(match.group(1)) * 100)
 
-                    # Wait for printer response
-                    response = self.printerSerial.readline().decode().strip()
-                    while response.lower() != 'ok':
-                        response = self.printerSerial.readline().decode().strip()
+                    processCommand(command)
 
                     if(self.isAutomated):
                         # Handle Z moves dynamically in a zig-zag pattern
                         z_range = range(z_start, z_end + z_step, z_step) if z_dir > 0 else range(z_end, z_start - z_step, -z_step)
 
+                        noFocusCount = 0
+                        focusCount = 0
                         for z in z_range:
-                            self.sendCommand(f"G0 Z{z / 100}")  # Move Z
                             self.Z = z
-                            response = self.printerSerial.readline().decode().strip()
-                            while response.lower() != 'ok':
-                                response = self.printerSerial.readline().decode().strip()
+
+                            processCommand(f"G0 Z{z / 100}") # Move Z
 
                             # Take picture after Z move
-                            self.sendCommand("M400")  # Wait for all moves to finish
-                            self.printerSerial.readline().decode().strip()
+                            processCommand("M400") # Wait for all moves to finish
                             time.sleep(0.1)  # Let camera stabilize
-                            self.camera.takeStillImage([self.getPosition()])
+
+                            # Capture the image, but do not save it
+                            self.camera.captureImage([self.getPosition()])
 
                             while self.camera.isTakingImage:
                                 time.sleep(0.01)  # Avoid excessive CPU usage
@@ -79,11 +83,25 @@ class printer():
                                 print(f"Skipping remaining Z moves at X/Y position")
                                 last_image_black = True
                                 break
-                        else:
-                            last_image_black = False  # Reset if full Z range was processed
-                        
-                        # Flip Z direction for next Y move
-                        z_dir *= -1
+                            else:
+                                last_image_black = False  # Reset since we got a non-black image
+                            
+                            if self.camera.isInFocus():
+                                # Save the camera's image
+                                self.camera.saveImage("X" + str(self.X) + " Y" + str(self.Y))
+                                focusCount += 1
+                            elif(focusCount > 0):
+                                print("Lost Focus")
+                                break
+                            elif(noFocusCount > 10):
+                                print("Failed to Find Focus")
+                                break
+                            else:
+                                noFocusCount += 1
+
+                        # Only flip Z direction if the last image wasn't black
+                        if not last_image_black:
+                            z_dir *= -1
 
 
         
@@ -92,8 +110,8 @@ class printer():
         return (self.X, self.Y, self.Z)
 
     def sendCommand(self, command):
-        if(not command.startswith("G0")):
-            print((command + "\n"))
+        if(not command.startswith("G0") and command != "M400"):
+            print((command))
         self.printerSerial.write((command + "\n").encode())
 
     def togglePause(self):
@@ -110,12 +128,12 @@ class printer():
         print("Cleared Queue")
 
     def startAutomation(self):
-        x_start = 10000
+        x_start = 10200
         y_start = 10500
         z_start = 4380
 
         x_end = 16500
-        y_end = 16900
+        y_end = 16700
 
         x_step = 200
         y_step = 200

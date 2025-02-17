@@ -42,7 +42,7 @@ buttons = [
     Button(movementSystem.togglePause      , width - 250, 350, 40, 40),
     Button(movementSystem.startAutomation  , width - 350, 250, 40, 40),
     Button(movementSystem.halt             , width - 150, 350, 40, 40),
-    Button(camera.takeStillImage           , width - 350, 350, 40, 40),
+    Button(camera.captureAndSaveImage      , width - 350, 350, 40, 40),
     ]
 
 running = True

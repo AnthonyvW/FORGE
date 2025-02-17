@@ -8,6 +8,8 @@ from PIL import Image
 from Camera.Camera import Camera
 import Camera.amcam.amcam as amcam
 import io
+import time
+from pathlib import Path
 
 class AmscopeCamera(Camera):
     camera = None
@@ -20,10 +22,11 @@ class AmscopeCamera(Camera):
     printerPosition = (0, 0, 0)
     isTakingImage = False
 
-    frame = None
     buffer = []
+    lastImage = None
     captureIndex = 1
-    capturePath = "./output/test"
+    capturePath = "./output/"
+    captureName = "test"
 
     _autoExposure = False
     _exposure = 120 # Optimal is 120
@@ -76,7 +79,8 @@ class AmscopeCamera(Camera):
     @staticmethod
     def cameraCallback(event, _self: 'Camera'):
         if event == amcam.AMCAM_EVENT_STILLIMAGE:
-            _self.saveStillImage()
+            _self._processFrame()
+            #_self.saveStillImage()
         elif event == amcam.AMCAM_EVENT_IMAGE:
             _self.stream()
         elif event == amcam.AMCAM_EVENT_EXPO_START:
@@ -282,33 +286,129 @@ class AmscopeCamera(Camera):
     def update(self):
         return self.frame
 
-    def takeStillImage(self, position):
+    def captureAndSaveImage(self, position):
         print("Taking Image", position[0])
         self.printerPosition = position[0]
         self.isTakingImage = True
         self.camera.Snap(0)
+        self.saveImage()
 
-    def saveStillImage(self):
+    def captureImage(self, position):
+        print("Capturing Image", position[0])
+        self.printerPosition = position[0]
+        self.isTakingImage = True
+        self.camera.Snap(0)
+
+    def _processFrame(self):
+        self.isTakingImage = True
         camWidth = self.camera.get_StillResolution(0)[0]
         camHeight = self.camera.get_StillResolution(0)[1]
-
-        try:
-            buffer_size = camWidth * camHeight * 3
-            buf = bytes(buffer_size)
-            print("getting image")
-            self.camera.PullStillImageV2(buf, 24, None)
-            print("Saving")
-            decoded = np.frombuffer(buf, np.uint8)
-            decoded = decoded.reshape((camHeight, camWidth, 3))
-            img = Image.fromarray(decoded)
-            img.save(self.capturePath + str(self.captureIndex) + "PX" + str(self.printerPosition[0]) + "Y" + str(self.printerPosition[1]) + "Z" + str(self.printerPosition[2]) + "." + self._image_file_format)
-            self.captureIndex += 1
-            print("Saving complete")
-        except amcam.HRESULTException as e: print(e)
+        buffer_size = camWidth * camHeight * 3
+        buf = bytes(buffer_size)
+        self.camera.PullStillImageV2(buf, 24, None)
+        decoded = np.frombuffer(buf, np.uint8)
+        decoded = decoded.reshape((camHeight, camWidth, 3))
+        self.lastImage = decoded
         self.isTakingImage = False
 
+    def saveImage(self, folder = ""):
+
+        if(folder != ""):
+            folder += "/"
+        # Wait until camera is done taking image
+        while(self.isTakingImage):
+            time.sleep(0.01)  # Avoid excessive CPU usage
+
+        try:
+            
+            Path(self.capturePath + folder).mkdir(parents=True, exist_ok=True)
+            name = self.capturePath + folder + self.captureName + str(self.captureIndex) + "PX" + str(self.printerPosition[0]) + "Y" + str(self.printerPosition[1]) + "Z" + str(self.printerPosition[2]) + "." + self._image_file_format
+            print("Saving Image:", name)
+            img = Image.fromarray(self.lastImage)
+            img.save(name)
+            self.captureIndex += 1
+        except amcam.HRESULTException as e: print(e)
+
     def isBlack(self):
-        return True
+        while(self.isTakingImage):
+            time.sleep(0.01)  # Avoid excessive CPU usage
+        # Calculate some basic statistics
+        colors = ('r', 'g', 'b')
+        stdDev = []
+        for i, color in enumerate(colors):
+            channel = self.lastImage[:,:,i]
+            stdDev.append(float(np.std(channel)))
+        
+        if(stdDev[0] < 5 or stdDev[1] < 5 or stdDev[2] < 5):
+            return True
+        else:
+            print("Standard Deviation :", stdDev)
+            return False
+
+    def calculate_quadrant_focus(self, image, kernel_size=3, threshold=100):
+        """
+        Calculate focus measures for each quadrant of the image.
+        
+        Args:
+            image: numpy array of the image
+            kernel_size (int): Size of the Laplacian kernel
+            threshold (float): Threshold for determining if quadrant is in focus
+            
+        Returns:
+            tuple: (quadrant_scores, best_score, best_quadrant, histogram_data)
+        """
+        height, width = image.shape[:2]
+        mid_h, mid_w = height // 2, width // 2
+        
+        # Define quadrants
+        quadrants = [
+            ('Top Left', image[0:mid_h, 0:mid_w]),
+            ('Top Right', image[0:mid_h, mid_w:]),
+            ('Bottom Left', image[mid_h:, 0:mid_w]),
+            ('Bottom Right', image[mid_h:, mid_w:])
+        ]
+        
+        quadrant_scores = {}
+        
+        for name, quad in quadrants:
+            # Convert quadrant to grayscale if it's not already
+            if len(quad.shape) == 3:
+                quad = cv2.cvtColor(quad, cv2.COLOR_BGR2GRAY)
+                
+            # Apply Gaussian blur to reduce noise
+            blurred = cv2.GaussianBlur(quad, (3, 3), 0)
+            
+            # Calculate Laplacian
+            laplacian = cv2.Laplacian(blurred, cv2.CV_64F, ksize=kernel_size)
+            abs_laplacian = np.absolute(laplacian)
+            
+            # Calculate histogram
+            hist, bins = np.histogram(abs_laplacian, bins=256, range=(0, 256))
+            
+            # Calculate focus measures
+            variance = np.var(abs_laplacian)
+            percentile_90 = np.percentile(abs_laplacian, 90)
+            
+            # Calculate focus score
+            focus_score = (variance + percentile_90) / 2
+            
+            quadrant_scores[name] = focus_score
+        
+        # Find best quadrant
+        best_quadrant = max(quadrant_scores.items(), key=lambda x: x[1])
+        
+        return best_quadrant[1] 
+
+    def isInFocus(self):
+        while(self.isTakingImage):
+            time.sleep(0.01)  # Avoid excessive CPU usage
+
+        focusScore = self.calculate_quadrant_focus(self.lastImage)
+        print("Focus Score:", focusScore)
+        if(focusScore > 15.5):
+            return True
+        else:
+            return False
 
     def close(self):
         self.camera.Close()
