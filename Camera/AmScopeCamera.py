@@ -345,7 +345,7 @@ class AmscopeCamera(Camera):
             print("Standard Deviation :", stdDev)
             return False
 
-    def calculate_quadrant_focus(self, image, kernel_size=3, threshold=100):
+    def calculate_quadrant_focus(self, image, kernel_size=5, threshold=100):
         """
         Calculate focus measures for each quadrant of the image.
         
@@ -405,10 +405,7 @@ class AmscopeCamera(Camera):
 
         focusScore = self.calculate_quadrant_focus(self.lastImage)
         print("Focus Score:", focusScore)
-        if(focusScore > 15.5):
-            return True
-        else:
-            return False
+        return focusScore
 
     def close(self):
         self.camera.Close()

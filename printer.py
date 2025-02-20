@@ -22,7 +22,6 @@ class printer():
         self.isAutomated = False
 
     def startThread(self):
-
         def processCommand(command):
             self.sendCommand(command)
             response = self.printerSerial.readline().decode().strip()
@@ -31,9 +30,10 @@ class printer():
 
         time.sleep(1)
         last_image_black = False
-        z_start = 4380
-        z_end = 4780
-        z_step = 4
+        z_start = 4250#4380
+        z_end = 4430#4620
+        normal_z_step = 2
+        fast_z_step = normal_z_step * 10
         z_dir = 1
 
         while True:
@@ -58,48 +58,55 @@ class printer():
                     processCommand(command)
 
                     if(self.isAutomated):
-                        # Handle Z moves dynamically in a zig-zag pattern
-                        z_range = range(z_start, z_end + z_step, z_step) if z_dir > 0 else range(z_end, z_start - z_step, -z_step)
-
+                        current_z_step = fast_z_step
+                        z_position = z_start if z_dir > 0 else z_end
                         noFocusCount = 0
                         focusCount = 0
-                        for z in z_range:
-                            self.Z = z
+                        print("ATTENTION : Starting X/Y Step")
+                        while (z_dir > 0 and z_position <= z_end) or (z_dir < 0 and z_position >= z_start):
+                            self.Z = z_position
+                            processCommand(f"G0 Z{z_position / 100}")
+                            processCommand("M400")
+                            time.sleep(0.1)
 
-                            processCommand(f"G0 Z{z / 100}") # Move Z
-
-                            # Take picture after Z move
-                            processCommand("M400") # Wait for all moves to finish
-                            time.sleep(0.1)  # Let camera stabilize
-
-                            # Capture the image, but do not save it
                             self.camera.captureImage([self.getPosition()])
-
                             while self.camera.isTakingImage:
-                                time.sleep(0.01)  # Avoid excessive CPU usage
+                                time.sleep(0.01)
 
-                            # If image is black, stop further Z moves
                             if self.camera.isBlack():
-                                print(f"Skipping remaining Z moves at X/Y position")
+                                print(f"Skipping remaining Z moves at X/Y position : Black Image")
                                 last_image_black = True
                                 break
                             else:
-                                last_image_black = False  # Reset since we got a non-black image
-                            
-                            if self.camera.isInFocus():
-                                # Save the camera's image
+                                last_image_black = False
+
+                            focus_score = self.camera.isInFocus()
+                            if focus_score > 680: # 680
                                 self.camera.saveImage("X" + str(self.X) + " Y" + str(self.Y))
                                 focusCount += 1
-                            elif(focusCount > 0):
-                                print("Lost Focus")
-                                break
-                            elif(noFocusCount > 10):
-                                print("Failed to Find Focus")
+                                noFocusCount = 0
+                                steps_remaining = 7
+                            elif focus_score > 610 and current_z_step == fast_z_step:
+                                # Back up 3 steps
+                                z_position -= 3 * normal_z_step * z_dir
+                                # Switch to normal step size for next 7 steps
+                                current_z_step = normal_z_step
+                                steps_remaining = 7
+                            elif focusCount > 0 and noFocusCount > 2:
+                                print("Skipping remaining Z moves at X/Y position : Lost Focus")
                                 break
                             else:
-                                noFocusCount += 1
+                                if(current_z_step == fast_z_step):
+                                    noFocusCount += 1
+                                if(noFocusCount >= 10):
+                                    break
+                                if current_z_step == normal_z_step:
+                                    steps_remaining -= 1
+                                    if steps_remaining == 0:
+                                        current_z_step = fast_z_step
 
-                        # Only flip Z direction if the last image wasn't black
+                            z_position += current_z_step * z_dir
+
                         if not last_image_black:
                             z_dir *= -1
 
@@ -123,38 +130,41 @@ class printer():
             self.paused = True
 
     def halt(self):
+        self.paused = True
         while(not self.commandQueue.empty()):
             self.commandQueue.get(False)
+        self.isAutomated = False
+        self.paused = False
         print("Cleared Queue")
 
     def startAutomation(self):
-        x_start = 10200
-        y_start = 10500
-        z_start = 4380
+        x_start = 7098#10200 + 400
+        y_start = 8556#10500
+        z_start = 4250#4380
 
-        x_end = 16500
-        y_end = 16700
+        x_end = 7388#16500
+        y_end = 17236#16700
 
-        x_step = 200
-        y_step = 200
+        x_step = 100
+        y_step = 100
 
-        y_dir = 1  # Zig-zag direction for Y-axis
+        dir = 1  # Zig-zag direction for Y-axis
 
         self.commandQueue.put(f"G0 X{x_start / 100} Y{y_start / 100} Z{z_start / 100}")
         x_range = range(x_start, x_end + x_step, x_step) if x_start < x_end else range(x_start, x_end - x_step, -x_step)
         y_range = range(y_start, y_end + y_step, y_step)
 
-        for x in x_range:
-            if x != x_start:
-                y_dir *= -1  # Flip y-direction
-            for y in (y_range if y_dir > 0 else reversed(y_range)):
+        for y in y_range:
+            if y != y_start:
+                dir *= -1  # Flip x-direction
+            for x in (x_range if dir > 0 else reversed(x_range)):
                 self.commandQueue.put(f"G0 X{x/100} Y{y/100}")  # Queue only X/Y moves
 
         print("Automation Queued")
         self.isAutomated = True
 
     def moveZUp(self):
-        self.Z += self.speed * 2
+        self.Z += self.speed
         self.commandQueue.put(f"G1 Z{(self.Z) / 100}")
 
     def moveZDown(self):
@@ -178,11 +188,11 @@ class printer():
         self.commandQueue.put(f"G1 Y{(self.Y) / 100}")
 
     def increaseSpeed(self):
-        self.speed += 4
+        self.speed += 2
         print("Current Speed", self.speed / 100)
 
     def decreaseSpeed(self):
-        self.speed -= 4
+        self.speed -= 2
         print("Current Speed", self.speed / 100)
 
     def increaseSpeedFast(self):
