@@ -58,6 +58,16 @@ class AutomatedPrinter(BasePrinterController):
         print("Automation Queued")
         self.is_automated = True
 
+    def setPosition1(self) -> None:
+        self.automation_config.x_start = self.position.x
+        self.automation_config.y_start = self.position.y
+        self.automation_config.z_start = self.position.z
+
+    def setPosition2(self) -> None:
+        self.automation_config.x_end = self.position.x
+        self.automation_config.y_end = self.position.y
+        self.automation_config.z_end = self.position.z
+
     def _get_range(self, start: int, end: int, step: int) -> range:
         """Get appropriate range based on start and end positions"""
         if start < end:
@@ -67,6 +77,7 @@ class AutomatedPrinter(BasePrinterController):
     def _handle_automated_z_scan(self) -> None:
         """Handle the automated Z-axis scanning process"""
         config = self.automation_config
+        self.automation_config.normalize_bounds()
         z_dir = 1
         last_image_black = False
         

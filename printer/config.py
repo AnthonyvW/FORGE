@@ -2,7 +2,7 @@ class PrinterConfig:
     """Base configuration for printer hardware settings"""
     def __init__(
         self,
-        serial_port: str = 'COM7',
+        serial_port: str = 'COM5',
         baud_rate: int = 115200,
         max_x: int = 20000,  # Maximum X dimension in steps
         max_y: int = 20000,  # Maximum Y dimension in steps
@@ -41,3 +41,16 @@ class AutomationConfig:
         self.initial_z = initial_z
         self.good_focus_threshold = good_focus_threshold
         self.moderate_focus_threshold = moderate_focus_threshold
+    
+    def normalize_bounds(self) -> None:
+        # Swap values if start is greater than end for x-axis
+        if self.x_start > self.x_end:
+            self.x_start, self.x_end = self.x_end, self.x_start
+        
+        # Swap values if start is greater than end for y-axis
+        if self.y_start > self.y_end:
+            self.y_start, self.y_end = self.y_end, self.y_start
+        
+        # Swap values if start is greater than end for z-axis
+        if self.z_start > self.z_end:
+            self.z_start, self.z_end = self.z_end, self.z_start

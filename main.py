@@ -37,20 +37,24 @@ button_style = TextStyle(
 
 # Create buttons with labels
 buttons: List[Button] = [
-    Button(movementSystem.move_x_right, width - 400, 500, 40, 40, text="→", text_style=button_style),
-    Button(movementSystem.move_x_left, width - 300, 500, 40, 40, text="←", text_style=button_style),
-    Button(movementSystem.move_y_backward, width - 350, 450, 40, 40, text="↑", text_style=button_style),
-    Button(movementSystem.move_y_forward, width - 350, 550, 40, 40, text="↓", text_style=button_style),
-    Button(movementSystem.move_z_up, width - 250, 475, 40, 40, text="+", text_style=button_style),
-    Button(movementSystem.move_z_down, width - 250, 525, 40, 40, text="-", text_style=button_style),
-    Button(movementSystem.increase_speed, width - 200, 475, 40, 40, text="S+", text_style=button_style),
-    Button(movementSystem.decrease_speed, width - 200, 525, 40, 40, text="S-", text_style=button_style),
+    Button(movementSystem.move_x_right       , width - 400, 500, 40, 40, text="<", text_style=button_style),
+    Button(movementSystem.move_x_left        , width - 300, 500, 40, 40, text=">", text_style=button_style),
+    Button(movementSystem.move_y_backward    , width - 350, 450, 40, 40, text="^", text_style=button_style),
+    Button(movementSystem.move_y_forward     , width - 350, 550, 40, 40, text="v", text_style=button_style),
+    Button(movementSystem.move_z_up          , width - 250, 475, 40, 40, text="+", text_style=button_style),
+    Button(movementSystem.move_z_down        , width - 250, 525, 40, 40, text="-", text_style=button_style),
+    Button(movementSystem.increase_speed     , width - 200, 475, 40, 40, text="S+", text_style=button_style),
+    Button(movementSystem.decrease_speed     , width - 200, 525, 40, 40, text="S-", text_style=button_style),
     Button(movementSystem.increase_speed_fast, width - 150, 475, 40, 40, text="F+", text_style=button_style),
     Button(movementSystem.decrease_speed_fast, width - 150, 525, 40, 40, text="F-", text_style=button_style),
-    Button(movementSystem.toggle_pause, width - 250, 350, 40, 40, text="⏸", text_style=button_style),
-    Button(movementSystem.start_automation, width - 350, 250, 40, 40, text="▶", text_style=button_style),
-    Button(movementSystem.halt, width - 150, 350, 40, 40, text="⏹", text_style=button_style),
-    Button(lambda pos: camera.capture_image() or camera.save_image(filename=movementSystem.get_position().to_gcode()), width - 350, 350, 40, 40, text="📷", text_style=button_style),
+    Button(movementSystem.toggle_pause       , width - 290, 350, 80, 40, text="Pause", text_style=button_style),
+    Button(movementSystem.start_automation   , width - 390, 250, 80, 40, text="Start", text_style=button_style),
+    Button(movementSystem.home               , width - 290, 250, 80, 40, text="Home", text_style=button_style),
+    Button(movementSystem.halt               , width - 190, 350, 80, 40, text="Stop", text_style=button_style),
+
+    Button(movementSystem.setPosition1       , width - 390, 150, 120, 40, text="Set Position 1", text_style=button_style),
+    Button(movementSystem.setPosition2       , width - 250, 150, 120, 40, text="Set Position 2", text_style=button_style),
+    Button(lambda pos: camera.capture_image() or camera.save_image(filename=movementSystem.get_position().to_gcode()), width - 390, 350, 80, 40, text="Take Photo", text_style=button_style),
 ]
 
 running = True
