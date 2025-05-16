@@ -22,12 +22,12 @@ class AutomationConfig:
         y_start: int = 8218,#8556,
         x_end: int = 5170,#7388,
         y_end: int = 16306,#17236,
-        xy_step: int = 100,
+        xy_step: int = 80,
         z_start: int = 4280,#4250,
         z_end: int = 4330,#4430,
-        z_step: int = 2,
+        z_step: int = 4,
         initial_z: int = 4330,#3000,
-        good_focus_threshold: int = 520,
+        good_focus_threshold: int = 400,
         moderate_focus_threshold: int = 500
     ):
         self.x_start = x_start

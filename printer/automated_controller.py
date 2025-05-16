@@ -81,7 +81,7 @@ class AutomatedPrinter(BasePrinterController):
         z_dir = 1
         last_image_black = False
         
-        current_z_step = config.z_step * 10
+        current_z_step = config.z_step
         z_position = config.z_start if z_dir > 0 else config.z_end
         no_focus_count = focus_count = 0
         
@@ -153,14 +153,14 @@ class AutomatedPrinter(BasePrinterController):
             return z_position, current_z_step, no_focus_count, focus_count
             
         elif focus_quality == FocusScore.MODERATE and current_z_step > config.z_step:
-            z_position -= 3 * config.z_step * z_dir
+            z_position -= 1 * config.z_step * z_dir
             return z_position, config.z_step, no_focus_count, focus_count
             
         else:
-            if current_z_step == config.z_step * 10:
+            if current_z_step == config.z_step * 1:
                 no_focus_count += 1
             return z_position, current_z_step, no_focus_count, focus_count
 
     def _should_break_scan(self, no_focus_count: int, focus_count: int) -> bool:
         """Determine if scanning should break based on focus counts"""
-        return (no_focus_count >= 10) or (focus_count > 0 and no_focus_count > 2)
+        return (no_focus_count >= 10) or (focus_count > 0 and no_focus_count > 6)

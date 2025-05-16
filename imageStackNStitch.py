@@ -149,6 +149,67 @@ def stitch_by_y_position(focus_stacked_dir: Path, output_dir: Path) -> None:
             print(f"Error stitching y-position {y_pos}: {e}")
             continue
 
+def stitch_by_x_position(focus_stacked_dir: Path, output_dir: Path) -> None:
+    """
+    Stitch together focus stacked images that share the same x-position.
+    Images should be named in the format: X{x_position}Y{y_position}.png
+    
+    Args:
+        focus_stacked_dir (Path): Directory containing the focus stacked images
+        output_dir (Path): Directory where the x-stitched images will be saved
+    """
+    # Create output directory for x-stitched images
+    x_stitched_dir = output_dir / "focus_stacked_x_stitched"
+    x_stitched_dir.mkdir(exist_ok=True)
+    
+    # Get all PNG files and organize them by x-position
+    images_by_x = {}
+    for image_path in focus_stacked_dir.glob("*.png"):
+        # Extract x and y positions from filename
+        try:
+            # Find the X position in the filename
+            filename = image_path.stem  # Get filename without extension
+            x_pos = int(filename.split('Y')[0].split('X')[1])  # Get number after X and before Y
+            
+            # Add image to appropriate x-position group
+            if x_pos not in images_by_x:
+                images_by_x[x_pos] = []
+            images_by_x[x_pos].append(str(image_path))
+            
+        except (IndexError, ValueError) as e:
+            print(f"Skipping {image_path}: Could not parse coordinates - {e}")
+            continue
+    
+    # Configure the stitcher
+    settings = {
+        "crop": False,
+        "detector": "orb",
+        #"confidence_threshold": 0.2,
+    }
+    
+    # Process each x-position group
+    for x_pos, image_paths in images_by_x.items():
+        if len(image_paths) < 2:
+            print(f"Skipping x-position {x_pos}: Only {len(image_paths)} image(s) found")
+            continue
+            
+        try:
+            # Sort images by y-position to ensure correct order
+            image_paths.sort(key=lambda x: int(Path(x).stem.split('Y')[1]))
+            
+            # Create and run the stitcher
+            stitcher = AffineStitcher(**settings)
+            panorama = stitcher.stitch(image_paths)
+            
+            # Save the stitched image for this x-position
+            output_path = x_stitched_dir / f"x_position_{x_pos}.png"
+            cv.imwrite(str(output_path), panorama)
+            print(f"Successfully created x-stitched image for x-position {x_pos}")
+            
+        except Exception as e:
+            print(f"Error stitching x-position {x_pos}: {e}")
+            continue
+
 def stitch_n_y_images(output_dir: Path, n: int) -> None:
     """
     Stitch together the first N y-stitched images.
@@ -215,14 +276,15 @@ def process_folders(n_rows: int = None):
         #focus_stacked_dir = focus_stack_images(output_dir)
         
         # Then stitch images with the same y-position
-        #stitch_by_y_position(focus_stacked_dir, output_dir)
-        
+        stitch_by_x_position(focus_stacked_dir, output_dir)
+        '''
         if n_rows is not None:
             # Stitch together first N rows
             stitch_n_y_images(output_dir, n_rows)
         else:
             # Stitch all focus stacked images together
             stitch_images(focus_stacked_dir, output_dir)
+        '''
         
     except Exception as e:
         print(f"Error during processing: {e}")
