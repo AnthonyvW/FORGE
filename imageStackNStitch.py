@@ -184,6 +184,7 @@ def stitch_by_x_position(focus_stacked_dir: Path, output_dir: Path) -> None:
     settings = {
         "crop": False,
         "detector": "orb",
+        "blender_type": "no"
         #"confidence_threshold": 0.2,
     }
     
