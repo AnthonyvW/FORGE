@@ -1,49 +1,61 @@
 import pygame
 import time
+from typing import List
 
 from UI.Button import Button
-from UI.TextInput import TextInput
-from Camera.DefaultCamera import DefaultCamera
-from Camera.AmScopeCamera import AmscopeCamera
-from printer import printer
+from UI.text import TextStyle
+from camera.amscope import AmscopeCamera
+from printer.automated_controller import AutomatedPrinter, Position
+from printer.config import PrinterConfig, AutomationConfig
 
 pygame.init()
 pygame.display.set_caption("Tree Ring Imaging Machine v2")
-width, height = (1280,720)
-#scale = min(width/src.width, height/src.height)
+width, height = (1280, 720)
 screen = pygame.display.set_mode((width, height), pygame.RESIZABLE)
 
 # A clock to limit the frame rate.
-clock = pygame.time.Clock()  
+clock = pygame.time.Clock()
 
-camera = AmscopeCamera(width-500,height)
-movementSystem = printer(camera)
+# Initialize camera with the refactored class
+camera = AmscopeCamera(width-500, height)
+
+# Initialize printer configurations
+printer_config = PrinterConfig()  # Using default values
+automation_config = AutomationConfig()  # Using default values
+
+# Initialize the automated printer with configurations
+movementSystem = AutomatedPrinter(printer_config, automation_config, camera)
+
 time.sleep(1.5)
 camera.resize(width - 500, height)
 
-def func1():
-    pass
+# Define button styles
+button_style = TextStyle(
+    color=pygame.Color(64, 255, 64),  # Matching original foreground color
+    font_size=20
+)
 
-textFields = [
-    #TextInput(func1, width - 350, 250, 160, 40)
+# Create buttons with labels
+buttons: List[Button] = [
+    Button(movementSystem.move_x_right       , width - 400, 500, 40, 40, text="<", text_style=button_style),
+    Button(movementSystem.move_x_left        , width - 300, 500, 40, 40, text=">", text_style=button_style),
+    Button(movementSystem.move_y_backward    , width - 350, 450, 40, 40, text="^", text_style=button_style),
+    Button(movementSystem.move_y_forward     , width - 350, 550, 40, 40, text="v", text_style=button_style),
+    Button(movementSystem.move_z_up          , width - 250, 475, 40, 40, text="+", text_style=button_style),
+    Button(movementSystem.move_z_down        , width - 250, 525, 40, 40, text="-", text_style=button_style),
+    Button(movementSystem.increase_speed     , width - 200, 475, 40, 40, text="S+", text_style=button_style),
+    Button(movementSystem.decrease_speed     , width - 200, 525, 40, 40, text="S-", text_style=button_style),
+    Button(movementSystem.increase_speed_fast, width - 150, 475, 40, 40, text="F+", text_style=button_style),
+    Button(movementSystem.decrease_speed_fast, width - 150, 525, 40, 40, text="F-", text_style=button_style),
+    Button(movementSystem.toggle_pause       , width - 290, 350, 80, 40, text="Pause", text_style=button_style),
+    Button(movementSystem.start_automation   , width - 390, 250, 80, 40, text="Start", text_style=button_style),
+    Button(movementSystem.home               , width - 290, 250, 80, 40, text="Home", text_style=button_style),
+    Button(movementSystem.halt               , width - 190, 350, 80, 40, text="Stop", text_style=button_style),
+
+    Button(movementSystem.setPosition1       , width - 390, 150, 120, 40, text="Set Position 1", text_style=button_style),
+    Button(movementSystem.setPosition2       , width - 250, 150, 120, 40, text="Set Position 2", text_style=button_style),
+    Button(lambda pos: camera.capture_image() or camera.save_image(filename=movementSystem.get_position().to_gcode()), width - 390, 350, 80, 40, text="Take Photo", text_style=button_style),
 ]
-
-buttons = [
-    Button(movementSystem.moveXRight       , width - 400, 500, 40, 40),
-    Button(movementSystem.moveXLeft        , width - 300, 500, 40, 40),
-    Button(movementSystem.moveYBackward    , width - 350, 450, 40, 40),
-    Button(movementSystem.moveYForward     , width - 350, 550, 40, 40),
-    Button(movementSystem.moveZUp          , width - 250, 475, 40, 40),
-    Button(movementSystem.moveZDown        , width - 250, 525, 40, 40),
-    Button(movementSystem.increaseSpeed    , width - 200, 475, 40, 40),
-    Button(movementSystem.decreaseSpeed    , width - 200, 525, 40, 40),
-    Button(movementSystem.increaseSpeedFast, width - 150, 475, 40, 40),
-    Button(movementSystem.decreaseSpeedFast, width - 150, 525, 40, 40),
-    Button(movementSystem.togglePause      , width - 250, 350, 40, 40),
-    Button(movementSystem.startAutomation  , width - 350, 250, 40, 40),
-    Button(movementSystem.halt             , width - 150, 350, 40, 40),
-    Button(camera.captureAndSaveImage      , width - 350, 350, 40, 40),
-    ]
 
 running = True
 while running:
@@ -55,56 +67,54 @@ while running:
         if event.type == pygame.QUIT:
             running = False
         elif event.type == pygame.VIDEORESIZE:
-
             for button in buttons:
-                button.updatePosition(screen.get_size()[0] - width, screen.get_size()[1] - height)
-
-            for field in textFields:
-                field.updatePosition(screen.get_size()[0] - width, screen.get_size()[1] - height)
+                button.update_position(screen.get_size()[0] - width, screen.get_size()[1] - height)
 
             width, height = screen.get_size()
             camera.resize(width-500, height)
 
             print(width, height)
         elif event.type == pygame.MOUSEBUTTONDOWN:
-            for i in range(len(buttons)):
-                if(i < len(buttons) - 3):
-                    buttons[i].CheckButton(pos[0], pos[1], True)
-                elif(i == len(buttons) - 3):
-                    buttons[i].CheckButton(pos[0], pos[1], True)
-                elif(i == len(buttons) - 2):
-                    buttons[i].CheckButton(pos[0], pos[1], True)
-                elif(i == len(buttons) - 1):
-                    buttons[i].CheckButton(pos[0], pos[1], True, movementSystem.getPosition())
-            for field in textFields:
-                field.CheckButton(pos[0], pos[1], True)
+            for i, button in enumerate(buttons):
+                if i < len(buttons) - 1:
+                    button.check_button(pos[0], pos[1], True)
+                else:
+                    # Last button (camera capture) needs position argument
+                    button.check_button(pos[0], pos[1], True, movementSystem.get_position())
         elif event.type == pygame.KEYDOWN:
             if event.key == pygame.K_ESCAPE:
                 running = False
         elif event.type == pygame.KEYUP:
-            background_color = pygame.Color(255,0,0)
+            background_color = pygame.Color(255, 0, 0)
             screen.fill(background_color)
 
     # Update
-    camera.update()
+    try:
+        camera.update()
+    except Exception as e:
+        print(f"Error updating camera: {e}")
+
     for button in buttons:
-        button.CheckButton(pos[0], pos[1], False)
+        button.check_button(pos[0], pos[1], False)
 
     # Rendering
-    screen.fill([60,60,60])
+    screen.fill([60, 60, 60])
 
     # Draw Buttons
     for button in buttons:
         button.draw(screen)
 
-    for field in textFields:
-        field.draw(screen)
-
     # Draw Camera
-
-    screen.blit(camera.getFrame(), (0,0))
+    try:
+        frame = camera.get_frame()
+        if frame is not None:
+            screen.blit(frame, (0, 0))
+    except Exception as e:
+        print(f"Error displaying camera frame: {e}")
 
     pygame.display.flip()
     pygame.display.update()
 
+# Ensure camera is properly closed
+camera.close()
 pygame.quit()
