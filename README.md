@@ -1,5 +1,15 @@
 # FORGE - Fabricated Optical Resource for Gigapixel Exploration
 
+![Pre-release in progress](https://img.shields.io/badge/Pre--release-in%20progress-yellow)
+[![Windows](https://custom-icon-badges.demolab.com/badge/Windows-0078D6?logo=windows11&logoColor=white)](#)
+[![Linux](https://img.shields.io/badge/Linux-FCC624?logo=linux&logoColor=black)](#)
+![Python](https://img.shields.io/badge/Python-3.12-blue?logo=python&logoColor=white)
+
+> **📅 Scheduled Release:**  
+> FORGE is currently in active development and is scheduled for release on **June 23, 2025**.
+>
+
+
 FORGE is an open-source, gigapixel-scale imaging system designed to scan tree core samples with high precision. Built upon a modified off-the-shelf 3D printer, it automates the imaging of multiple samples, producing ultra-high-resolution images suitable for dendrochronology and related research.
 
 [<img src="https://github.com/user-attachments/assets/acc4b7ab-5bc3-4d7d-95b1-6783f011dd43" width="300">](https://github.com/user-attachments/assets/acc4b7ab-5bc3-4d7d-95b1-6783f011dd43)
