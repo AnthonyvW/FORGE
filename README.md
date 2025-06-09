@@ -22,7 +22,7 @@ FORGE is an open-source, gigapixel-scale imaging system designed to scan tree co
 
 * **Automated Scanning**: Utilizes 3D printer mechanics for precise, repeatable sample movement.
 * **High-Resolution Imaging**: Captures gigapixel images of tree core samples.
-* **Image Processing**: Includes tools for stitching and analyzing captured images.
+* **Image Processing**: Includes tools for stitching captured images.
 * **Modular Design**: Easily adaptable to different sample types and imaging requirements.
 
 ---
