@@ -2,7 +2,7 @@ import pygame
 import time
 from typing import List
 
-from UI.Button import Button
+from UI.button import Button
 from UI.text import TextStyle
 from camera.amscope import AmscopeCamera
 from printer.automated_controller import AutomatedPrinter, Position
@@ -10,7 +10,7 @@ from printer.config import PrinterConfig, AutomationConfig
 
 pygame.init()
 pygame.display.set_caption("Tree Ring Imaging Machine v2")
-width, height = (1280, 720)
+width, height = (1920, 1080)
 screen = pygame.display.set_mode((width, height), pygame.RESIZABLE)
 
 # A clock to limit the frame rate.
