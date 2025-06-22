@@ -90,10 +90,13 @@ Before modifying your printer, you must 3D print the following components:
   pip install -r requirements.txt
   ```
 
+3\.1\. Download and Install the Amscope SDK at https://amscope.com/pages/software-downloads if one isn't available for your Operating system, download the windows version and check if its in there as the Linux version is.
 
-3\. Configure the camera settings using `amscope_camera_configuration.yaml`.
+3\.2\. Move the amscope.py file to the Camera folder and copy the amcam folder into it as well.
 
-4\. Run the main application:
+4\. Configure the camera settings using `amscope_camera_configuration.yaml`.
+
+5\. Run the main application:
   
   ```bash
   python main.py
