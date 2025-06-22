@@ -7,7 +7,7 @@
 
 
 > **📅 Scheduled Release:**  
-> FORGE is currently in active development*.
+> FORGE is currently in active development.
 >
 
 
