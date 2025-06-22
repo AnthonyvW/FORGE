@@ -7,7 +7,7 @@
 
 
 > **📅 Scheduled Release:**  
-> FORGE is currently in active development and is scheduled for release on **June 23, 2025**.
+> FORGE is currently in active development*.
 >
 
 
