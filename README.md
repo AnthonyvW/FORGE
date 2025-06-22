@@ -7,7 +7,7 @@
 
 
 > **📅 Scheduled Release:**  
-> FORGE is currently in active development.
+> FORGE is currently in active development and is planned to have its first stable build in July.
 >
 
 
