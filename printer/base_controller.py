@@ -243,6 +243,7 @@ class BasePrinterController:
         print("Current Speed", self.speed / 100)
 
     def home(self) -> None:
+        print("Homing")
         # Home the printer
         self.command_queue.put("G28")
 

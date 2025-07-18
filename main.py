@@ -10,7 +10,7 @@ from printer.automated_controller import AutomatedPrinter, Position
 from printer.config import PrinterConfig, AutomationConfig
 
 pygame.init()
-pygame.display.set_caption("Tree Ring Imaging Machine v2")
+pygame.display.set_caption("FORGE")
 width, height = (1920, 1080)
 screen = pygame.display.set_mode((width, height), pygame.RESIZABLE)
 
@@ -33,6 +33,35 @@ movementSystem = AutomatedPrinter(printer_config, automation_config, camera)
 
 time.sleep(1.5)
 camera.resize(width - right_panel_width, height)
+
+current_sample_index = 1
+
+def get_sample_position(index: int) -> Position:
+    return Position(
+        x=int((19.80 + 22.75 * (index - 1)) * 100),
+        y=int(193.47 * 100),
+        z=int(9.14 * 100)
+    )
+
+def go_to_sample():
+    pos = get_sample_position(current_sample_index)
+    movementSystem.move_to_position(pos)
+
+def increment_sample():
+    global current_sample_index
+    if current_sample_index < 19:
+        current_sample_index += 1
+        sample_label.set_text(f"Sample {current_sample_index}")
+
+def decrement_sample():
+    global current_sample_index
+    if current_sample_index > 1:
+        current_sample_index -= 1
+        sample_label.set_text(f"Sample {current_sample_index}")
+
+
+
+
 
 # Define button styles
 button_style = TextStyle(
@@ -209,6 +238,24 @@ for spec in button_specs:
     buttons.append(btn)
 
 
+sample_y = control_box.height + 100
+button_width = 40
+button_height = 40
+
+sample_button = Button(go_to_sample, x=10, y=sample_y, width=120, height=button_height, text="Go to Sample", text_style=button_style)
+control_frame.add_child(sample_button)
+
+decrement_button = Button(decrement_sample, x=140, y=sample_y, width=button_width, height=button_height, text="-", text_style=button_style)
+control_frame.add_child(decrement_button)
+
+sample_label = Text(f"Sample {current_sample_index}", x=190, y=sample_y + 10, x_align="left", y_align="top", style=button_style)
+control_frame.add_child(sample_label)
+
+increment_button = Button(increment_sample, x=300, y=sample_y, width=button_width, height=button_height, text="+", text_style=button_style)
+control_frame.add_child(increment_button)
+
+
+
 running = True
 while running:
     clock.tick(60)
@@ -228,6 +275,8 @@ while running:
             camera.resize(width - right_panel_width, height)
 
             print(width, height)
+        #elif event.type == pygame.MOUSEBUTTONUP:
+        #    root_frame.process_mouse_release(*pos, button="left")
         elif event.type == pygame.MOUSEBUTTONDOWN:
             root_frame.handle_click(*pos)
             root_frame.process_mouse_press(*pos, button="left")

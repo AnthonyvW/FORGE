@@ -122,7 +122,7 @@ class Button(Frame):
             # Use default rectangular hit detection
             return super().contains_point(x, y)
 
-    def on_click(self):
+    def on_click(self, button=None):
         if not self.is_enabled:
             return
 

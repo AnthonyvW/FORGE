@@ -191,6 +191,8 @@ class Frame():
         for child in self.children:
             if child.contains_point(px, py):
                 child.process_mouse_release(px, py, button)
+                if hasattr(child, "on_click") and callable(child.on_click):
+                    child.on_click()
                 return
 
         if self.is_pressed:
@@ -209,7 +211,7 @@ class Frame():
             child.draw(surface)
 
     # --- Override these ---
-    def on_click(self):
+    def on_click(self, button=None):
         pass
 
     def on_mouse_press(self, button):
