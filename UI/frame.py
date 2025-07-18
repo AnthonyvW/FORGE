@@ -1,12 +1,16 @@
 import pygame
 from typing import Callable, Optional, Tuple
 
+def default_frame_background() -> Optional[pygame.Color]:
+    return None
+
 class Frame():
     def __init__(
         self, parent=None, x=0, y=0, width=100, height=100, 
         x_is_percent=False, y_is_percent=False,
         width_is_percent=False, height_is_percent=False,
-        z_index=0, x_align: str = 'left', y_align: str = 'top'
+        z_index=0, x_align: str = 'left', y_align: str = 'top', 
+        background_color: Optional[pygame.Color] = None
     ):
         self.parent = parent
         self.children = []
@@ -15,6 +19,8 @@ class Frame():
         self.y = y
         self.width = width
         self.height = height
+
+        self.background_color = background_color
 
         self.x_is_percent = x_is_percent
         self.y_is_percent = y_is_percent
@@ -27,6 +33,10 @@ class Frame():
 
         self.is_hovered = False
         self.is_pressed = False
+
+    @property
+    def debug_outline_color(self) -> pygame.Color:
+        return pygame.Color(255, 0, 0)  # Default: red
     
     @property
     def position(self) -> Tuple[int, int]:
@@ -188,6 +198,15 @@ class Frame():
             self.on_mouse_release(button)
             if self.contains_point(px, py):
                 self.on_click(button)
+    
+    def draw(self, surface: pygame.Surface) -> None:
+        abs_x, abs_y, abs_w, abs_h = self.get_absolute_geometry()
+
+        if self.background_color:
+            pygame.draw.rect(surface, self.background_color, (abs_x, abs_y, abs_w, abs_h))
+
+        for child in self.children:
+            child.draw(surface)
 
     # --- Override these ---
     def on_click(self):
