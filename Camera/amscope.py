@@ -1,23 +1,34 @@
-import sys
 import time
 from pathlib import Path
 import pygame
 import numpy as np
 from PIL import Image
-import camera.amcam.amcam as amcam
+
+import os
+import sys
+import platform
+import importlib.util
+import ctypes
+import zipfile
+
 from .base import BaseCamera
 from .settings import CameraSettings, CameraSettingsManager
 from image_processing.analyzers import ImageAnalyzer
 
 class AmscopeCamera(BaseCamera):
     def __init__(self, frame_width: int, frame_height: int):
-        super().__init__(frame_width, frame_height)
+        # We initialize the amscope library stuff here to get around it being proprietary 
+        self.amcam = None
+        self._callback_ref = None  # must keep a reference to avoid garbage collection
+        self.buffer = None
         self.camera = None
         self.frame = None
+
+        self._load_amcam()
+
         self.name = ""
         self.runtime = 0
         self.is_taking_image = False
-        self.buffer = None
         self.last_image = None
         self.settings = None
         self.scale = 1.0
@@ -28,18 +39,78 @@ class AmscopeCamera(BaseCamera):
         self.fallback_surface = pygame.Surface((frame_width, frame_height))
         self.fallback_surface.fill((0, 0, 0))  # Black background
         
-        # Initialize the camera right away
-        self.initialize()
+        super().__init__(frame_width, frame_height)
+
+    def _load_amcam(self):
+        project_root = os.path.abspath(os.path.join(os.path.dirname(__file__), '..'))
+        sdk_base = os.path.join(project_root, '3rd_party_imports')
+        extracted_dir = os.path.join(sdk_base, 'official_amscope')
+        zip_path = os.path.join(sdk_base, 'amcamsdk.20210816.zip')
+
+        # Auto-extract if zip exists and folder doesn't
+        if not os.path.exists(extracted_dir) and os.path.exists(zip_path):
+            with zipfile.ZipFile(zip_path, 'r') as zip_ref:
+                zip_ref.extractall(extracted_dir)
+
+        if not os.path.exists(extracted_dir):
+            raise RuntimeError("AmScope SDK not found. Please place 'amcamsdk.20210816.zip' in 3rd_party_imports/")
+
+        sdk_root = extracted_dir
+        sdk_py = os.path.join(sdk_root, 'python', 'amcam.py')
+
+        # Determine platform and architecture
+        system = platform.system().lower()
+        machine = platform.machine().lower()
+
+        if system == 'windows':
+            dll_dir = os.path.join(sdk_root, 'win', 'x64')
+        elif system == 'linux':
+            arch_map = {
+                'x86_64': 'x64',
+                'amd64': 'x64',
+                'i386': 'x86',
+                'i686': 'x86',
+                'arm64': 'arm64',
+                'aarch64': 'arm64',
+                'armv7l': 'armhf',
+                'armv6l': 'armel'
+            }
+            subarch = arch_map.get(machine)
+            if not subarch:
+                raise RuntimeError(f"Unsupported Linux architecture: {machine}")
+            dll_dir = os.path.join(sdk_root, 'linux', subarch)
+        elif system == 'darwin':
+            dll_dir = os.path.join(sdk_root, 'mac')
+        else:
+            raise RuntimeError(f"Unsupported operating system: {system}")
+
+        # Update PATH or add_dll_directory for shared library resolution
+        if system == 'windows':
+            if hasattr(os, 'add_dll_directory'):
+                os.add_dll_directory(dll_dir)
+            else:
+                os.environ['PATH'] = dll_dir + os.pathsep + os.environ.get('PATH', '')
+        else:
+            os.environ['LD_LIBRARY_PATH'] = dll_dir + os.pathsep + os.environ.get('LD_LIBRARY_PATH', '')
+
+        # Dynamically import amcam.py and override __file__ so its LoadLibrary logic works
+        spec = importlib.util.spec_from_file_location("amcam", sdk_py)
+        amcam_module = importlib.util.module_from_spec(spec)
+        amcam_module.__file__ = os.path.join(dll_dir, 'amcam.py')  # Trick __file__ logic
+        sys.modules["amcam"] = amcam_module
+        spec.loader.exec_module(amcam_module)
+
+        self.amcam = amcam_module
 
     def initialize(self):
         """Initialize the Amscope camera."""
         try:
-            available_cameras = amcam.Amcam.EnumV2()
+            available_cameras = self.amcam.Amcam.EnumV2()
             if not available_cameras:
                 raise Exception("Failed to Find Amscope Camera")
             
             self.name = available_cameras[0].displayname
-            self.camera = amcam.Amcam.Open(available_cameras[0].id)
+            self.camera = self.amcam.Amcam.Open(available_cameras[0].id)
             
             if not self.camera:
                 raise Exception("Failed to open Amscope Camera")
@@ -48,13 +119,13 @@ class AmscopeCamera(BaseCamera):
             self.buffer = bytes((self.width * 24 + 31) // 32 * 4 * self.height)
             
             if sys.platform == 'win32':
-                self.camera.put_Option(amcam.AMCAM_OPTION_BYTEORDER, 0)
+                self.camera.put_Option(self.amcam.AMCAM_OPTION_BYTEORDER, 0)
                 
             # Start the stream immediately after initialization
             self.start_stream()
             return True
             
-        except amcam.HRESULTException as e:
+        except self.amcam.HRESULTException as e:
             print(f"Error initializing camera: {e}")
             self.camera = None
             return False
@@ -78,7 +149,7 @@ class AmscopeCamera(BaseCamera):
             self.camera.StartPullModeWithCallback(self._camera_callback, self)
             self.resize(self.width, self.height)
             
-        except amcam.HRESULTException as e:
+        except self.amcam.HRESULTException as e:
             print(f"Error starting stream: {e}")
         except Exception as e:
             print(f"Unexpected error starting stream: {e}")
@@ -95,28 +166,28 @@ class AmscopeCamera(BaseCamera):
             self.camera.put_Saturation(settings.saturation)
             self.camera.put_Brightness(settings.brightness)
             self.camera.put_Gamma(settings.gamma)
-            self.camera.put_Option(amcam.AMCAM_OPTION_SHARPENING, settings.sharpening)
-            self.camera.put_Option(amcam.AMCAM_OPTION_LINEAR, settings.linear)
+            self.camera.put_Option(self.amcam.AMCAM_OPTION_SHARPENING, settings.sharpening)
+            self.camera.put_Option(self.amcam.AMCAM_OPTION_LINEAR, settings.linear)
             
             curve_options = {'Off': 0, 'Polynomial': 1, 'Logarithmic': 2}
-            self.camera.put_Option(amcam.AMCAM_OPTION_CURVE, curve_options.get(settings.curve, 1))
+            self.camera.put_Option(self.amcam.AMCAM_OPTION_CURVE, curve_options.get(settings.curve, 1))
             
-        except amcam.HRESULTException as e:
+        except self.amcam.HRESULTException as e:
             print(f"Error applying settings: {e}")
 
     @staticmethod
     def _camera_callback(event, _self):
         """Handle camera events."""
-        if event == amcam.AMCAM_EVENT_STILLIMAGE:
+        if event == _self.amcam.AMCAM_EVENT_STILLIMAGE:
             _self._process_frame()
-        elif event == amcam.AMCAM_EVENT_IMAGE:
+        elif event == _self.amcam.AMCAM_EVENT_IMAGE:
             # Call stream directly from the callback when an image is ready
             try:
                 _self.camera.PullImageV2(_self.buffer, 24, None)
                 _self.frame = pygame.image.frombuffer(_self.buffer, [_self.width, _self.height], 'RGB')
-            except amcam.HRESULTException as e:
+            except _self.amcam.HRESULTException as e:
                 print(f"Error in callback stream: {e}")
-        elif event == amcam.AMCAM_EVENT_EXPO_START:
+        elif event == _self.amcam.AMCAM_EVENT_EXPO_START:
             print("Exposure start event detected")
 
     def stream(self):
@@ -148,7 +219,7 @@ class AmscopeCamera(BaseCamera):
             decoded = np.frombuffer(buf, np.uint8)
             self.last_image = decoded.reshape((cam_height, cam_width, 3))
             
-        except amcam.HRESULTException as e:
+        except self.amcam.HRESULTException as e:
             print(f"Error processing frame: {e}")
         finally:
             self.is_taking_image = False
