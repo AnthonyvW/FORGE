@@ -65,7 +65,7 @@ def decrement_sample():
 
 # Define button styles
 button_style = TextStyle(
-    color=pygame.Color(64, 255, 64),  # Matching original foreground color
+    color=pygame.Color("#5a5a5a"),  # Matching original foreground color
     font_size=20
 )
 
@@ -110,7 +110,7 @@ title_bar.add_child(title_text)
 control_box = Frame(
     parent=control_frame,
     x=10, y=60,
-    width=right_panel_width-20, height=300,
+    width=right_panel_width-20, height=250,
     background_color=pygame.Color("#ffffff")
 )
 control_frame.add_child(control_box)
@@ -150,6 +150,19 @@ speed_display = Text(
 )
 movement_button_panel.add_child(speed_display)
 
+position_display = Text(
+    text=f"X: {movementSystem.position.x/100:.2f} Y: {movementSystem.position.y/100:.2f} Z: {movementSystem.position.z/100:.2f}",
+    x=343, y=175,
+    x_align="right",
+    y_align="top",
+    style=TextStyle(
+        color=pygame.Color(32, 32, 32),
+        font_size=18,
+        font_name="assets/fonts/SofiaSans-Regular.ttf"
+    )
+)
+movement_button_panel.add_child(position_display)
+
 # Text inside the header bar
 control_label = Text(
     text="Control",
@@ -172,17 +185,17 @@ button_specs = [
     { "fn": movementSystem.move_x_left        , "x": 100, "y": 55,  "w": 80, "h": 80, "text": ">", "shape": ButtonShape.DIAMOND},
     { "fn": movementSystem.move_y_backward    , "x": 55, "y": 10,  "w": 80, "h": 80, "text": "^" , "shape": ButtonShape.DIAMOND},
     { "fn": movementSystem.move_y_forward     , "x": 55, "y": 100, "w": 80, "h": 80, "text": "v" , "shape": ButtonShape.DIAMOND},
-    { "fn": movementSystem.move_z_up          , "x": 200, "y": 55, "w": 40, "h": 40, "text": "+"},
-    { "fn": movementSystem.move_z_down        , "x": 200, "y": 105, "w": 40, "h": 40, "text": "-"},
-    { "fn": movementSystem.increase_speed     , "x": 250, "y": 55, "w": 40, "h": 40, "text": "S+" },
-    { "fn": movementSystem.decrease_speed     , "x": 250, "y": 105, "w": 40, "h": 40, "text": "S-" },
-    { "fn": movementSystem.increase_speed_fast, "x": 300, "y": 55, "w": 40, "h": 40, "text": "F+" },
-    { "fn": movementSystem.decrease_speed_fast, "x": 300, "y": 105, "w": 40, "h": 40, "text": "F-" },
+    { "fn": movementSystem.move_z_up          , "x": 200, "y": 53, "w": 40, "h": 40, "text": "+"},
+    { "fn": movementSystem.move_z_down        , "x": 200, "y": 103, "w": 40, "h": 40, "text": "-"},
+    { "fn": movementSystem.increase_speed     , "x": 250, "y": 53, "w": 40, "h": 40, "text": "S+" },
+    { "fn": movementSystem.decrease_speed     , "x": 250, "y": 103, "w": 40, "h": 40, "text": "S-" },
+    { "fn": movementSystem.increase_speed_fast, "x": 300, "y": 53, "w": 40, "h": 40, "text": "F+" },
+    { "fn": movementSystem.decrease_speed_fast, "x": 300, "y": 103, "w": 40, "h": 40, "text": "F-" },
 
-    { "fn": movementSystem.home               , "x": 10, "y": 10, "w": 80, "h": 40, "text": "Home" },
-    { "fn": movementSystem.toggle_pause       , "x": 100, "y": 10, "w": 80, "h": 40, "text": "Pause" },
-    { "fn": movementSystem.halt               , "x": 190, "y": 10, "w": 80, "h": 40, "text": "Stop" },
+    { "fn": movementSystem.home               , "x": 70, "y": 70, "w": 50, "h": 50, "text": "H"   , "shape": ButtonShape.DIAMOND, "z_index": 1},
 
+    { "fn": movementSystem.toggle_pause       , "x": 100, "y": 310, "w": 80, "h": 40, "text": "Pause" },
+    { "fn": movementSystem.halt               , "x": 190, "y": 310, "w": 80, "h": 40, "text": "Stop" },
     { "fn": movementSystem.start_automation   , "x": 110, "y": 250, "w": 80, "h": 40, "text": "Start" },
     { "fn": movementSystem.setPosition1       , "x": 110, "y": 150, "w": 120, "h": 40, "text": "Set Position 1" },
     { "fn": movementSystem.setPosition2       , "x": 250, "y": 150, "w": 120, "h": 40, "text": "Set Position 2" },
@@ -205,7 +218,8 @@ for spec in button_specs:
         text=spec["text"],
         text_style=button_style,
         args_provider=spec.get("args_provider"),
-        shape=spec.get("shape", ButtonShape.RECTANGLE)
+        shape=spec.get("shape", ButtonShape.RECTANGLE),
+        z_index=spec.get("z_index", 0)
     )
 
     # Movement-related functions go inside control_box
@@ -219,16 +233,9 @@ for spec in button_specs:
         movementSystem.increase_speed,
         movementSystem.decrease_speed,
         movementSystem.increase_speed_fast,
-        movementSystem.decrease_speed_fast
+        movementSystem.decrease_speed_fast,
+        movementSystem.home
     }:
-        movement_button_panel.add_child(btn)
-    elif spec["fn"] in {
-        movementSystem.home,
-        movementSystem.toggle_pause,
-        movementSystem.halt
-    }:
-        # Align to bottom of movement_button_panel, 10px from bottom
-        btn.y_align = 'bottom'
         movement_button_panel.add_child(btn)
     else:
         # Default non-movement buttons go below the control box
@@ -275,13 +282,11 @@ while running:
             camera.resize(width - right_panel_width, height)
 
             print(width, height)
-        #elif event.type == pygame.MOUSEBUTTONUP:
-        #    root_frame.process_mouse_release(*pos, button="left")
+        elif event.type == pygame.MOUSEBUTTONUP:
+            root_frame.process_mouse_release(*pos, button="left")
         elif event.type == pygame.MOUSEBUTTONDOWN:
-            root_frame.handle_click(*pos)
             root_frame.process_mouse_press(*pos, button="left")
         elif event.type == pygame.KEYDOWN:
-            root_frame.process_mouse_release(*pos, button="left")
             if event.key == pygame.K_ESCAPE:
                 running = False
         elif event.type == pygame.KEYUP:
@@ -314,6 +319,7 @@ while running:
         print(f"Error displaying camera frame: {e}")
 
     speed_display.set_text(f"Step Size: {movementSystem.speed / 100:.2f}mm")
+    position_display.set_text(f"X: {movementSystem.position.x/100:.2f} Y: {movementSystem.position.y/100:.2f} Z: {movementSystem.position.z/100:.2f}")
     pygame.display.flip()
 
 # Ensure camera is properly closed

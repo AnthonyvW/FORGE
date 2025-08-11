@@ -147,7 +147,7 @@ class Frame():
 
     def handle_click(self, px, py):
         # First check children, then self
-        for child in reversed(self.children):
+        for child in (self.children):
             if child.contains_point(px, py):
                 child.handle_click(px, py)
                 return  # Only send to first child that contains it (or remove this if you want overlapping elements to handle too)
@@ -155,18 +155,35 @@ class Frame():
         self.on_click()
     
     def handle_hover(self, px, py):
-        for child in reversed(self.children):
+        for child in (self.children):
             if child.contains_point(px, py):
                 child.handle_hover(px, py)
                 return
         if self.contains_point(px, py):
             self.on_hover()
 
+    def _clear_hover_recursive(self):
+        if self.is_hovered:
+            self.is_hovered = False
+            self.on_hover_leave()
+        for ch in self.children:
+            ch._clear_hover_recursive()
+
     def process_mouse_move(self, px, py):
-        """Main hover entry point, called by root"""
+        """Hover handling with z occlusion"""
+        
         # First propagate to children front-to-back
-        for child in reversed(self.children):
-            child.process_mouse_move(px, py)
+        top_hit = None
+        for child in (self.children):
+            if child.contains_point(px, py):
+                top_hit = child
+                break
+        
+        for child in self.children:
+            if child is top_hit:
+                child.process_mouse_move(px, py)
+            else:
+                child._clear_hover_recursive()
 
         # Now check self hover state
         inside = self.contains_point(px, py)
@@ -191,8 +208,6 @@ class Frame():
         for child in self.children:
             if child.contains_point(px, py):
                 child.process_mouse_release(px, py, button)
-                if hasattr(child, "on_click") and callable(child.on_click):
-                    child.on_click()
                 return
 
         if self.is_pressed:
@@ -207,7 +222,7 @@ class Frame():
         if self.background_color:
             pygame.draw.rect(surface, self.background_color, (abs_x, abs_y, abs_w, abs_h))
 
-        for child in self.children:
+        for child in reversed(self.children):
             child.draw(surface)
 
     # --- Override these ---

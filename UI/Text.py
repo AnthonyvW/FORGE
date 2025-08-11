@@ -62,6 +62,9 @@ class Text(Frame):
     def size(self) -> Tuple[int, int]:
         return self._surface.get_size() if self._surface else (0, 0)
 
+    def contains_point(self, px, py):
+        return False
+
     def set_text(self, text: str) -> None:
         """Update the displayed text"""
         if self.text != text:

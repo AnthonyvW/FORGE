@@ -10,13 +10,13 @@ class ButtonShape(Enum):
     DIAMOND = "diamond"
 
 def default_background() -> pygame.Color:
-    return pygame.Color(32, 128, 32)
+    return pygame.Color("#dbdbdb")
 
 def default_foreground() -> pygame.Color:
-    return pygame.Color(64, 255, 64)
+    return pygame.Color("#b3b4b6")
 
 def default_hover_background() -> pygame.Color:
-    return pygame.Color(128, 128, 255)
+    return pygame.Color("#b3b4b6")
 
 def default_disabled_background() -> pygame.Color:
     return pygame.Color(128, 128, 128)
