@@ -4,9 +4,9 @@ class PrinterConfig:
         self,
         serial_port: str = 'COM6',
         baud_rate: int = 115200,
-        max_x: int = 20000,  # Maximum X dimension in steps
-        max_y: int = 20000,  # Maximum Y dimension in steps
-        max_z: int = 5000,   # Maximum Z dimension in steps
+        max_x: int = 22000,  # Maximum X dimension in steps
+        max_y: int = 22000,  # Maximum Y dimension in steps
+        max_z: int = 6000,   # Maximum Z dimension in steps
     ):
         self.serial_port = serial_port
         self.baud_rate = baud_rate
