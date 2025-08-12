@@ -33,8 +33,8 @@ FORGE is an open-source, gigapixel-scale imaging system designed to scan tree co
 ### Prerequisites
 
 * **Hardware**: A [compatible 3D printer](#3d-printer-compatibility) modified for imaging purposes, a light, and an amscope camera. The 3D printer may also require an additional cable to connect your PC to the printer.
-* **Software**: Python 3.x and the dependencies listed in `requirements.txt`.
-* **Operating System**: Linux, Windows 10, and Windows 11
+* **Software**: Python 3.x and Git
+* **Operating System**: Linux, Windows 10, or Windows 11
 
 ## Printer Modification
 
@@ -44,15 +44,20 @@ Before using FORGE, your 3D printer must be modified to mount the camera system 
 
 Before modifying your printer, you must 3D print the following components:
 
-- **Camera Mount** – Attaches to the existing print head carriage  
-- **Z-Axis Spacer** – Raises the Z-axis endstop to accommodate the new camera height  
+- **Camera Mount** - Ender3AmscopeCameraMount.3mf – Attaches to the existing print head carriage  
+- **Z-Axis Spacer** - ZAxisSpacer.3mf – Raises the Z-axis endstop to accommodate the new camera height  
 - **Sample Clips** – Secure core samples to the print bed without manual alignment
+    - SampleHolderEnd.3mf
+    - SampleHolderFooter.3mf
+    - SampleHolderMiddle.3mf - You will need 3 of these. I suggest printing one of these off and ensuring that it properly fits before printing off the rest of the parts.
 
 > files for these parts will be provided in the `hardware/` folder of this repository.
 
 ---
 
 ### Modification Instructions
+
+> ! IMPORTANT ! Ensure that you have all 3D printed parts before modifying your 3D printer.
 
 1. **Remove the Print Head**  
    Unscrew and detach the printer's hotend from the X-axis print carriage.
@@ -76,6 +81,11 @@ Before modifying your printer, you must 3D print the following components:
 
 ### Installation
 
+Prerequisites\. Ensure you have the latest version of python installed, and you have git installed.
+
+> Python : https://www.python.org/downloads/  
+> Git : https://git-scm.com/downloads
+
 1\. Clone the repository:
 
    ```bash
@@ -90,11 +100,11 @@ Before modifying your printer, you must 3D print the following components:
   pip install -r requirements.txt
   ```
 
-3\.1\. Download and Install the Amscope SDK at https://amscope.com/pages/software-downloads if one isn't available for your Operating system, download the windows version and check if its in there as the Linux version is.
+3\.1\. Download and Install the Amscope SDK at https://amscope.com/pages/software-downloads if you are on mac or linux, download the windows version as it includes the files for those operating systems there.
 
-3\.2\. Move the amscope.py file to the Camera folder and copy the amcam folder into it as well.
+3\.2\. Move the zipped folder into 3rd_party_imports
 
-4\. Configure the camera settings using `amscope_camera_configuration.yaml`.
+4\. Configure the camera settings using `amscope_camera_configuration.yaml`. For now, you can copy settings from TRIM until I get around to properly implementing this functionality into Forge.
 
 5\. Run the main application:
   
@@ -178,3 +188,9 @@ please [open a GitHub issue](https://github.com/AnthonyvW/FORGE/issues/new?templ
 Contributions are welcome! Please fork the repository and submit a pull request with your enhancements. For major changes, open an issue first to discuss your proposed modifications.
 
 ---
+
+## Attribution
+
+<a href="https://www.flaticon.com/free-icons/open-folder" title="open folder icons">Open folder icons created by kmg design - Flaticon</a>
+
+<a href="https://www.flaticon.com/free-icons/gear" title="gear icons">Gear icons created by Freepik - Flaticon</a>

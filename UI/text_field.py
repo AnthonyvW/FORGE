@@ -30,6 +30,7 @@ class TextField(Frame):
         self._caret_visible = True
         self._blink_interval_ms = 500
         self._last_blink_ms = pygame.time.get_ticks()
+        self._scroll_px = 0
         
         # --- key repeat state ---
         self._repeat_key = None
@@ -49,23 +50,6 @@ class TextField(Frame):
             self._caret_visible = False
             self._repeat_key = None      # NEW: stop repeating when losing focus
 
-    # --- helper for a single backspace action ---
-    def _do_backspace(self):
-        if self._caret_index > 0:
-            self.text = self.text[:self._caret_index - 1] + self.text[self._caret_index:]
-            self._caret_index -= 1
-            self._refresh(); self._reset_blink()
-
-    # --- per-frame repeat tick ---
-    def _update_key_repeat(self):
-        if not self.active or self._repeat_key is None:
-            return
-        now = pygame.time.get_ticks()
-        while now >= self._next_repeat_ms:
-            if self._repeat_key == pygame.K_BACKSPACE:
-                self._do_backspace()
-            # (extend here for DELETE, arrows, etc. if you want)
-            self._next_repeat_ms += self._repeat_interval_ms
 
     def _decode_clip_bytes(self, raw: bytes) -> str:
         """Best-effort decode for clipboard bytes from pygame.scrap/SDL."""
@@ -130,6 +114,7 @@ class TextField(Frame):
         self._caret_index += len(s)
         self._refresh()
         self._reset_blink()
+        self._ensure_caret_visible()
         if getattr(self, "_repeat_key", None) == pygame.K_BACKSPACE:
             self._repeat_key = None
 
@@ -210,36 +195,124 @@ class TextField(Frame):
             return
 
         if event.key == pygame.K_LEFT:
-            if self._caret_index > 0:
-                self._caret_index -= 1; self._reset_blink()
+            self._move_left()
+            now = pygame.time.get_ticks()
+            self._repeat_key = pygame.K_LEFT
+            self._next_repeat_ms = now + self._repeat_delay_ms
+            self._ensure_caret_visible()
             return
 
         if event.key == pygame.K_RIGHT:
-            if self._caret_index < len(self.text):
-                self._caret_index += 1; self._reset_blink()
+            self._move_right()
+            now = pygame.time.get_ticks()
+            self._repeat_key = pygame.K_RIGHT
+            self._next_repeat_ms = now + self._repeat_delay_ms
+            self._ensure_caret_visible()
             return
 
         if event.key == pygame.K_HOME:
-            self._caret_index = 0; self._reset_blink(); return
+            self._caret_index = 0
+            self._reset_blink()
+            self._ensure_caret_visible()
+            return
 
         if event.key == pygame.K_END:
-            self._caret_index = len(self.text); self._reset_blink(); return
+            self._caret_index = len(self.text)
+            self._reset_blink()
+            self._ensure_caret_visible()
+            return
 
         if event.unicode and event.unicode.isprintable():
             self.text = self.text[:self._caret_index] + event.unicode + self.text[self._caret_index:]
             self._caret_index += 1
-            self._refresh(); self._reset_blink()
+            self._refresh()
+            self._reset_blink()
+            self._ensure_caret_visible()
             # printable keys cancel backspace repeat
             if self._repeat_key == pygame.K_BACKSPACE:
                 self._repeat_key = None
     
+
+
+    # --- Carat Movement ---
+
+
+    # --- helper for a single backspace action ---
+    def _do_backspace(self):
+        if self._caret_index > 0:
+            self.text = self.text[:self._caret_index - 1] + self.text[self._caret_index:]
+            self._caret_index -= 1
+            self._refresh()
+            self._reset_blink()
+            self._ensure_caret_visible()
+
+    # --- per-frame repeat tick ---
+    def _update_key_repeat(self):
+        if not self.active or self._repeat_key is None:
+            return
+        now = pygame.time.get_ticks()
+        while now >= self._next_repeat_ms:
+            if self._repeat_key == pygame.K_BACKSPACE:
+                self._do_backspace()
+            elif self._repeat_key == pygame.K_LEFT:
+                self._move_left()
+            elif self._repeat_key == pygame.K_RIGHT:
+                self._move_right()
+            self._next_repeat_ms += self._repeat_interval_ms
+
+    def _text_inner_width(self) -> int:
+        # Available width for text inside padding and border
+        return max(0, self.width - 2 * self._padding - 4)  # -4 for the 2px border on each side
+
+    def _text_width(self) -> int:
+        return self._measure_text_prefix_width(self.text)
+
+    def _prefix_width(self, upto: int) -> int:
+        return self._measure_text_prefix_width(self.text[:upto])
+
+    def _ensure_caret_visible(self):
+        """Adjust self._scroll_px so the caret x (prefix width) stays inside the inner view."""
+        inner_w = self._text_inner_width()
+        if inner_w <= 0:
+            self._scroll_px = 0
+            return
+
+        total_w = self._text_width()
+        caret_px = self._prefix_width(self._caret_index)
+
+        # left edge
+        if caret_px < self._scroll_px:
+            self._scroll_px = caret_px
+        # right edge
+        elif caret_px > self._scroll_px + inner_w:
+            self._scroll_px = caret_px - inner_w
+
+        # clamp scroll to content
+        max_scroll = max(0, total_w - inner_w)
+        self._scroll_px = max(0, min(self._scroll_px, max_scroll))
+
+    def _move_left(self):
+        if self._caret_index > 0:
+            self._caret_index -= 1
+            self._reset_blink()
+            self._ensure_caret_visible()
+
+    def _move_right(self):
+        if self._caret_index < len(self.text):
+            self._caret_index += 1
+            self._reset_blink()
+            self._ensure_caret_visible()
+
     def _refresh(self):
         if self.text:
             self._text.set_text(self.text)
         else:
             self._text.set_text(self.placeholder)
-        # Clamp caret to bounds
         self._caret_index = max(0, min(self._caret_index, len(self.text)))
+        # If content shrank, ensure scroll isn't past the end
+        inner_w = self._text_inner_width()
+        max_scroll = max(0, self._text_width() - inner_w)
+        self._scroll_px = max(0, min(self._scroll_px, max_scroll))
 
     def _reset_blink(self):
         self._last_blink_ms = pygame.time.get_ticks()
@@ -285,32 +358,30 @@ class TextField(Frame):
 
         # Calculate horizontal scroll if text exceeds field width
         text_width = self._measure_text_prefix_width(self.text)
-        inner_width = abs_w - 2 * self._padding
+        inner_width = abs_w - 2 * self._padding - 4  # inside padding and 2px border
+        if inner_width < 0:
+            inner_width = 0
 
-        if text_width > inner_width:
-            # Shift so right edge of text is visible
-            offset_x = inner_width - text_width
-        else:
-            offset_x = 0
+        # When text is shorter than view, no scroll; otherwise use self._scroll_px
+        total_w = self._text_width()
+        max_scroll = max(0, total_w - inner_width)
+        scroll = max(0, min(self._scroll_px, max_scroll))
 
         # Draw the text with horizontal offset
-        text_abs_x = abs_x + self._padding + offset_x
-        self._text.x = text_abs_x - abs_x  # keep relative to parent
+        text_abs_x = abs_x + self._padding + 2 - scroll  # +2 for left border
+        self._text.x = text_abs_x - abs_x
         self._text.draw(surface)
 
         # Caret
         if self.active:
             self._update_blink()
             if self._caret_visible:
-                prefix = self.text[:self._caret_index]
-                prefix_w = self._measure_text_prefix_width(prefix)
+                prefix_w = self._prefix_width(self._caret_index)
                 text_x, text_y, text_w, text_h = self._text.get_absolute_geometry()
-                caret_x = text_x + prefix_w
-                caret_y = text_y
-                caret_h = text_h
+                caret_x = (abs_x + self._padding + 2) + (prefix_w - scroll)
                 pygame.draw.line(surface, pygame.Color("black"),
-                                (caret_x, caret_y),
-                                (caret_x, caret_y + caret_h), 1)
+                                (caret_x, text_y),
+                                (caret_x, text_y + text_h), 1)
 
         surface.set_clip(prev_clip)
 

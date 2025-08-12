@@ -1,7 +1,5 @@
 input/
 output/
-camera/amcam.py
-3rd_party_imports/
 
 # Libraries
 focus-stack/

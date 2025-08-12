@@ -126,6 +126,7 @@ while running:
             if event.key == pygame.K_ESCAPE:
                 running = False
         elif event.type == pygame.KEYUP:
+            root_frame.broadcast_key_event(event)
             background_color = pygame.Color(255, 0, 0)
             screen.fill(background_color)
 
