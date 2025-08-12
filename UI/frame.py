@@ -34,6 +34,10 @@ class Frame():
         self.is_hovered = False
         self.is_pressed = False
 
+        # Automatically add parent if its passed as an argument
+        if parent is not None:
+            parent.add_child(self)
+
     @property
     def debug_outline_color(self) -> pygame.Color:
         return pygame.Color(255, 0, 0)  # Default: red
