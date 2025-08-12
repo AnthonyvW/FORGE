@@ -58,6 +58,7 @@ def get_sample_position(index: int) -> Position:
  sample_name_field
 ) = create_control_panel(root_frame, movementSystem, camera, current_sample_index)
 
+# Verify no duplicate nodes are present
 def audit_tree(node):
     seen = {}
     for ch in node.children:
@@ -69,6 +70,7 @@ def audit_tree(node):
         audit_tree(ch)
 
 audit_tree(root_frame)
+
 
 def go_to_sample():
     pos = get_sample_position(current_sample_index)

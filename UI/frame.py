@@ -261,8 +261,6 @@ class Frame():
     def broadcast_key_event(self, event):
         """Bubble key events to all widgets; inactive widgets can ignore them."""
 
-        print(f"BROADCAST -> {self.__class__.__name__} id={id(self)} children={len(self.children)}")
-
         for child in self.children:
             child.broadcast_key_event(event)
 
@@ -270,5 +268,4 @@ class Frame():
 
     def on_key_event(self, event):
         """Override in widgets that want keyboard input."""
-        print(f"ON_KEY     -> {self.__class__.__name__} id={id(self)}")
         pass
