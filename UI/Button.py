@@ -153,6 +153,9 @@ class Button(Frame):
         self.shape = shape
 
     def draw(self, surface: pygame.Surface) -> None:
+        if self.is_hidden:
+            return
+            
         abs_x, abs_y, abs_w, abs_h = self.get_absolute_geometry()
         
         if not self.is_enabled:

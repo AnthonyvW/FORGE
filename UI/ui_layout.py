@@ -63,12 +63,12 @@ def create_control_panel(
     # --- Automation Box ---
     automation_box = Section(parent=control_frame, title= "Automation", 
         x=10, y=control_box.y + control_box.height + box_spacing, width = RIGHT_PANEL_WIDTH - 20, height = 90)
-    #_build_automation_control(automation_box, movementSystem)
+    _build_automation_control(automation_box, movementSystem)
 
     # --- Camera Settings ---
     camera_control = Section(parent=control_frame, title="Camera Control",
         x=10,y=automation_box.y + automation_box.height + box_spacing, width = RIGHT_PANEL_WIDTH - 20, height = 93)
-    #_build_camera_control(camera_control)
+    _build_camera_control(camera_control)
 
     # --- Sample Box ---
     sample_box = Section(parent=control_frame, title="Sample Management", 
@@ -211,6 +211,7 @@ def _build_sample_box(sample_box, movementSystem, current_sample_index):
 
     # 4th Row
     sample_name_field = TextField(parent=sample_box, x=10, y=160, width=200, height=30, placeholder="Enter text...")
+    sample_name_field.is_hidden = True
 
     return go_to_sample_button, decrement_button, increment_button, sample_label, pos1_display, pos2_display, sample_name_field
 
@@ -226,6 +227,7 @@ def _build_automation_control(automation_box, movementSystem):
     
     Button(movementSystem.start_automation, 10,  10, 115, 40, "Start", parent=automation_box, text_style=make_button_text_style())
     Button(movementSystem.halt,             133, 10, 115, 40, "Stop" , parent=automation_box, text_style=make_button_text_style())
-    Button(movementSystem.toggle_pause,     255, 10, 115, 40, "Pause", parent=automation_box, text_style=make_button_text_style())
+    pause = Button(movementSystem.toggle_pause,     255, 10, 115, 40, "Pause", parent=automation_box, text_style=make_button_text_style())
+    pause.is_hidden = True
 
 
