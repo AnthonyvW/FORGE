@@ -7,7 +7,7 @@
 
 
 > **📅 Scheduled Release:**  
-> FORGE is currently in active development and is scheduled for release on **June 23, 2025**.
+> FORGE is currently in active development and is scheduled for release in **August, 2025**.
 >
 
 
@@ -116,14 +116,12 @@ Prerequisites\. Ensure you have the latest version of python installed, and you 
 ### ✅ Confirmed Compatible Cameras
 FORGE supports USB cameras through a modular driver architecture.
 
-- **Generic USB Cameras** are supported out-of-the-box with basic functionality.  
-- **Advanced Cameras** requiring proprietary APIs (like the Amscope MU500) have dedicated drivers to enable full feature access.
-
-
 | Camera Model            | Notes                       |
 |-------------------------|-----------------------------|
 | Amscope MU500           | Fully tested and supported  |
-| Generic USB Camera      | Limited settings available  |
+| Amscope MU1000          | Fully tested and supported  |
+
+> Support for generic USB cameras, and raspberry pi HQ cameras is planned, but not yet implemented
 
 ### Adding Support for New Cameras
 
@@ -180,6 +178,13 @@ please [open a GitHub issue](https://github.com/AnthonyvW/FORGE/issues/new?templ
 
 > Want to help verify compatibility with other printers, firmware, or cameras?  
 > [Open an issue](https://github.com/AnthonyvW/FORGE/issues) with your setup details and test results!
+
+### ❌ Confirmed Incompatible Printers
+
+| Printer Model           | Firmware | Build Volume (mm) | Notes                                                    |
+|-------------------------|----------|-------------------|----------------------------------------------------------|
+| Bambulab A1             | Marlin   | 220 × 220 × 250   | Properietary Firmware, cannot send gcode directly to it  |
+| Anycubic Kobra Max 3    | Klipper  | 400 × 400 × 450   | Uses Klipper                                             |
 
 ---
 
