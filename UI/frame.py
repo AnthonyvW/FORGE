@@ -247,3 +247,28 @@ class Frame():
 
     def on_hover_leave(self):
         pass
+
+    def broadcast_mouse_press(self, px, py, button):
+        """Give every widget a chance to react to a global mouse press (e.g., focus/unfocus)."""
+        for child in self.children:
+            child.broadcast_mouse_press(px, py, button)
+        self.on_global_mouse_press(px, py, button)
+
+    def on_global_mouse_press(self, px, py, button):
+        """Override in widgets that need to react even if the click was outside them."""
+        pass
+
+    def broadcast_key_event(self, event):
+        """Bubble key events to all widgets; inactive widgets can ignore them."""
+
+        print(f"BROADCAST -> {self.__class__.__name__} id={id(self)} children={len(self.children)}")
+
+        for child in self.children:
+            child.broadcast_key_event(event)
+
+        self.on_key_event(event)
+
+    def on_key_event(self, event):
+        """Override in widgets that want keyboard input."""
+        print(f"ON_KEY     -> {self.__class__.__name__} id={id(self)}")
+        pass

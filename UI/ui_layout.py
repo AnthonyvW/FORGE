@@ -6,6 +6,7 @@ from UI.button import Button, ButtonShape
 from UI.text import Text, TextStyle
 from UI.frame import Frame
 from UI.section_frame import Section
+from UI.text_field import TextField
 
 RIGHT_PANEL_WIDTH = 400
 
@@ -51,30 +52,29 @@ def create_control_panel(
     """
 
     control_frame = _build_right_control_panel(root_frame)
+    box_spacing = 10
+
 
     # --- Control Box ---
     control_box = Section(parent=control_frame, title="Control", 
         x=10, y=60, width=RIGHT_PANEL_WIDTH - 20, height=250)
     speed_display, position_display = _build_movement_controls(control_box, movementSystem)
 
+    # --- Automation Box ---
+    automation_box = Section(parent=control_frame, title= "Automation", 
+        x=10, y=control_box.y + control_box.height + box_spacing, width = RIGHT_PANEL_WIDTH - 20, height = 90)
+    #_build_automation_control(automation_box, movementSystem)
+
+    # --- Camera Settings ---
+    camera_control = Section(parent=control_frame, title="Camera Control",
+        x=10,y=automation_box.y + automation_box.height + box_spacing, width = RIGHT_PANEL_WIDTH - 20, height = 93)
+    #_build_camera_control(camera_control)
+
     # --- Sample Box ---
     sample_box = Section(parent=control_frame, title="Sample Management", 
-        x=10, y=control_box.y + control_box.height + 20, width = RIGHT_PANEL_WIDTH - 20, height = 190)
-    go_to_sample_button, decrement_button, increment_button, sample_label, pos1_display, pos2_display = _build_sample_box(sample_box, movementSystem, current_sample_index)
-
-    
-    # Everything below this point is still work in progress.
-
-    # Utility buttons
-    control_frame.add_child(make_button(movementSystem.toggle_pause,        100, 710 + control_box.height + 20, 80, 40, "Pause"))
-    control_frame.add_child(make_button(movementSystem.halt,                190, 710 + control_box.height + 20, 80, 40, "Stop"))
-    control_frame.add_child(make_button(movementSystem.start_automation,    110, 650 + control_box.height + 20, 80, 40, "Start"))
-    control_frame.add_child(make_button(
-        lambda pos: camera.capture_image() or camera.save_image(filename=pos.to_gcode()),
-        110, 350 + control_box.height + 20, 120, 40, "Take Photo",
-        args_provider=lambda: (movementSystem.get_position(),)
-    ))
-
+        x=10, y=camera_control.y + camera_control.height + box_spacing, width = RIGHT_PANEL_WIDTH - 20, height = 270)
+    go_to_sample_button, decrement_button, increment_button, sample_label, pos1_display, pos2_display, sample_name_field = _build_sample_box(sample_box, movementSystem, current_sample_index)
+  
     return (
         control_frame,
         sample_label,
@@ -84,7 +84,8 @@ def create_control_panel(
         speed_display,
         position_display,
         pos1_display,
-        pos2_display
+        pos2_display,
+        sample_name_field
     )
 
 
@@ -170,6 +171,7 @@ def _build_movement_controls(control_box, movementSystem)-> Frame:
 
     return speed_display, position_display
 
+
 def _build_sample_box(sample_box, movementSystem, current_sample_index):
     # --- Sample navigation (callbacks assigned later in main.py) ---
     button_height = 40
@@ -207,4 +209,23 @@ def _build_sample_box(sample_box, movementSystem, current_sample_index):
         style=make_display_text_style()
     )
 
-    return go_to_sample_button, decrement_button, increment_button, sample_label, pos1_display, pos2_display
+    # 4th Row
+    sample_name_field = TextField(parent=sample_box, x=10, y=160, width=200, height=30, placeholder="Enter text...")
+
+    return go_to_sample_button, decrement_button, increment_button, sample_label, pos1_display, pos2_display, sample_name_field
+
+
+def _build_camera_control(camera_control):
+    camera_control.add_child(make_button(
+        lambda pos: camera.capture_image() or camera.save_image(filename=pos.to_gcode()),
+        10, 10, 120, 40, "Take Photo",
+        args_provider=lambda: (movementSystem.get_position(),)
+    ))
+
+def _build_automation_control(automation_box, movementSystem):
+    
+    Button(movementSystem.start_automation, 10,  10, 115, 40, "Start", parent=automation_box, text_style=make_button_text_style())
+    Button(movementSystem.halt,             133, 10, 115, 40, "Stop" , parent=automation_box, text_style=make_button_text_style())
+    Button(movementSystem.toggle_pause,     255, 10, 115, 40, "Pause", parent=automation_box, text_style=make_button_text_style())
+
+

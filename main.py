@@ -10,6 +10,7 @@ from printer.automated_controller import AutomatedPrinter, Position
 from printer.config import PrinterConfig, AutomationConfig
 
 from UI.ui_layout import create_control_panel, RIGHT_PANEL_WIDTH
+from UI.text_field import TextField
 
 pygame.init()
 pygame.display.set_caption("FORGE")
@@ -40,9 +41,9 @@ current_sample_index = 1
 
 def get_sample_position(index: int) -> Position:
     return Position(
-        x=int((19.80 + 22.75 * (index - 1)) * 100),
-        y=int(193.47 * 100),
-        z=int(9.14 * 100)
+        x=int((20 + 11 * (index - 1)) * 100),
+        y=int(210 * 100),
+        z=int(9.4 * 100)
     )
 
 (control_frame,
@@ -53,9 +54,21 @@ def get_sample_position(index: int) -> Position:
  speed_display,
  position_display,
  position1_display,
- position2_display
+ position2_display,
+ sample_name_field
 ) = create_control_panel(root_frame, movementSystem, camera, current_sample_index)
 
+def audit_tree(node):
+    seen = {}
+    for ch in node.children:
+        seen.setdefault(id(ch), []).append(ch)
+    for ids, lst in seen.items():
+        if len(lst) > 1:
+            print(f"[DUP] {node.__class__.__name__} id={id(node)} has child repeated x{len(lst)} -> {lst[0].__class__.__name__} id={id(lst[0])}")
+    for ch in node.children:
+        audit_tree(ch)
+
+audit_tree(root_frame)
 
 def go_to_sample():
     pos = get_sample_position(current_sample_index)
@@ -104,8 +117,10 @@ while running:
         elif event.type == pygame.MOUSEBUTTONUP:
             root_frame.process_mouse_release(*pos, button="left")
         elif event.type == pygame.MOUSEBUTTONDOWN:
+            root_frame.broadcast_mouse_press(*pos, button="left")
             root_frame.process_mouse_press(*pos, button="left")
         elif event.type == pygame.KEYDOWN:
+            root_frame.broadcast_key_event(event)
             if event.key == pygame.K_ESCAPE:
                 running = False
         elif event.type == pygame.KEYUP:

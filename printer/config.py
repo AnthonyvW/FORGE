@@ -2,7 +2,7 @@ class PrinterConfig:
     """Base configuration for printer hardware settings"""
     def __init__(
         self,
-        serial_port: str = 'COM6',
+        serial_port: str = 'COM7',
         baud_rate: int = 115200,
         max_x: int = 22000,  # Maximum X dimension in steps
         max_y: int = 22000,  # Maximum Y dimension in steps
