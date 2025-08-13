@@ -10,6 +10,7 @@ class TextField(Frame):
                  placeholder="", style=None,
                  background_color=pygame.Color("white"),
                  text_color=pygame.Color("black"),
+                 border_color=pygame.Color("black"),
                  padding=5,
                  **kwargs):
         super().__init__(parent=parent, x=x, y=y, width=width, height=height,
@@ -19,6 +20,7 @@ class TextField(Frame):
         self.placeholder = placeholder
         self.text = ""
         self.style = style or TextStyle(color=text_color, font_size=18)
+        self.border_color = border_color
 
         # Rendered text element inside the field
         self._text = Text(self.placeholder, parent=self, x=padding, y=height // 2,
@@ -353,7 +355,7 @@ class TextField(Frame):
         # Background + border
         abs_x, abs_y, abs_w, abs_h = self.get_absolute_geometry()
         pygame.draw.rect(surface, self.background_color, (abs_x, abs_y, abs_w, abs_h))
-        border = pygame.Color("dodgerblue") if self.active else pygame.Color("black")
+        border = pygame.Color("dodgerblue") if self.active else self.border_color
         pygame.draw.rect(surface, border, (abs_x, abs_y, abs_w, abs_h), 2)
 
         # Clip text to inner rect

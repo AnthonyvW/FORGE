@@ -3,6 +3,8 @@ import pygame
 import time
 from pathlib import Path
 from PIL import Image
+import tkinter as tk
+from tkinter import filedialog
 
 class BaseCamera(ABC):
     """Abstract base class defining the camera interface."""
@@ -12,7 +14,7 @@ class BaseCamera(ABC):
         self.height = frame_height
         self.frame = None
         self.scale = 1
-        self.capture_path = "output/"
+        self.capture_path = "./output/"
         self.capture_name = "test"
         self.capture_index = 1
         self.printer_position = (0, 0, 0)
@@ -100,3 +102,15 @@ class BaseCamera(ABC):
     def set_capture_path(self, path: str):
         """Set path for saving captured images."""
         self.capture_path = path
+
+    def select_capture_path(self):
+        """Open a folder selection dialog to set the capture path."""
+        root = tk.Tk()
+        root.withdraw()  # Hide the main Tk window
+        selected_folder = filedialog.askdirectory(title="Select Capture Folder")
+        root.destroy()
+
+        if selected_folder:  # User didn't cancel
+            self.set_capture_path(selected_folder)
+            print(f"Capture path set to: {self.capture_path}")
+        return self.capture_path

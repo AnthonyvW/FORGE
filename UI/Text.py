@@ -21,7 +21,9 @@ class Text(Frame):
         text: str, 
         x: int, y: int, 
         style: Optional[TextStyle] = None,
-        x_align: str = "left", y_align: str = "top", 
+        x_align: str = "left", y_align: str = "top",
+        max_width: Optional[int] = None,          # NEW: constrain width for rendering
+        truncate_mode: str = "none",              # NEW: 'none' | 'end' | 'middle' | 'start'
         **frame_kwargs):
 
         super().__init__(x=x, y=y, width=0, height=0, **frame_kwargs)
@@ -30,6 +32,8 @@ class Text(Frame):
         self.style = style or TextStyle()
         self.x_align = x_align
         self.y_align = y_align
+        self.max_width = max_width
+        self.truncate_mode = truncate_mode
         self._font = self._create_font()
         self._surface = None
         self._update_surface()
@@ -51,12 +55,16 @@ class Text(Frame):
 
     def _update_surface(self) -> None:
         """Render the text to a surface using FreeType"""
-        if self._font:
-            self._surface, _ = self._font.render(
-                self.text,
-                fgcolor=self.style.color,
-                size=self.style.font_size,
-            )
+        if not self._font:
+            return
+        render_text = self.text
+        if self.max_width and self.truncate_mode != "none":
+            render_text = self._ellipsize(render_text, self.max_width, self.truncate_mode)
+        self._surface, _ = self._font.render(
+            render_text,
+            fgcolor=self.style.color,
+            size=self.style.font_size,
+        )
 
     @property
     def size(self) -> Tuple[int, int]:
@@ -102,6 +110,81 @@ class Text(Frame):
 
         return draw_x, draw_y, text_w, text_h
 
+    # --- Truncation Properties ---
+    def _measure_width(self, s: str) -> int:
+        # pygame.freetype returns metrics via get_rect
+        return self._font.get_rect(s, size=self.style.font_size).width
+
+    def _ellipsize(self, s: str, max_w: int, mode: str) -> str:
+        if max_w is None:
+            return s
+        if self._measure_width(s) <= max_w:
+            return s
+
+        ell = "…"
+        ell_w = self._measure_width(ell)
+        if ell_w > max_w:
+            return ""  # degenerate case
+
+        # helpers
+        def fit_end(prefix: str) -> str:
+            # keep from start, cut at end
+            lo, hi = 0, len(prefix)
+            best = ""
+            while lo <= hi:
+                mid = (lo + hi) // 2
+                cand = prefix[:mid] + ell
+                if self._measure_width(cand) <= max_w:
+                    best = cand
+                    lo = mid + 1
+                else:
+                    hi = mid - 1
+            return best
+
+        def fit_start(suffix: str) -> str:
+            # keep from end, cut at start
+            lo, hi = 0, len(suffix)
+            best = ""
+            while lo <= hi:
+                mid = (lo + hi) // 2
+                cand = ell + suffix[-mid:] if mid > 0 else ell
+                if self._measure_width(cand) <= max_w:
+                    best = cand
+                    lo = mid + 1
+                else:
+                    hi = mid - 1
+            return best
+
+        if mode == "end":
+            return fit_end(s)
+        if mode == "start":
+            return fit_start(s)
+        if mode == "middle":
+            # keep from both ends, cut the middle
+            left, right = 0, 0
+            best = ell
+            # two-pointer growth until it no longer fits
+            while left + right < len(s):
+                # try grow left
+                cand = s[:left+1] + ell + (s[-right:] if right else "")
+                if self._measure_width(cand) <= max_w:
+                    left += 1
+                    best = cand
+                else:
+                    break
+                # try grow right
+                cand = s[:left] + ell + s[-(right+1):]
+                if self._measure_width(cand) <= max_w:
+                    right += 1
+                    best = cand
+                else:
+                    break
+            return best
+
+        # default
+        return s
+
+    # --- Rendering Properties ---
     
     def draw(self, surface: pygame.Surface) -> None:
         if not self._surface:
