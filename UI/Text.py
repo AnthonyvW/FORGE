@@ -29,6 +29,7 @@ class Text(Frame):
 
         super().__init__(x=x, y=y, width=0, height=0, **frame_kwargs)
 
+        self.mouse_passthrough = True
         self.text = text
         self.style = style or TextStyle()
         self.x_align = x_align

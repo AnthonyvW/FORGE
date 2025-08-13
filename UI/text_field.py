@@ -12,6 +12,7 @@ class TextField(Frame):
                  text_color=pygame.Color("black"),
                  border_color=pygame.Color("black"),
                  padding=5,
+                 on_text_change=None, # This is a callback
                  **kwargs):
         super().__init__(parent=parent, x=x, y=y, width=width, height=height,
                          background_color=background_color, **kwargs)
@@ -21,6 +22,7 @@ class TextField(Frame):
         self.text = ""
         self.style = style or TextStyle(color=text_color, font_size=18)
         self.border_color = border_color
+        self.on_text_change = on_text_change  
 
         # Rendered text element inside the field
         self._text = Text(self.placeholder, parent=self, x=padding, y=height // 2,
@@ -318,6 +320,9 @@ class TextField(Frame):
         inner_w = self._text_inner_width()
         max_scroll = max(0, self._text_width() - inner_w)
         self._scroll_px = max(0, min(self._scroll_px, max_scroll))
+
+        if self.on_text_change:
+            self.on_text_change(self.text)
 
     def _reset_blink(self):
         self._last_blink_ms = pygame.time.get_ticks()

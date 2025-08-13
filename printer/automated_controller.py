@@ -16,6 +16,7 @@ class AutomatedPrinter(BasePrinterController):
     def _process_commands(self):
         """Main thread for processing commands from the queue"""
         time.sleep(1)  # Allow time for serial connection to stabilize
+        self.home()
         while True:
             if not self.paused:
                 try:
@@ -87,7 +88,7 @@ class AutomatedPrinter(BasePrinterController):
         
         print("Starting X/Y Step at", self.get_position().to_gcode())
         
-        while self._should_continue_scanning(z_position, z_dir):
+        while self._should_continue_scanning(z_position, z_dir) and not self.paused:
             if not self._process_z_position(z_position):
                 image = self.camera.get_last_image()
                 
@@ -147,7 +148,7 @@ class AutomatedPrinter(BasePrinterController):
         config = self.automation_config
         
         if focus_quality == FocusScore.GOOD:
-            self.camera.save_image(folder=f'X{self.position.x} Y{self.position.y}', filename=f'Z{self.position.z} F{int(focus_score)}')
+            self.camera.save_image(True, folder=f'X{self.position.x} Y{self.position.y}', filename=f'Z{self.position.z} F{int(focus_score)}')
             focus_count += 1
             no_focus_count = 0
             return z_position, current_z_step, no_focus_count, focus_count

@@ -54,8 +54,7 @@ def get_sample_position(index: int) -> Position:
  speed_display,
  position_display,
  position1_display,
- position2_display,
- sample_name_field
+ position2_display
 ) = create_control_panel(root_frame, movementSystem, camera, current_sample_index)
 
 # Verify no duplicate nodes are present

@@ -15,7 +15,7 @@ class BaseCamera(ABC):
         self.frame = None
         self.scale = 1
         self.capture_path = "./output/"
-        self.capture_name = "test"
+        self.capture_name = "sample"
         self.capture_index = 1
         self.printer_position = (0, 0, 0)
         
@@ -49,7 +49,7 @@ class BaseCamera(ABC):
         self.is_taking_image = True
         self.camera.Snap(0)
 
-    def save_image(self, folder: str = "", filename: str = ""):
+    def save_image(self, is_automated: bool, folder: str = "", filename: str = ""):
         """
         Save captured image to disk.
         
@@ -63,7 +63,7 @@ class BaseCamera(ABC):
 
         try:
             # Build the complete save path
-            save_path = Path(self.capture_path)
+            save_path = Path(self.capture_path).joinpath(self.capture_name) if is_automated else Path(self.capture_path)
             if folder:
                 save_path = save_path / folder
             save_path.mkdir(parents=True, exist_ok=True)
@@ -102,6 +102,10 @@ class BaseCamera(ABC):
     def set_capture_path(self, path: str):
         """Set path for saving captured images."""
         self.capture_path = path
+
+    def set_capture_name(self, name: str):
+        """Set path for saving captured images."""
+        self.capture_name = name
 
     def select_capture_path(self):
         """Open a folder selection dialog to set the capture path."""

@@ -68,12 +68,12 @@ def create_control_panel(
     # --- Camera Settings ---
     camera_control = Section(parent=control_frame, title="Camera Control",
         x=10,y=automation_box.y + automation_box.height + box_spacing, width = RIGHT_PANEL_WIDTH - 20, height = 123)
-    _build_camera_control(camera_control, camera)
+    _build_camera_control(camera_control, movementSystem, camera)
 
     # --- Sample Box ---
     sample_box = Section(parent=control_frame, title="Sample Management", 
         x=10, y=camera_control.y + camera_control.height + box_spacing, width = RIGHT_PANEL_WIDTH - 20, height = 233)
-    go_to_sample_button, decrement_button, increment_button, sample_label, pos1_display, pos2_display, sample_name_field = _build_sample_box(sample_box, movementSystem, current_sample_index)
+    go_to_sample_button, decrement_button, increment_button, sample_label, pos1_display, pos2_display = _build_sample_box(sample_box, movementSystem, camera, current_sample_index)
   
     return (
         control_frame,
@@ -84,8 +84,7 @@ def create_control_panel(
         speed_display,
         position_display,
         pos1_display,
-        pos2_display,
-        sample_name_field
+        pos2_display
     )
 
 
@@ -172,7 +171,7 @@ def _build_movement_controls(control_box, movementSystem)-> Frame:
     return speed_display, position_display
 
 
-def _build_sample_box(sample_box, movementSystem, current_sample_index):
+def _build_sample_box(sample_box, movementSystem, camera, current_sample_index):
     # --- Sample navigation (callbacks assigned later in main.py) ---
     button_height = 40
 
@@ -216,14 +215,14 @@ def _build_sample_box(sample_box, movementSystem, current_sample_index):
         x=10, y=165,
         style=make_button_text_style()
     )
-    sample_name_field = TextField(parent=sample_box, x=170, y=160, width=200, height=30, placeholder="sample", border_color=pygame.Color("#b3b4b6"), text_color=pygame.Color("#5a5a5a"))
+    TextField(parent=sample_box, x=170, y=160, width=200, height=30, placeholder="sample", border_color=pygame.Color("#b3b4b6"), text_color=pygame.Color("#5a5a5a"), on_text_change=camera.set_capture_name)
 
-    return go_to_sample_button, decrement_button, increment_button, sample_label, pos1_display, pos2_display, sample_name_field
+    return go_to_sample_button, decrement_button, increment_button, sample_label, pos1_display, pos2_display
 
 
-def _build_camera_control(camera_control, camera):
+def _build_camera_control(camera_control, movementSystem, camera):
     camera_control.add_child(make_button(
-        lambda pos: camera.capture_image() or camera.save_image(filename=pos.to_gcode()),
+        lambda pos: camera.capture_image() or camera.save_image(False, filename=pos.to_gcode()),
         10, 10, 120, 40, "Take Photo",
         args_provider=lambda: (movementSystem.get_position(),)
     ))

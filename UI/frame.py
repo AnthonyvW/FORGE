@@ -157,6 +157,8 @@ class Frame():
             return False
         # First check children, then self
         for child in (self.children):
+            if getattr(child, "mouse_passthrough", False):
+                continue
             if child.contains_point(px, py):
                 child.handle_click(px, py)
                 return  # Only send to first child that contains it (or remove this if you want overlapping elements to handle too)
@@ -168,6 +170,8 @@ class Frame():
             return
 
         for child in (self.children):
+            if getattr(child, "mouse_passthrough", False):
+                continue
             if child.contains_point(px, py):
                 child.handle_hover(px, py)
                 return
@@ -189,6 +193,8 @@ class Frame():
         # First propagate to children front-to-back
         top_hit = None
         for child in (self.children):
+            if getattr(child, "mouse_passthrough", False):
+                continue
             if child.contains_point(px, py):
                 top_hit = child
                 break
@@ -213,6 +219,8 @@ class Frame():
             return
 
         for child in self.children:
+            if getattr(child, "mouse_passthrough", False):
+                continue
             if child.contains_point(px, py):
                 child.process_mouse_press(px, py, button)
                 return
@@ -226,6 +234,8 @@ class Frame():
             return
 
         for child in self.children:
+            if getattr(child, "mouse_passthrough", False):
+                continue
             if child.contains_point(px, py):
                 child.process_mouse_release(px, py, button)
                 return
