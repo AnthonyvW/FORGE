@@ -143,8 +143,6 @@ while running:
         for child in frame.children:
             draw_debug_outline(surface, child)
 
-    # Draw Buttons
-    control_frame.draw(screen)
 
     #draw_debug_outline(screen, root_frame)
     # Draw Camera
@@ -155,6 +153,9 @@ while running:
     except Exception as e:
         print(f"Error displaying camera frame: {e}")
 
+    # Draw Buttons
+    control_frame.draw(screen)
+    
     speed_display.set_text(f"Step Size: {movementSystem.speed / 100:.2f}mm")
     position_display.set_text( f"X: {movementSystem.position.x/100:.2f} Y: {movementSystem.position.y/100:.2f} Z: {movementSystem.position.z/100:.2f}")
     position1_display.set_text(f"X: {movementSystem.automation_config.x_start/100:.2f} Y: {movementSystem.automation_config.y_start/100:.2f} Z: {movementSystem.automation_config.z_start/100:.2f}")

@@ -22,8 +22,9 @@ class Text(Frame):
         x: int, y: int, 
         style: Optional[TextStyle] = None,
         x_align: str = "left", y_align: str = "top",
-        max_width: Optional[int] = None,          # NEW: constrain width for rendering
-        truncate_mode: str = "none",              # NEW: 'none' | 'end' | 'middle' | 'start'
+        max_width: Optional[int] = None,
+        truncate_mode: str = "none",
+        show_tooltip_on_hover: bool = True,
         **frame_kwargs):
 
         super().__init__(x=x, y=y, width=0, height=0, **frame_kwargs)
@@ -34,8 +35,10 @@ class Text(Frame):
         self.y_align = y_align
         self.max_width = max_width
         self.truncate_mode = truncate_mode
+        self.show_tooltip_on_hover = show_tooltip_on_hover
         self._font = self._create_font()
         self._surface = None
+        self._render_text = text
         self._update_surface()
 
     @property
@@ -57,21 +60,24 @@ class Text(Frame):
         """Render the text to a surface using FreeType"""
         if not self._font:
             return
-        render_text = self.text
+        self._render_text = self.text
         if self.max_width and self.truncate_mode != "none":
-            render_text = self._ellipsize(render_text, self.max_width, self.truncate_mode)
+            self._render_text = self._ellipsize(self.text, self.max_width, self.truncate_mode)
         self._surface, _ = self._font.render(
-            render_text,
+            self._render_text,
             fgcolor=self.style.color,
             size=self.style.font_size,
         )
+
 
     @property
     def size(self) -> Tuple[int, int]:
         return self._surface.get_size() if self._surface else (0, 0)
 
     def contains_point(self, px, py):
-        return False
+        # allow hover detection
+        abs_x, abs_y, w, h = self.get_absolute_geometry()
+        return abs_x <= px <= abs_x + w and abs_y <= py <= abs_y + h
 
     def set_text(self, text: str) -> None:
         """Update the displayed text"""
@@ -194,7 +200,6 @@ class Text(Frame):
             self.parent.get_absolute_geometry() if self.parent else (0, 0, *surface.get_size())
         )
 
-        # Resolve anchor point in absolute coordinates
         draw_x = self.x * parent_w if self.x_is_percent else self.x
         draw_y = self.y * parent_h if self.y_is_percent else self.y
         draw_x += parent_x
@@ -202,7 +207,6 @@ class Text(Frame):
 
         text_w, text_h = self._surface.get_size()
 
-        # Apply alignment
         if self.x_align == "center":
             draw_x -= text_w // 2
         elif self.x_align == "right":
@@ -214,4 +218,51 @@ class Text(Frame):
             draw_y -= text_h
 
         surface.blit(self._surface, (draw_x, draw_y))
+
+        # Tooltip rendering
+        if (
+            self.show_tooltip_on_hover
+            and self._render_text != self.text
+        ):
+            mx, my = pygame.mouse.get_pos()
+            if self.contains_point(mx, my):
+                self._draw_tooltip(surface, self.text, mx, my)
+
+    def _draw_tooltip(self, surface, text, x, y):
+        # Render text
+        tooltip_font = self._create_font()
+        tip_surface, _ = tooltip_font.render(text, fgcolor=pygame.Color("black"))
+        padding = 6
+        cursor_offset = 12
+        margin = 6  # keep a small gap from window edges
+
+        tw, th = tip_surface.get_size()
+        rect = pygame.Rect(x + cursor_offset, y + cursor_offset, tw + padding * 2, th + padding * 2)
+
+        # Clamp to screen and flip if needed
+        sw, sh = surface.get_size()
+
+        # If it overflows to the right, move left of the cursor
+        if rect.right > sw - margin:
+            rect.x = x - cursor_offset - rect.w
+        # If it still overflows, clamp to edge
+        if rect.right > sw - margin:
+            rect.x = sw - rect.w - margin
+        if rect.x < margin:
+            rect.x = margin
+
+        # If it overflows at the bottom, move above the cursor
+        if rect.bottom > sh - margin:
+            rect.y = y - cursor_offset - rect.h
+        # If it still overflows, clamp to edge
+        if rect.bottom > sh - margin:
+            rect.y = sh - rect.h - margin
+        if rect.y < margin:
+            rect.y = margin
+
+        # Draw bubble
+        pygame.draw.rect(surface, pygame.Color(255, 255, 224), rect)  # light yellow
+        pygame.draw.rect(surface, pygame.Color("black"), rect, 1)
+        surface.blit(tip_surface, (rect.x + padding, rect.y + padding))
+
 

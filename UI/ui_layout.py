@@ -67,12 +67,12 @@ def create_control_panel(
 
     # --- Camera Settings ---
     camera_control = Section(parent=control_frame, title="Camera Control",
-        x=10,y=automation_box.y + automation_box.height + box_spacing, width = RIGHT_PANEL_WIDTH - 20, height = 163)
+        x=10,y=automation_box.y + automation_box.height + box_spacing, width = RIGHT_PANEL_WIDTH - 20, height = 123)
     _build_camera_control(camera_control, camera)
 
     # --- Sample Box ---
     sample_box = Section(parent=control_frame, title="Sample Management", 
-        x=10, y=camera_control.y + camera_control.height + box_spacing, width = RIGHT_PANEL_WIDTH - 20, height = 270)
+        x=10, y=camera_control.y + camera_control.height + box_spacing, width = RIGHT_PANEL_WIDTH - 20, height = 233)
     go_to_sample_button, decrement_button, increment_button, sample_label, pos1_display, pos2_display, sample_name_field = _build_sample_box(sample_box, movementSystem, current_sample_index)
   
     return (
