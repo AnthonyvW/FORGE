@@ -11,7 +11,7 @@ import importlib.util
 import ctypes
 import zipfile
 
-from .base import BaseCamera
+from .base_camera import BaseCamera
 from .settings import CameraSettings, CameraSettingsManager
 from image_processing.analyzers import ImageAnalyzer
 
