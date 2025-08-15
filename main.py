@@ -46,15 +46,15 @@ def get_sample_position(index: int) -> Position:
         z=int(9.4 * 100)
     )
 
-(control_frame,
- sample_label,
- inc_btn,
- dec_btn,
- go_btn,
- speed_display,
- position_display,
- position1_display,
- position2_display
+(
+    sample_label,
+    inc_btn,
+    dec_btn,
+    go_btn,
+    speed_display,
+    position_display,
+    position1_display,
+    position2_display
 ) = create_control_panel(root_frame, movementSystem, camera, current_sample_index)
 
 # Verify no duplicate nodes are present
@@ -142,19 +142,11 @@ while running:
         for child in frame.children:
             draw_debug_outline(surface, child)
 
-
     #draw_debug_outline(screen, root_frame)
-    # Draw Camera
-    try:
-        frame = camera.get_frame()
-        if frame is not None:
-            screen.blit(frame, (0, 0))
-    except Exception as e:
-        print(f"Error displaying camera frame: {e}")
-
-    # Draw Buttons
-    control_frame.draw(screen)
     
+    # Draw GUI
+    root_frame.draw(screen)
+
     speed_display.set_text(f"Step Size: {movementSystem.speed / 100:.2f}mm")
     position_display.set_text( f"X: {movementSystem.position.x/100:.2f} Y: {movementSystem.position.y/100:.2f} Z: {movementSystem.position.z/100:.2f}")
     position1_display.set_text(f"X: {movementSystem.automation_config.x_start/100:.2f} Y: {movementSystem.automation_config.y_start/100:.2f} Z: {movementSystem.automation_config.z_start/100:.2f}")

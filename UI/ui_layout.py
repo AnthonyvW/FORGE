@@ -8,6 +8,7 @@ from UI.frame import Frame
 from UI.section_frame import Section
 from UI.text_field import TextField
 from UI.modal import Modal
+from UI.camera_view import CameraView
 
 RIGHT_PANEL_WIDTH = 400
 
@@ -55,6 +56,18 @@ def create_control_panel(
     control_frame = _build_right_control_panel(root_frame)
     box_spacing = 10
 
+    # --- Camera View
+    camera_view = CameraView(
+        camera=camera,
+        parent=root_frame,
+        x=0, y=0,
+        width=1.0, height=1.0,
+        x_is_percent=True, y_is_percent=True,
+        width_is_percent=True, height_is_percent=True,
+        z_index=0,  # keep it behind panels/modals that use higher z
+        background_color=pygame.Color("black"),
+        right_margin_px=RIGHT_PANEL_WIDTH # reserve space for the control panel
+    )
 
     # --- Control Box ---
     control_box = Section(parent=control_frame, title="Control", 
@@ -83,7 +96,6 @@ def create_control_panel(
     # --- Modal ---
 
     return (
-        control_frame,
         sample_label,
         increment_button,
         decrement_button,

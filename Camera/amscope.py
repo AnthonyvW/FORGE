@@ -17,29 +17,17 @@ from image_processing.analyzers import ImageAnalyzer
 
 class AmscopeCamera(BaseCamera):
     def __init__(self, frame_width: int, frame_height: int):
-        # We initialize the amscope library stuff here to get around it being proprietary 
+        # Minimal vendor state; BaseCamera handles common fields
         self.amcam = None
         self._callback_ref = None  # must keep a reference to avoid garbage collection
         self.buffer = None
         self.camera = None
         self.frame = None
-
-        self._load_amcam()
-
-        self.name = ""
-        self.runtime = 0
-        self.is_taking_image = False
-        self.last_image = None
-        self.settings = None
-        self.scale = 1.0
-        self.frame_width = frame_width
-        self.frame_height = frame_height
-        
-        # Create fallback surface
-        self.fallback_surface = pygame.Surface((frame_width, frame_height))
-        self.fallback_surface.fill((0, 0, 0))  # Black background
-        
         super().__init__(frame_width, frame_height)
+
+    # Load vendor SDK before initialize()
+    def pre_initialize(self):
+        self._load_amcam()
 
     def _load_amcam(self):
         project_root = os.path.abspath(os.path.join(os.path.dirname(__file__), '..'))
@@ -108,23 +96,23 @@ class AmscopeCamera(BaseCamera):
             available_cameras = self.amcam.Amcam.EnumV2()
             if not available_cameras:
                 raise Exception("Failed to Find Amscope Camera")
-            
+
             self.name = available_cameras[0].displayname
             self.camera = self.amcam.Amcam.Open(available_cameras[0].id)
-            
+
             if not self.camera:
                 raise Exception("Failed to open Amscope Camera")
-                
+
             self.width, self.height = self.camera.get_Size()
             self.buffer = bytes((self.width * 24 + 31) // 32 * 4 * self.height)
-            
+
             if sys.platform == 'win32':
                 self.camera.put_Option(self.amcam.AMCAM_OPTION_BYTEORDER, 0)
-                
+
             # Start the stream immediately after initialization
             self.start_stream()
             return True
-            
+
         except self.amcam.HRESULTException as e:
             print(f"Error initializing camera: {e}")
             self.camera = None
@@ -139,16 +127,17 @@ class AmscopeCamera(BaseCamera):
         if self.camera is None:
             print("Cannot start stream - camera not initialized")
             return
-            
+
         try:
             # Load and apply settings first
             self.settings = CameraSettingsManager.load_settings("amscope_camera_configuration.yaml")
             self._apply_settings(self.settings)
-            
+
             # Start the pull mode BEFORE trying to stream
             self.camera.StartPullModeWithCallback(self._camera_callback, self)
-            self.resize(self.width, self.height)
-            
+            # Recompute scale now that width/height are known
+            self.resize(self.frame_width, self.frame_height)
+
         except self.amcam.HRESULTException as e:
             print(f"Error starting stream: {e}")
         except Exception as e:
@@ -168,10 +157,10 @@ class AmscopeCamera(BaseCamera):
             self.camera.put_Gamma(settings.gamma)
             self.camera.put_Option(self.amcam.AMCAM_OPTION_SHARPENING, settings.sharpening)
             self.camera.put_Option(self.amcam.AMCAM_OPTION_LINEAR, settings.linear)
-            
+
             curve_options = {'Off': 0, 'Polynomial': 1, 'Logarithmic': 2}
             self.camera.put_Option(self.amcam.AMCAM_OPTION_CURVE, curve_options.get(settings.curve, 1))
-            
+
         except self.amcam.HRESULTException as e:
             print(f"Error applying settings: {e}")
 
@@ -196,7 +185,7 @@ class AmscopeCamera(BaseCamera):
             print("Camera not initialized. Attempting to initialize...")
             if not self.initialize():
                 return
-            
+
         # Ensure buffer is initialized
         if self.buffer is None:
             self.width, self.height = self.camera.get_Size()
@@ -215,41 +204,16 @@ class AmscopeCamera(BaseCamera):
             buffer_size = cam_width * cam_height * 3
             buf = bytes(buffer_size)
             self.camera.PullStillImageV2(buf, 24, None)
-            
+
             decoded = np.frombuffer(buf, np.uint8)
             self.last_image = decoded.reshape((cam_height, cam_width, 3))
-            
+
         except self.amcam.HRESULTException as e:
             print(f"Error processing frame: {e}")
         finally:
             self.is_taking_image = False
 
-    def get_last_image(self) -> np.ndarray:
-        """Get the last captured image, waiting if an image capture is in progress."""
-        while self.is_taking_image:
-            time.sleep(0.01)
-        return self.last_image
-
-    def resize(self, frame_width: int, frame_height: int):
-        """Resize camera frame dimensions."""
-        self.frame_width = frame_width
-        self.frame_height = frame_height
-        
-        # Update fallback surface size
-        self.fallback_surface = pygame.Surface((frame_width, frame_height))
-        self.fallback_surface.fill((0, 0, 0))
-        
-        if self.frame is not None:
-            self.scale = min(frame_width/self.frame.get_width(), 
-                           frame_height/self.frame.get_height())
-
     def update(self):
         """Update camera frame."""
         if not self.is_taking_image and self.camera is not None:
             self.stream()
-
-    def close(self):
-        """Clean up camera resources."""
-        if self.camera:
-            self.camera.Close()
-            self.camera = None
