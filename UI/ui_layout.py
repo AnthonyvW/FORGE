@@ -7,6 +7,7 @@ from UI.text import Text, TextStyle
 from UI.frame import Frame
 from UI.section_frame import Section
 from UI.text_field import TextField
+from UI.modal import Modal
 
 RIGHT_PANEL_WIDTH = 400
 
@@ -65,16 +66,23 @@ def create_control_panel(
         x=10, y=control_box.y + control_box.height + box_spacing, width = RIGHT_PANEL_WIDTH - 20, height = 90)
     _build_automation_control(automation_box, movementSystem)
 
+    # --- Camera Settings Modal ---
+    camera_settings_modal = Modal(parent=root_frame, title="Camera Settings", overlay=False)
+    _build_camera_settings_modal(camera_settings_modal)
+    camera_settings_modal.open()
+
     # --- Camera Settings ---
     camera_control = Section(parent=control_frame, title="Camera Control",
         x=10,y=automation_box.y + automation_box.height + box_spacing, width = RIGHT_PANEL_WIDTH - 20, height = 123)
-    _build_camera_control(camera_control, movementSystem, camera)
+    _build_camera_control(camera_control, movementSystem, camera, camera_settings_modal)
 
     # --- Sample Box ---
     sample_box = Section(parent=control_frame, title="Sample Management", 
         x=10, y=camera_control.y + camera_control.height + box_spacing, width = RIGHT_PANEL_WIDTH - 20, height = 233)
     go_to_sample_button, decrement_button, increment_button, sample_label, pos1_display, pos2_display = _build_sample_box(sample_box, movementSystem, camera, current_sample_index)
   
+    # --- Modal ---
+
     return (
         control_frame,
         sample_label,
@@ -86,6 +94,11 @@ def create_control_panel(
         pos1_display,
         pos2_display
     )
+
+
+def _build_camera_settings_modal(modal):
+    Text("Hello modal", parent=modal.body, x=16, y=16, x_align="left", y_align="top",
+        style=TextStyle(font_size=22))
 
 
 def _build_right_control_panel(root_frame)-> Frame:
@@ -220,10 +233,10 @@ def _build_sample_box(sample_box, movementSystem, camera, current_sample_index):
     return go_to_sample_button, decrement_button, increment_button, sample_label, pos1_display, pos2_display
 
 
-def _build_camera_control(camera_control, movementSystem, camera):
+def _build_camera_control(camera_control, movementSystem, camera, camera_settings_modal):
     camera_control.add_child(make_button(
         lambda pos: camera.capture_image() or camera.save_image(False, filename=pos.to_gcode()),
-        10, 10, 120, 40, "Take Photo",
+        10, 10, 117, 40, "Take Photo",
         args_provider=lambda: (movementSystem.get_position(),)
     ))
 
@@ -233,7 +246,10 @@ def _build_camera_control(camera_control, movementSystem, camera):
     def on_set_path():
         path_label.set_text(f"Save Path: {camera.select_capture_path()}")
 
-    Button(on_set_path, 135,  10, 120, 40, "Set Path", parent=camera_control, text_style=make_button_text_style())
+    Button(on_set_path, 132,  10, 117, 40, "Set Path", parent=camera_control, text_style=make_button_text_style())
+
+    
+    Button(lambda: camera_settings_modal.open(), 254,  10, 117, 40, "Settings", parent=camera_control, text_style=make_button_text_style())
     
 
 def _build_automation_control(automation_box, movementSystem):

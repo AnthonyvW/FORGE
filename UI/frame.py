@@ -120,7 +120,12 @@ class Frame():
         if self.x_align == 'left':
             abs_x = parent_x + raw_x
         elif self.x_align == 'center':
-            abs_x = parent_x + (parent_width // 2) + raw_x - (abs_width // 2)
+            if self.x_is_percent:
+                # x is a position in parent coords (e.g., 0.5 * width)
+                abs_x = parent_x + raw_x - (abs_width // 2)
+            else:
+                # x is a pixel offset from the parent's center
+                abs_x = parent_x + (parent_width // 2) + raw_x - (abs_width // 2)
         elif self.x_align == 'right':
             abs_x = parent_x + parent_width - raw_x - abs_width
         else:
@@ -130,7 +135,10 @@ class Frame():
         if self.y_align == 'top':
             abs_y = parent_y + raw_y
         elif self.y_align == 'center':
-            abs_y = parent_y + (parent_height // 2) + raw_y - (abs_height // 2)
+            if self.y_is_percent:
+                abs_y = parent_y + raw_y - (abs_height // 2)
+            else:
+                abs_y = parent_y + (parent_height // 2) + raw_y - (abs_height // 2)
         elif self.y_align == 'bottom':
             abs_y = parent_y + parent_height - raw_y - abs_height
         else:
