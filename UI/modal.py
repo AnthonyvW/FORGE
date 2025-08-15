@@ -20,7 +20,7 @@ class _Scrim(Frame):
         self.hide()  # start hidden
 
     def draw(self, surface: pygame.Surface) -> None:
-        if self.is_hidden:
+        if self.is_effectively_hidden:
             return
         abs_x, abs_y, abs_w, abs_h = self.get_absolute_geometry()
         # Semi-transparent scrim

@@ -1,6 +1,7 @@
 import pygame
 from UI.frame import Frame
 from UI.text import Text, TextStyle
+from UI.button import Button, ButtonColors
 
 class Section(Frame):
     def __init__(
@@ -15,9 +16,12 @@ class Section(Frame):
         header_height=32,
         header_bg=pygame.Color("#dbdbdb"),
         title_style: TextStyle | None = None,
-        title_align: str = "left"
+        title_align: str = "left",
+        collapsible: bool = False
     ):
         self._initializing = True
+        self.collapsible = collapsible
+        self.collapsed = False
 
         super().__init__(
             parent=parent, x=x, y=y, width=width, height=height,
@@ -25,6 +29,10 @@ class Section(Frame):
             width_is_percent=width_is_percent, height_is_percent=height_is_percent,
             z_index=z_index, background_color=background_color
         )
+
+        # Save original (expanded) height config so we can restore it
+        self._saved_height = height
+        self._saved_height_is_percent = height_is_percent
 
         # Header bar
         self.header = Frame(
@@ -36,7 +44,7 @@ class Section(Frame):
             z_index=z_index + 1
         )
 
-        # Title text in header
+        # Title text
         if title_style is None:
             title_style = TextStyle(
                 color=pygame.Color("#7a7a7a"),
@@ -46,14 +54,40 @@ class Section(Frame):
         self.title = Text(
             text=title,
             parent=self.header,
-            x=8 if title_align == "left" else self.header.width // 2,
+            x=(0.5 if title_align == "center" else 8),
             y=self.header.height // 2,
+            x_is_percent=(title_align == "center"),
+            y_is_percent=False,
             x_align=title_align,
             y_align="center",
             style=title_style,
         )
 
-        # Body (content area) — fills remaining vertical space below header
+        # Collapse toggle button
+        if self.collapsible:
+            self.toggle_btn = Button(
+                self.toggle_collapse,
+                x=0, y=0,
+                width=header_height, height=header_height,
+                text="-",
+                parent=self.header,
+                x_align="right", y_align="top",
+                colors=ButtonColors(
+                    background=header_bg,
+                    foreground=header_bg,
+                    hover_background=pygame.Color("#b3b4b6"),
+                    disabled_background=header_bg,
+                    disabled_foreground=header_bg
+                ),
+                text_style=TextStyle(
+                    color=pygame.Color("#7a7a7a"),
+                    font_size=min(20, header_height - 8),
+                )
+            )
+        else:
+            self.toggle_btn = None
+
+        # Body (content area)
         self.body = Frame(
             parent=self,
             x=0, y=self.header.height,
@@ -64,13 +98,51 @@ class Section(Frame):
             z_index=z_index
         )
 
-        self._initializing = False  # <— now route future add_child calls to body
+        self._initializing = False
 
-    # Default: when you "add_child" to a Section, it goes into the body.
+    # --- public helper (optional) ---
+    def set_collapsed(self, value: bool):
+        if value == self.collapsed:
+            return
+
+        self.collapsed = value
+        if self.toggle_btn:
+            self.toggle_btn.set_text("+" if self.collapsed else "-")
+
+        if self.collapsed:
+            # Save current height config before collapsing
+            self._saved_height = self.height
+            self._saved_height_is_percent = self.height_is_percent
+
+            # Clamp Section height to header only
+            self.height_is_percent = False
+            self.height = self.header.height
+
+            # Hide only the body subtree due to collapse (don’t touch USER state)
+            self._for_each_in_body(lambda f: f.add_hidden_reason("COLLAPSED"))
+
+        else:
+            # Restore original height config
+            self.height_is_percent = self._saved_height_is_percent
+            self.height = self._saved_height
+
+            # Unhide only the collapse reason
+            self._for_each_in_body(lambda f: f.remove_hidden_reason("COLLAPSED"))
+
+    def toggle_collapse(self):
+        self.set_collapsed(not self.collapsed)
+
     def add_child(self, child):
         if getattr(self, "_initializing", False) or not hasattr(self, "body"):
             return super().add_child(child)
         return self.body.add_child(child)
+
+    def _for_each_in_body(self, fn):
+        stack = [self.body]
+        while stack:
+            node = stack.pop()
+            fn(node)
+            stack.extend(node.children)
 
     def add_to_header(self, child):
         self.header.add_child(child)
@@ -83,6 +155,8 @@ class Section(Frame):
         _, _, sec_w, sec_h = self.get_absolute_geometry()
         self.body.y = self.header.height
         self.body.height_is_percent = False
+        # With the section height now clamped to header.height when collapsed,
+        # this naturally becomes 0. Otherwise, it's the remaining space.
         self.body.height = max(0, sec_h - self.header.height)
 
     def draw(self, surface: pygame.Surface) -> None:

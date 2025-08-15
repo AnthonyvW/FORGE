@@ -32,8 +32,8 @@ class Frame():
         self.y_align = y_align
 
         self.is_hovered = False
-        self.is_pressed = False
-        self.is_hidden = False  
+        self.is_pressed = False 
+        self.hidden_reasons: set[str] = set()
 
         # Automatically add parent if its passed as an argument
         if parent is not None:
@@ -93,8 +93,8 @@ class Frame():
 
     @property
     def absolute_position(self) -> Tuple[int, int]:
-        abs_width = self._width * parent_width if self.width_is_percent else self._width
-        abs_height = self._height * parent_height if self.height_is_percent else self._height
+        abs_width = self.width * parent_width if self.width_is_percent else self.width
+        abs_height = self.height * parent_height if self.height_is_percent else self.height
         return (abs_width, abs_height)
 
     @property
@@ -154,14 +154,21 @@ class Frame():
         self.children.append(child)
         self.children.sort(key=lambda c: c.z_index, reverse=True)  # front-to-back order
     
+    def for_each_descendant(self, fn):
+        stack = list(self.children)
+        while stack:
+            node = stack.pop()
+            fn(node)
+            stack.extend(node.children)
+
     def contains_point(self, px, py):
-        if self.is_hidden:
+        if self.is_effectively_hidden:
             return False
         abs_x, abs_y, abs_width, abs_height = self.get_absolute_geometry()
         return abs_x <= px <= abs_x + abs_width and abs_y <= py <= abs_y + abs_height
 
     def handle_click(self, px, py):
-        if self.is_hidden:
+        if self.is_effectively_hidden:
             return False
         # First check children, then self
         for child in (self.children):
@@ -174,7 +181,7 @@ class Frame():
         self.on_click()
     
     def handle_hover(self, px, py):
-        if self.is_hidden:
+        if self.is_effectively_hidden:
             return
 
         for child in (self.children):
@@ -195,7 +202,7 @@ class Frame():
 
     def process_mouse_move(self, px, py):
         """Hover handling with z occlusion"""
-        if self.is_hidden:
+        if self.is_effectively_hidden:
             return
         
         # First propagate to children front-to-back
@@ -223,7 +230,7 @@ class Frame():
             self.on_hover_leave()
 
     def process_mouse_press(self, px, py, button):
-        if self.is_hidden:
+        if self.is_effectively_hidden:
             return
 
         for child in self.children:
@@ -238,7 +245,7 @@ class Frame():
             self.on_mouse_press(button)
 
     def process_mouse_release(self, px, py, button):
-        if self.is_hidden:
+        if self.is_effectively_hidden:
             return
 
         for child in self.children:
@@ -254,20 +261,32 @@ class Frame():
             if self.contains_point(px, py):
                 self.on_click(button)
     
+    # ---- visibility core ----
+    def add_hidden_reason(self, reason: str):
+        if reason not in self.hidden_reasons:
+            self.hidden_reasons.add(reason)
+
+    def remove_hidden_reason(self, reason: str):
+        self.hidden_reasons.discard(reason)
+
+    @property
+    def is_effectively_hidden(self) -> bool:
+        return bool(self.hidden_reasons)
+
     def hide(self, recursive: bool = False):
-        self.is_hidden = True
+        self.add_hidden_reason("USER")
         if recursive:
             for ch in self.children:
                 ch.hide(True)
 
     def show(self, recursive: bool = False):
-        self.is_hidden = False
+        self.remove_hidden_reason("USER")
         if recursive:
             for ch in self.children:
                 ch.show(True)
 
     def draw(self, surface: pygame.Surface) -> None:
-        if self.is_hidden:
+        if self.is_effectively_hidden:
             return
             
         abs_x, abs_y, abs_w, abs_h = self.get_absolute_geometry()
@@ -299,7 +318,7 @@ class Frame():
 
     def broadcast_mouse_press(self, px, py, button):
         """Give every widget a chance to react to a global mouse press (e.g., focus/unfocus)."""
-        if self.is_hidden:
+        if self.is_effectively_hidden:
             return
 
         for child in self.children:
@@ -312,7 +331,7 @@ class Frame():
 
     def broadcast_key_event(self, event):
         """Bubble key events to all widgets; inactive widgets can ignore them."""
-        if self.is_hidden:
+        if self.is_effectively_hidden:
             return
 
         for child in self.children:

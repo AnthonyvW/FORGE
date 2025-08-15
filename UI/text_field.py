@@ -44,7 +44,7 @@ class TextField(Frame):
 
     # --- focus management: respond to global clicks anywhere ---
     def on_global_mouse_press(self, px, py, button):
-        if self.is_hidden:
+        if self.is_effectively_hidden:
             return
             
         was_active = self.active
@@ -158,7 +158,7 @@ class TextField(Frame):
 
     # --- typing: react to KEYDOWN + KEYUP ---
     def on_key_event(self, event):
-        if not self.active or self.is_hidden:
+        if not self.active or self.is_effectively_hidden:
             return
 
         # handle KEYUP to stop repeat
@@ -352,7 +352,7 @@ class TextField(Frame):
         return surf.get_width()
 
     def draw(self, surface):
-        if self.is_hidden:
+        if self.is_effectively_hidden:
             return
         
         self._update_key_repeat()

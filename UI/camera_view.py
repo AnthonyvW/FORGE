@@ -70,7 +70,7 @@ class CameraView(Frame):
         return self._compute_inner_rect()
 
     def draw(self, surface: pygame.Surface) -> None:
-        if self.is_hidden:
+        if self.is_effectively_hidden:
             return
 
         ix, iy, iw, ih = self._compute_inner_rect()

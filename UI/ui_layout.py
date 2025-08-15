@@ -70,12 +70,12 @@ def create_control_panel(
     )
 
     # --- Control Box ---
-    control_box = Section(parent=control_frame, title="Control", 
+    control_box = Section(parent=control_frame, title="Control", collapsible=False,
         x=10, y=60, width=RIGHT_PANEL_WIDTH - 20, height=250)
     speed_display, position_display = _build_movement_controls(control_box, movementSystem)
 
     # --- Automation Box ---
-    automation_box = Section(parent=control_frame, title= "Automation", 
+    automation_box = Section(parent=control_frame, title= "Automation", collapsible=False, 
         x=10, y=control_box.y + control_box.height + box_spacing, width = RIGHT_PANEL_WIDTH - 20, height = 90)
     _build_automation_control(automation_box, movementSystem)
 
@@ -84,7 +84,7 @@ def create_control_panel(
     _build_camera_settings_modal(camera_settings_modal)
 
     # --- Camera Settings ---
-    camera_control = Section(parent=control_frame, title="Camera Control",
+    camera_control = Section(parent=control_frame, title="Camera Control", collapsible=False, 
         x=10,y=automation_box.y + automation_box.height + box_spacing, width = RIGHT_PANEL_WIDTH - 20, height = 123)
     _build_camera_control(camera_control, movementSystem, camera, camera_settings_modal)
 
@@ -268,6 +268,6 @@ def _build_automation_control(automation_box, movementSystem):
     Button(movementSystem.start_automation, 10,  10, 115, 40, "Start", parent=automation_box, text_style=make_button_text_style())
     Button(movementSystem.halt,             133, 10, 115, 40, "Stop" , parent=automation_box, text_style=make_button_text_style())
     pause = Button(movementSystem.toggle_pause,     255, 10, 115, 40, "Pause", parent=automation_box, text_style=make_button_text_style())
-    pause.is_hidden = True
+    pause.add_hidden_reason("SYSTEM")
 
 
