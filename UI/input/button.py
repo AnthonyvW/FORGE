@@ -12,7 +12,7 @@ class ButtonShape(Enum):
 def default_background() -> pygame.Color:
     return pygame.Color("#dbdbdb")
 
-def default_foreground() -> pygame.Color:  # used for BORDER unless text colors are unset
+def default_foreground() -> pygame.Color:  # used for BORDER only
     return pygame.Color("#b3b4b6")
 
 def default_hover_background() -> pygame.Color:
@@ -35,11 +35,6 @@ class ButtonColors:
     foreground: pygame.Color = field(default_factory=default_foreground)
     hover_foreground: Optional[pygame.Color] = None
     disabled_foreground: pygame.Color = field(default_factory=default_disabled_foreground)
-
-    # Text colors
-    text: Optional[pygame.Color] = None
-    hover_text: Optional[pygame.Color] = None
-    disabled_text: Optional[pygame.Color] = None
 
 
 class Button(Frame):
@@ -73,15 +68,10 @@ class Button(Frame):
         if self.colors.hover_foreground is None:
             self.colors.hover_foreground = self.colors.foreground
 
-        # Create text child (if provided) using explicit text color,
-        # falling back to border color only when not defined.
+        # Create text child if provided
         if text:
             if not text_style:
-                base_text_color = self.colors.text if self.colors.text is not None else self.colors.foreground
-                text_style = TextStyle(
-                    color=base_text_color,
-                    font_size=min(height - 4, 32)
-                )
+                text_style = TextStyle(font_size=min(height - 4, 32))
             self.text = Text(
                 text,
                 x=0.5, y=0.5,
@@ -91,6 +81,9 @@ class Button(Frame):
                 y_align="center",
                 style=text_style
             )
+            # Inherit initial state
+            self.text.set_is_enabled(self.is_enabled)
+            self.text.set_is_hover(self.is_hover)
             self.add_child(self.text)
         else:
             self.text = None
@@ -131,16 +124,24 @@ class Button(Frame):
 
     def on_hover_enter(self):
         self.is_hover = True
+        if self.text:
+            self.text.set_is_hover(True)
 
     def on_hover_leave(self):
         self.is_hover = False
+        if self.text:
+            self.text.set_is_hover(False)
+
+    def set_enabled(self, enabled: bool) -> None:
+        if self.is_enabled != enabled:
+            self.is_enabled = enabled
+            if self.text:
+                self.text.set_is_enabled(enabled)
 
     def set_text(self, text: str) -> None:
         if self.text:
             self.text.set_text(text)
         elif text:
-            # Respect explicit text color, fall back to border if not provided
-            base_text_color = self.colors.text if self.colors.text is not None else self.colors.foreground
             self.text = Text(
                 text,
                 x=0.5, y=0.5,
@@ -148,48 +149,29 @@ class Button(Frame):
                 y_is_percent=True,
                 x_align="center",
                 y_align="center",
-                style=TextStyle(color=base_text_color)
+                style=TextStyle(font_size=min(self.height - 4, 32))
             )
+            self.text.set_is_enabled(self.is_enabled)
+            self.text.set_is_hover(self.is_hover)
             self.add_child(self.text)
 
     def set_shape(self, shape: ButtonShape) -> None:
         self.shape = shape
 
     def _resolve_colors(self):
-        """Compute bg, border, and text colors based on state with the new text semantics."""
+        """Compute bg and border colors based on state (text handled by Text)."""
         if not self.is_enabled:
-            bg = self.colors.disabled_background
-            border = self.colors.disabled_foreground
-            # text falls back to disabled_foreground only if disabled_text is unset
-            txt = self.colors.disabled_text if self.colors.disabled_text is not None else self.colors.disabled_foreground
-            return bg, border, txt
-
+            return self.colors.disabled_background, self.colors.disabled_foreground
         if self.is_hover:
-            bg = self.colors.hover_background
-            border = self.colors.hover_foreground if self.colors.hover_foreground is not None else self.colors.foreground
-
-            # Hover text: prefer explicit hover_text, else normal text if set,
-            # else fall back to border color to preserve legacy behavior.
-            if self.colors.hover_text is not None:
-                txt = self.colors.hover_text
-            elif self.colors.text is not None:
-                txt = self.colors.text
-            else:
-                txt = self.colors.foreground
-            return bg, border, txt
-
-        # Normal state
-        bg = self.colors.background
-        border = self.colors.foreground
-        txt = self.colors.text if self.colors.text is not None else self.colors.foreground
-        return bg, border, txt
+            return self.colors.hover_background, (self.colors.hover_foreground or self.colors.foreground)
+        return self.colors.background, self.colors.foreground
 
     def draw(self, surface: pygame.Surface) -> None:
         if self.is_effectively_hidden:
             return
 
         abs_x, abs_y, abs_w, abs_h = self.get_absolute_geometry()
-        bg_color, border_color, text_color = self._resolve_colors()
+        bg_color, border_color = self._resolve_colors()
 
         # Draw geometry
         if self.shape == ButtonShape.DIAMOND:
@@ -199,10 +181,6 @@ class Button(Frame):
         else:
             pygame.draw.rect(surface, bg_color, (abs_x, abs_y, abs_w, abs_h))
             pygame.draw.rect(surface, border_color, (abs_x, abs_y, abs_w, abs_h), 2)
-
-        # Update text color just-in-time so hovering/disabled reflects immediately
-        if self.text:
-            self.text.set_color(text_color)
 
         # Draw children
         for child in self.children:

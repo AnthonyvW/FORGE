@@ -5,7 +5,7 @@ from dataclasses import dataclass, field
 from UI.frame import Frame
 
 def default_color() -> pygame.Color:
-    return pygame.Color(255, 255, 255)
+    return pygame.Color("#b3b4b6")
 
 @dataclass
 class TextStyle:
@@ -15,6 +15,9 @@ class TextStyle:
     font_name: Optional[str] = None
     bold: bool = False
     italic: bool = False
+
+    hover_color: Optional[pygame.Color] = None
+    disabled_color: Optional[pygame.Color] = None
 
 class Text(Frame):
     def __init__(self, 
@@ -37,6 +40,10 @@ class Text(Frame):
         self.max_width = max_width
         self.truncate_mode = truncate_mode
         self.show_tooltip_on_hover = show_tooltip_on_hover
+
+        self._is_hover = False
+        self._is_enabled = True
+
         self._font = self._create_font()
         self._surface = None
         self._render_text = text
@@ -44,7 +51,7 @@ class Text(Frame):
 
     @property
     def debug_outline_color(self) -> pygame.Color:
-        return pygame.Color(0, 0, 255)  # Default: red
+        return pygame.Color(0, 0, 255)
 
     def _create_font(self) -> freetype.Font:
         """Create a FreeType font object based on style"""
@@ -57,6 +64,14 @@ class Text(Frame):
         font.oblique = self.style.italic
         return font
 
+    def _current_color(self) -> pygame.Color:
+        # Resolve stateful color with sensible fallbacks
+        if not self._is_enabled and self.style.disabled_color is not None:
+            return self.style.disabled_color
+        if self._is_hover and self.style.hover_color is not None:
+            return self.style.hover_color
+        return self.style.color
+
     def _update_surface(self) -> None:
         """Render the text to a surface using FreeType"""
         if not self._font:
@@ -66,10 +81,9 @@ class Text(Frame):
             self._render_text = self._ellipsize(self.text, self.max_width, self.truncate_mode)
         self._surface, _ = self._font.render(
             self._render_text,
-            fgcolor=self.style.color,
+            fgcolor=self._current_color(),
             size=self.style.font_size,
         )
-
 
     @property
     def size(self) -> Tuple[int, int]:
@@ -93,19 +107,26 @@ class Text(Frame):
         self._update_surface()
 
     def set_color(self, color) -> None:
-        """Set the text color and re-render the surface."""
-        # Allow tuples/strings as well as pygame.Color
+        """Set the base text color and re-render the surface."""
         if not isinstance(color, pygame.Color):
             color = pygame.Color(color)
-
         if self.style.color != color:
             self.style.color = color
-            # No need to recreate the font for a color change
             self._update_surface()
 
     def get_color(self) -> pygame.Color:
-        """Return the current text color."""
-        return self.style.color
+        """Return the current resolved text color."""
+        return self._current_color()
+
+    def set_is_hover(self, is_hover: bool) -> None:
+        if self._is_hover != is_hover:
+            self._is_hover = is_hover
+            self._update_surface()
+
+    def set_is_enabled(self, is_enabled: bool) -> None:
+        if self._is_enabled != is_enabled:
+            self._is_enabled = is_enabled
+            self._update_surface()
 
     def get_absolute_geometry(self):
         parent_x, parent_y, parent_w, parent_h = (
@@ -132,9 +153,8 @@ class Text(Frame):
 
         return draw_x, draw_y, text_w, text_h
 
-    # --- Truncation Properties ---
+    # --- Truncation helpers ---
     def _measure_width(self, s: str) -> int:
-        # pygame.freetype returns metrics via get_rect
         return self._font.get_rect(s, size=self.style.font_size).width
 
     def _ellipsize(self, s: str, max_w: int, mode: str) -> str:
@@ -146,11 +166,9 @@ class Text(Frame):
         ell = "…"
         ell_w = self._measure_width(ell)
         if ell_w > max_w:
-            return ""  # degenerate case
+            return ""
 
-        # helpers
         def fit_end(prefix: str) -> str:
-            # keep from start, cut at end
             lo, hi = 0, len(prefix)
             best = ""
             while lo <= hi:
@@ -164,7 +182,6 @@ class Text(Frame):
             return best
 
         def fit_start(suffix: str) -> str:
-            # keep from end, cut at start
             lo, hi = 0, len(suffix)
             best = ""
             while lo <= hi:
@@ -182,19 +199,15 @@ class Text(Frame):
         if mode == "start":
             return fit_start(s)
         if mode == "middle":
-            # keep from both ends, cut the middle
             left, right = 0, 0
             best = ell
-            # two-pointer growth until it no longer fits
             while left + right < len(s):
-                # try grow left
                 cand = s[:left+1] + ell + (s[-right:] if right else "")
                 if self._measure_width(cand) <= max_w:
                     left += 1
                     best = cand
                 else:
                     break
-                # try grow right
                 cand = s[:left] + ell + s[-(right+1):]
                 if self._measure_width(cand) <= max_w:
                     right += 1
@@ -203,11 +216,9 @@ class Text(Frame):
                     break
             return best
 
-        # default
         return s
 
-    # --- Rendering Properties ---
-    
+    # --- Rendering ---
     def draw(self, surface: pygame.Surface) -> None:
         if not self._surface:
             return
@@ -245,40 +256,30 @@ class Text(Frame):
                 self._draw_tooltip(surface, self.text, mx, my)
 
     def _draw_tooltip(self, surface, text, x, y):
-        # Render text
         tooltip_font = self._create_font()
         tip_surface, _ = tooltip_font.render(text, fgcolor=pygame.Color("black"))
         padding = 6
         cursor_offset = 12
-        margin = 6  # keep a small gap from window edges
+        margin = 6
 
         tw, th = tip_surface.get_size()
         rect = pygame.Rect(x + cursor_offset, y + cursor_offset, tw + padding * 2, th + padding * 2)
-
-        # Clamp to screen and flip if needed
         sw, sh = surface.get_size()
 
-        # If it overflows to the right, move left of the cursor
         if rect.right > sw - margin:
             rect.x = x - cursor_offset - rect.w
-        # If it still overflows, clamp to edge
         if rect.right > sw - margin:
             rect.x = sw - rect.w - margin
         if rect.x < margin:
             rect.x = margin
 
-        # If it overflows at the bottom, move above the cursor
         if rect.bottom > sh - margin:
             rect.y = y - cursor_offset - rect.h
-        # If it still overflows, clamp to edge
         if rect.bottom > sh - margin:
             rect.y = sh - rect.h - margin
         if rect.y < margin:
             rect.y = margin
 
-        # Draw bubble
-        pygame.draw.rect(surface, pygame.Color(255, 255, 224), rect)  # light yellow
+        pygame.draw.rect(surface, pygame.Color(255, 255, 224), rect)
         pygame.draw.rect(surface, pygame.Color("black"), rect, 1)
         surface.blit(tip_surface, (rect.x + padding, rect.y + padding))
-
-
