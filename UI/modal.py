@@ -1,8 +1,9 @@
 import pygame
 from UI.frame import Frame
-from UI.button import Button, ButtonColors
 from UI.section_frame import Section
 from UI.text import TextStyle
+
+from UI.input.button import Button, ButtonColors
 
 class _Scrim(Frame):
     """Full-screen overlay that blocks interaction with underlying UI."""

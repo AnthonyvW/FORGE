@@ -2,15 +2,16 @@ import pygame
 import time
 from typing import List
 
-from UI.button import Button, ButtonShape
-from UI.text import Text, TextStyle
-from UI.frame import Frame
 from camera.amscope import AmscopeCamera
 from printer.automated_controller import AutomatedPrinter, Position
 from printer.config import PrinterConfig, AutomationConfig
 
+from UI.text import Text, TextStyle
+from UI.frame import Frame
 from UI.ui_layout import create_control_panel, RIGHT_PANEL_WIDTH
-from UI.text_field import TextField
+
+from UI.input.text_field import TextField
+from UI.input.button import Button, ButtonShape
 
 pygame.init()
 pygame.display.set_caption("FORGE")

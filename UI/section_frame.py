@@ -1,7 +1,9 @@
 import pygame
+
 from UI.frame import Frame
 from UI.text import Text, TextStyle
-from UI.button import Button, ButtonColors
+
+from UI.input.button import Button, ButtonColors
 
 class Section(Frame):
     def __init__(

@@ -2,13 +2,15 @@ from dataclasses import dataclass
 from typing import List, Tuple
 
 import pygame
-from UI.button import Button, ButtonShape
 from UI.text import Text, TextStyle
 from UI.frame import Frame
 from UI.section_frame import Section
-from UI.text_field import TextField
 from UI.modal import Modal
 from UI.camera_view import CameraView
+
+from UI.input.text_field import TextField
+from UI.input.button import Button, ButtonShape, ButtonColors
+from UI.input.slider import Slider
 
 RIGHT_PANEL_WIDTH = 400
 
@@ -82,6 +84,7 @@ def create_control_panel(
     # --- Camera Settings Modal ---
     camera_settings_modal = Modal(parent=root_frame, title="Camera Settings", overlay=False)
     _build_camera_settings_modal(camera_settings_modal)
+    camera_settings_modal.open()
 
     # --- Camera Settings ---
     camera_control = Section(parent=control_frame, title="Camera Control", collapsible=False, 
@@ -108,8 +111,10 @@ def create_control_panel(
 
 
 def _build_camera_settings_modal(modal):
-    Text("Hello modal", parent=modal.body, x=16, y=16, x_align="left", y_align="top",
-        style=TextStyle(font_size=22))
+    
+    Slider(parent=modal, min_value=0, max_value=100, tick_count=8, x=8,y=8,width=200,height=32,initial_value=50, with_buttons=True)
+    
+
 
 
 def _build_right_control_panel(root_frame)-> Frame:

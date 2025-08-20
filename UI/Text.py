@@ -92,6 +92,21 @@ class Text(Frame):
         self._font = self._create_font()
         self._update_surface()
 
+    def set_color(self, color) -> None:
+        """Set the text color and re-render the surface."""
+        # Allow tuples/strings as well as pygame.Color
+        if not isinstance(color, pygame.Color):
+            color = pygame.Color(color)
+
+        if self.style.color != color:
+            self.style.color = color
+            # No need to recreate the font for a color change
+            self._update_surface()
+
+    def get_color(self) -> pygame.Color:
+        """Return the current text color."""
+        return self.style.color
+
     def get_absolute_geometry(self):
         parent_x, parent_y, parent_w, parent_h = (
             self.parent.get_absolute_geometry() if self.parent else (0, 0, *pygame.display.get_surface().get_size())
