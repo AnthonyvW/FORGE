@@ -11,6 +11,7 @@ from UI.camera_view import CameraView
 from UI.input.text_field import TextField
 from UI.input.button import Button, ButtonShape, ButtonColors
 from UI.input.slider import Slider
+from UI.input.radio import RadioButton, RadioGroup, SelectedColors
 
 RIGHT_PANEL_WIDTH = 400
 
@@ -161,19 +162,65 @@ def _build_camera_settings_modal(modal, camera):
         slider.on_change = lambda val: text_field.set_text(str(int(val)), emit=False)
         text_field.on_text_change = lambda txt: clamp_text_to_slider(txt, slider, text_field, decimals=None)
 
+    def post_inc(x:list):
+        val = x[0]
+        x[0] += 1
+        return val
+
+    
+    base_colors = ButtonColors(
+        hover_foreground=pygame.Color("#5a5a5a")
+    )
+    sel_colors = SelectedColors(
+        background=pygame.Color("#b3b4b6"),
+        hover_background=pygame.Color("#b3b4b6"),
+        foreground=pygame.Color("#b3b4b6"),
+        hover_foreground=pygame.Color("#5a5a5a")
+    )
+    
+    radio_text_style = TextStyle(
+        font_size=16,
+        color=pygame.Color("#5a5a5a"),        # default text color
+        hover_color=pygame.Color("#5a5a5a"),  # when hovered
+        disabled_color=pygame.Color("#5a5a5a")
+    )
+
     settings = camera.settings
 
     offset = 60
+    offset_index = [0]
 
-    create_setting(title="Camera Temperature", y=0, min=settings.temp_min, max=settings.temp_max, initial_value=settings.temp)
-    create_setting(title="Exposure", y=offset*1, min=settings.exposure_min, max=settings.exposure_max, initial_value=settings.exposure)
-    create_setting(title="Tint", y=offset*2, min=settings.tint_min, max=settings.tint_max, initial_value=settings.tint)
-    create_setting(title="Contrast", y=offset*3, min=settings.contrast_min, max=settings.contrast_max, initial_value=settings.contrast)
-    create_setting(title="Hue", y=offset*4, min=settings.hue_min, max=settings.hue_max, initial_value=settings.hue)
-    create_setting(title="Saturation", y=offset*5, min=settings.saturation_min, max=settings.saturation_max, initial_value=settings.saturation)
-    create_setting(title="Brightness", y=offset*6, min=settings.brightness_min, max=settings.brightness_max, initial_value=settings.brightness)
-    create_setting(title="Gamma", y=offset*7, min=settings.gamma_min, max=settings.gamma_max, initial_value=settings.gamma)
-    create_setting(title="Sharpening", y=offset*8, min=settings.sharpening_min, max=settings.sharpening_max, initial_value=settings.sharpening)
+
+    path_label = Text("File Format", parent=modal, x=8, y=offset * offset_index[0] + 8, style=make_settings_text_style())
+
+    def on_image_format_change(selected_btn):
+        print("Selected:", None if selected_btn is None else selected_btn.value)
+        settings.fformat = selected_btn.value
+        camera._apply_settings(camera.settings)
+
+    image_format = RadioGroup(allow_deselect=False, on_change=on_image_format_change)
+
+    RadioButton(lambda: None, x=8, y=offset * offset_index[0] + 28, width=48, height=32, text="png",
+                value="png", group=image_format, selected=True, parent=modal,
+                colors=base_colors, selected_colors=sel_colors, text_style=radio_text_style)
+    RadioButton(lambda: None, x=60, y=offset * offset_index[0] + 28, width=48, height=32, text="jpeg",
+                value="jpeg", group=image_format, selected=True, parent=modal,
+                colors=base_colors, selected_colors=sel_colors, text_style=radio_text_style)
+    RadioButton(lambda: None, x=112, y=offset * offset_index[0] + 28, width=48, height=32, text="tiff",
+                value="tiff", group=image_format, selected=True, parent=modal,
+                colors=base_colors, selected_colors=sel_colors, text_style=radio_text_style)
+    image_format.set_value(settings.fformat)
+    offset_index[0] += 1
+
+    create_setting(title="Camera Temperature", y=offset*post_inc(offset_index), min=settings.temp_min, max=settings.temp_max, initial_value=settings.temp)
+    create_setting(title="Exposure"  , y=offset*post_inc(offset_index), min=settings.exposure_min  , max=settings.exposure_max  , initial_value=settings.exposure)
+    create_setting(title="Tint"      , y=offset*post_inc(offset_index), min=settings.tint_min      , max=settings.tint_max      , initial_value=settings.tint)
+    create_setting(title="Contrast"  , y=offset*post_inc(offset_index), min=settings.contrast_min  , max=settings.contrast_max  , initial_value=settings.contrast)
+    create_setting(title="Hue"       , y=offset*post_inc(offset_index), min=settings.hue_min       , max=settings.hue_max       , initial_value=settings.hue)
+    create_setting(title="Saturation", y=offset*post_inc(offset_index), min=settings.saturation_min, max=settings.saturation_max, initial_value=settings.saturation)
+    create_setting(title="Brightness", y=offset*post_inc(offset_index), min=settings.brightness_min, max=settings.brightness_max, initial_value=settings.brightness)
+    create_setting(title="Gamma"     , y=offset*post_inc(offset_index), min=settings.gamma_min     , max=settings.gamma_max     , initial_value=settings.gamma)
+    create_setting(title="Sharpening", y=offset*post_inc(offset_index), min=settings.sharpening_min, max=settings.sharpening_max, initial_value=settings.sharpening)
 
 
 

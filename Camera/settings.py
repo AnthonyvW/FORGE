@@ -29,17 +29,17 @@ class CameraSettings:
     
     exposure: int = 120                      # Auto Exposure Target
     temp: int = 11616                        # White balance temperature
-
     tint: int = 925                          # White balance tint
-    levelrange_low: Tuple[int, int, int, int] = (0, 0, 0, 0)
-    levelrange_high: Tuple[int, int, int, int] = (255, 255, 255, 255)
     contrast: int = 0
     hue: int = 0
     saturation: int = 126
     brightness: int = -64
     gamma: int = 100
-    wbgain: Tuple[int, int, int] = (0, 0, 0)  # (R, G, B)
     sharpening: int = 500
+
+    levelrange_low: Tuple[int, int, int, int] = (0, 0, 0, 0)
+    levelrange_high: Tuple[int, int, int, int] = (255, 255, 255, 255)
+    wbgain: Tuple[int, int, int] = (0, 0, 0)  # (R, G, B)
     linear: int = 0                           # 0/1
     curve: str = 'Polynomial'
     fformat: str = 'png'

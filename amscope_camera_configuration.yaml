@@ -57,4 +57,4 @@ linear_min: 0
 linear_max: 1
 
 curve: Polynomial
-fformat: png
+fformat: tiff
