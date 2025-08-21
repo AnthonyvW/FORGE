@@ -137,23 +137,92 @@ def _build_camera_settings_modal(modal, camera):
         else:
             tf.set_text(str(int(clamped)) if clamped.is_integer() else str(clamped), emit=False)
 
-    def create_setting(parent=modal, title="None", x=8, y=0, min=0, max=100, initial_value=50, tick_count=8):
+    def create_setting(
+        parent=modal,
+        title="None",
+        x=8,
+        y=0,
+        *,
+        min_value=0,
+        max_value=100,
+        tick_count=8,
+        attr: str,                 # e.g., "exposure"
+        value_type=int,            # int or float
+        decimals: int | None = None
+    ):
         Text(title, parent=modal, x=x, y=y + 8, style=make_settings_text_style())
 
+        def get_val():
+            return getattr(settings, attr)
+
+        def set_val(v):
+            setattr(settings, attr, value_type(v))
+
+        cur = get_val()
         slider = Slider(
             parent=modal, x=x, y=y + 28, width=200, height=32,
-            min_value=min, max_value=max, initial_value=initial_value,
+            min_value=min_value, max_value=max_value, initial_value=cur,
             tick_count=tick_count, with_buttons=True
         )
 
         text_field = TextField(
             parent=modal, x=x + 208, y=y + 28, width=80, height=32,
-            placeholder=str(int(slider.value)), allowed_pattern=NUMERIC_PATTERN,
+            placeholder=str(cur), allowed_pattern=NUMERIC_PATTERN,
             border_color=pygame.Color("#b3b4b6"), text_color=pygame.Color("#5a5a5a")
         )
 
-        slider.on_change = lambda val: text_field.set_text(str(int(val)), emit=False)
-        text_field.on_text_change = lambda txt: clamp_text_to_slider(txt, slider, text_field, decimals=None)
+        def fmt(v):
+            if value_type is int:
+                return str(int(v))
+            if decimals is not None:
+                return f"{float(v):.{decimals}f}"
+            return str(v if not (isinstance(v, float) and v.is_integer()) else int(v))
+
+        last_applied = [None]  # closure box to avoid re-applying identical values
+
+        def apply_value(v):
+            try:
+                v = float(v)
+            except (TypeError, ValueError):
+                v = float(get_val())
+            clamped = max(min_value, min(max_value, v))
+            if last_applied[0] is not None and clamped == last_applied[0]:
+                return
+            set_val(clamped)
+            camera._apply_settings(settings)
+            text_field.set_text(fmt(clamped), emit=False)
+            last_applied[0] = clamped
+
+        # Slider -> live apply
+        def on_slider(val: float):
+            apply_value(val)
+
+        slider.on_change = on_slider
+
+        # Text while typing: keep it simple; commit applies
+        def on_text_change(txt: str):
+            if txt in ("", "-", ".", "-."):
+                return
+            # Optionally keep slider visually in sync without applying immediately:
+            try:
+                v = float(txt)
+            except ValueError:
+                return
+            v = max(min_value, min(max_value, v))
+            slider.value = v  # apply_value will guard against repeated calls
+
+        text_field.on_text_change = on_text_change
+
+        # Commit (Enter / blur): apply + snap slider
+        def on_commit(txt: str):
+            if txt in ("", "-", ".", "-."):
+                text_field.set_text(fmt(slider.value), emit=False)
+                return
+            apply_value(txt)
+            slider.value = last_applied[0] if last_applied[0] is not None else slider.value
+
+        text_field.on_commit = on_commit
+        text_field.set_text(fmt(cur), emit=False)
 
     def post_inc(x: list):
         val = x[0]
@@ -262,23 +331,56 @@ def _build_camera_settings_modal(modal, camera):
 
     # Sliders
     create_setting(title="Camera Temperature", y=offset * post_inc(offset_index),
-                   min=settings.temp_min, max=settings.temp_max, initial_value=settings.temp)
+                min_value=settings.temp_min, max_value=settings.temp_max,
+                attr="temp", value_type=int)
+                
+    # Auto Exposure
+    Text("Use Auto Exposure", parent=modal, x=8, y=offset * offset_index[0] + 8, style=make_settings_text_style())
+    def on_auto_expo_change(selected_val):
+        value = True if selected_val == "true" else False
+        settings.auto_expo = value
+        camera._apply_settings(camera.settings)
+    auto_expo = RadioGroup(allow_deselect=False, on_change=on_auto_expo_change)
+    RadioButton(lambda: None, x=8,  y=offset * offset_index[0] + 28, width=48, height=32, text="True",
+                value="true", group=auto_expo, selected=True, parent=modal,
+                colors=base_colors, selected_colors=sel_colors, text_style=radio_text_style)
+    RadioButton(lambda: None, x=64, y=offset * offset_index[0] + 28, width=52, height=32, text="False",
+                value="false", group=auto_expo, selected=True, parent=modal,
+                colors=base_colors, selected_colors=sel_colors, text_style=radio_text_style)
+    auto_expo.set_value("true" if settings.auto_expo == 1 else "false")
+    offset_index[0] += 1
+
     create_setting(title="Exposure", y=offset * post_inc(offset_index),
-                   min=settings.exposure_min, max=settings.exposure_max, initial_value=settings.exposure)
+                min_value=settings.exposure_min, max_value=settings.exposure_max,
+                attr="exposure", value_type=int)
+
     create_setting(title="Tint", y=offset * post_inc(offset_index),
-                   min=settings.tint_min, max=settings.tint_max, initial_value=settings.tint)
+                min_value=settings.tint_min, max_value=settings.tint_max,
+                attr="tint", value_type=int)
+
     create_setting(title="Contrast", y=offset * post_inc(offset_index),
-                   min=settings.contrast_min, max=settings.contrast_max, initial_value=settings.contrast)
+                min_value=settings.contrast_min, max_value=settings.contrast_max,
+                attr="contrast", value_type=int)
+
     create_setting(title="Hue", y=offset * post_inc(offset_index),
-                   min=settings.hue_min, max=settings.hue_max, initial_value=settings.hue)
+                min_value=settings.hue_min, max_value=settings.hue_max,
+                attr="hue", value_type=int)
+
     create_setting(title="Saturation", y=offset * post_inc(offset_index),
-                   min=settings.saturation_min, max=settings.saturation_max, initial_value=settings.saturation)
+                min_value=settings.saturation_min, max_value=settings.saturation_max,
+                attr="saturation", value_type=int)
+
     create_setting(title="Brightness", y=offset * post_inc(offset_index),
-                   min=settings.brightness_min, max=settings.brightness_max, initial_value=settings.brightness)
+                min_value=settings.brightness_min, max_value=settings.brightness_max,
+                attr="brightness", value_type=int)
+
     create_setting(title="Gamma", y=offset * post_inc(offset_index),
-                   min=settings.gamma_min, max=settings.gamma_max, initial_value=settings.gamma)
+                min_value=settings.gamma_min, max_value=settings.gamma_max,
+                attr="gamma", value_type=int)
+
     create_setting(title="Sharpening", y=offset * post_inc(offset_index),
-                   min=settings.sharpening_min, max=settings.sharpening_max, initial_value=settings.sharpening)
+                min_value=settings.sharpening_min, max_value=settings.sharpening_max,
+                attr="sharpening", value_type=int)
 
     # Linear Tone Mapping
     Text("Use Linear Tone Mapping", parent=modal, x=8, y=offset * offset_index[0] + 8, style=make_settings_text_style())

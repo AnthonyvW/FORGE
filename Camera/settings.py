@@ -26,7 +26,6 @@ class CameraSettings:
     """Data class for camera settings, including value ranges."""
     # Values
     auto_expo: bool = False
-    
     exposure: int = 120                      # Auto Exposure Target
     temp: int = 11616                        # White balance temperature
     tint: int = 925                          # White balance tint
@@ -46,7 +45,7 @@ class CameraSettings:
 
     # Ranges (from table above)
     exposure_min: int = 16
-    exposure_max: int = 235
+    exposure_max: int = 220
 
     temp_min: int = 2000
     temp_max: int = 15000

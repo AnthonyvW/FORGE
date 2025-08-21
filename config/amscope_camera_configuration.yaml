@@ -4,7 +4,7 @@ auto_expo: false
 # Auto Exposure Target
 exposure: 16
 exposure_min: 16
-exposure_max: 235
+exposure_max: 220
 
 # White balance temperature
 temp: 10794

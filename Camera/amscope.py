@@ -130,7 +130,7 @@ class AmscopeCamera(BaseCamera):
 
         try:
             # Load and apply settings first
-            self.settings = CameraSettingsManager.load_settings("amscope_camera_configuration.yaml")
+            self.settings = CameraSettingsManager.load_settings("./config/amscope_camera_configuration.yaml")
             self._apply_settings(self.settings)
 
             # Start the pull mode BEFORE trying to stream
