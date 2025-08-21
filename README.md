@@ -26,7 +26,7 @@ Note: automatically imaging multiple cores is currently being worked on. Right n
 </table>
 
 
-> *Above: A stitched image covering a 1.5mm x 3mm area of a tree core sample and one showing FORGE's GUI. Click to view full resolution.*
+> *Above: A stitched image covering a 1.5mm x 3mm area of a tree core sample and one showing FORGE's GUI. The stitched image was taken using a 0.5x lens and a 10x lens with a custom lens mount on FORGE and then focused stacked and stiched together to create the image. Click to view full resolution.*
 
 ---
 
