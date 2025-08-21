@@ -6,11 +6,6 @@
 ![Python](https://img.shields.io/badge/Python-3.12-blue?logo=python&logoColor=white)
 
 
-> **📅 Scheduled Release:**  
-> FORGE is currently in active development and is planned to have its first stable build in July.
->
-
-
 FORGE is an open-source, gigapixel-scale imaging system designed to scan tree core samples with high precision. Built upon a modified off-the-shelf 3D printer, it automates the imaging of multiple samples, producing ultra-high-resolution images suitable for dendrochronology and related research.
 
 [<img src="https://github.com/user-attachments/assets/acc4b7ab-5bc3-4d7d-95b1-6783f011dd43" width="300">](https://github.com/user-attachments/assets/acc4b7ab-5bc3-4d7d-95b1-6783f011dd43)
@@ -33,8 +28,8 @@ FORGE is an open-source, gigapixel-scale imaging system designed to scan tree co
 ### Prerequisites
 
 * **Hardware**: A [compatible 3D printer](#3d-printer-compatibility) modified for imaging purposes, a light, and an amscope camera. The 3D printer may also require an additional cable to connect your PC to the printer.
-* **Software**: Python 3.x and the dependencies listed in `requirements.txt`.
-* **Operating System**: Linux, Windows 10, and Windows 11
+* **Software**: Python 3.x and Git
+* **Operating System**: Linux, Windows 10, or Windows 11
 
 ## Printer Modification
 
@@ -44,9 +39,12 @@ Before using FORGE, your 3D printer must be modified to mount the camera system 
 
 Before modifying your printer, you must 3D print the following components:
 
-- **Camera Mount** – Attaches to the existing print head carriage  
-- **Z-Axis Spacer** – Raises the Z-axis endstop to accommodate the new camera height  
+- **Camera Mount** - Ender3AmscopeCameraMount.3mf – Attaches to the existing print head carriage  
+- **Z-Axis Spacer** - ZAxisSpacer.3mf – Raises the Z-axis endstop to accommodate the new camera height  
 - **Sample Clips** – Secure core samples to the print bed without manual alignment
+    - SampleHolderEnd.3mf
+    - SampleHolderFooter.3mf
+    - SampleHolderMiddle.3mf - You will need 3 of these. I suggest printing one of these off and ensuring that it properly fits before printing off the rest of the parts.
 
 > files for these parts will be provided in the `hardware/` folder of this repository.
 
@@ -54,11 +52,13 @@ Before modifying your printer, you must 3D print the following components:
 
 ### Modification Instructions
 
+> ! IMPORTANT ! Ensure that you have all 3D printed parts before modifying your 3D printer.
+
 1. **Remove the Print Head**  
    Unscrew and detach the printer's hotend from the X-axis print carriage.
 
 2. **Disconnect Wiring**  
-   Carefully disconnect the hotend wiring from the printer's control board. This prevents accidental heating or movement of the removed components.
+   Carefully disconnect the hotend and heatbed wiring from the printer's control board. This prevents accidental heating or movement of the removed components.
 
 3. **Install Camera Mount**  
    Use the print head screws to attach the printed camera mount to the same location on the print carriage where the print head was originally mounted.
@@ -69,12 +69,20 @@ Before modifying your printer, you must 3D print the following components:
 5. **Install Camera and Lens**  
    - Insert your digital microscope or Amscope camera into the printed mount.  
    - Screw on the imaging lens securely.  
+   
+6. **Install Light**  
+   Install the light you will be using with Forge
 
-6. **Connect to Computer**  
+7. **Connect to Computer**  
    Plug the 3D printer into your computer via USB for motion control.  
    Then plug in the camera using its USB interface for image capture.
 
 ### Installation
+
+Prerequisites\. Ensure you have the latest version of python installed, and you have git installed.
+
+> Python : https://www.python.org/downloads/  
+> Git : https://git-scm.com/downloads
 
 1\. Clone the repository:
 
@@ -90,11 +98,11 @@ Before modifying your printer, you must 3D print the following components:
   pip install -r requirements.txt
   ```
 
-3\.1\. Download and Install the Amscope SDK at https://amscope.com/pages/software-downloads if one isn't available for your Operating system, download the windows version and check if its in there as the Linux version is.
+3\.1\. Download and Install the Amscope SDK at https://amscope.com/pages/software-downloads if you are on mac or linux, download the windows version as it includes the files for those operating systems there.
 
-3\.2\. Move the amscope.py file to the Camera folder and copy the amcam folder into it as well.
+3\.2\. Move the zipped folder into 3rd_party_imports
 
-4\. Configure the camera settings using `amscope_camera_configuration.yaml`.
+4\. Configure the camera settings using `amscope_camera_configuration.yaml`. For now, you can copy settings from TRIM until I get around to properly implementing this functionality into Forge.
 
 5\. Run the main application:
   
@@ -106,14 +114,12 @@ Before modifying your printer, you must 3D print the following components:
 ### ✅ Confirmed Compatible Cameras
 FORGE supports USB cameras through a modular driver architecture.
 
-- **Generic USB Cameras** are supported out-of-the-box with basic functionality.  
-- **Advanced Cameras** requiring proprietary APIs (like the Amscope MU500) have dedicated drivers to enable full feature access.
-
-
 | Camera Model            | Notes                       |
 |-------------------------|-----------------------------|
 | Amscope MU500           | Fully tested and supported  |
-| Generic USB Camera      | Limited settings available  |
+| Amscope MU1000          | Fully tested and supported  |
+
+> Support for generic USB cameras, and raspberry pi HQ cameras is planned, but not yet implemented
 
 ### Adding Support for New Cameras
 
@@ -139,7 +145,7 @@ FORGE is designed to run on 3D printers using **Marlin firmware**, which support
 |-------------------------|----------|-------------------|--------------------------------------------------------|
 | Ender 3 v1              | Marlin   | 220 × 220 × 250   | Fully tested and supported                             |
 | Creality CR-10S Pro v2  | Marlin   | 300 × 300 × 400   | Fully tested; camera mount file not available          |
-| Anycubic Kobra Max      | Marlin   | 400 × 400 × 450   | Fully tested; camera mount file not available          |
+| Anycubic Kobra Max      | Marlin   | 400 × 400 × 450   | Fully tested; camera mount file not available. Note that this is for the V1 version and not the new V3 version.          |
 ---
 
 ## Request a New Camera Mount
@@ -171,10 +177,15 @@ please [open a GitHub issue](https://github.com/AnthonyvW/FORGE/issues/new?templ
 > Want to help verify compatibility with other printers, firmware, or cameras?  
 > [Open an issue](https://github.com/AnthonyvW/FORGE/issues) with your setup details and test results!
 
+### ❌ Confirmed Incompatible Printers
+
+| Printer Model           | Firmware | Build Volume (mm) | Notes                                                    |
+|-------------------------|----------|-------------------|----------------------------------------------------------|
+| Bambulab A1             | Marlin   | 220 × 220 × 250   | Properietary Firmware, cannot send gcode directly to it  |
+| Anycubic Kobra Max 3    | Klipper  | 400 × 400 × 450   | Uses Klipper                                             |
+
 ---
 
 ## Contributing
 
 Contributions are welcome! Please fork the repository and submit a pull request with your enhancements. For major changes, open an issue first to discuss your proposed modifications.
-
----

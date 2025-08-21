@@ -184,6 +184,11 @@ class BasePrinterController:
 
     def _update_position(self, command: str) -> None:
         """Update internal position tracking based on G-code command"""
+        # Handle full homing
+        if command.strip().upper() == "G28":
+            self.position = Position(x=0, y=0, z=0)
+            return
+
         updates = {}
         for axis, pattern in [('x', r'X([\d\.]+)'), ('y', r'Y([\d\.]+)'), ('z', r'Z([\d\.]+)')]:
             match = re.search(pattern, command)
@@ -229,6 +234,9 @@ class BasePrinterController:
         self.paused = True
         while not self.command_queue.empty():
             self.command_queue.get(False)
+
+        # Wait 2/10 of a second to allow the printer thread to see that its paused
+        time.sleep(0.2)
         self.paused = False
         print("Cleared Queue")
 
@@ -243,6 +251,7 @@ class BasePrinterController:
         print("Current Speed", self.speed / 100)
 
     def home(self) -> None:
+        print("Homing")
         # Home the printer
         self.command_queue.put("G28")
 

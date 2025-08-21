@@ -1,7 +1,7 @@
-input/
+./input/
 output/
-camera/amcam.py
-camera/amcam/
+config/amscope/settings.yaml
+config/amscope/backups/
 
 # Libraries
 focus-stack/
