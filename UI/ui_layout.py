@@ -83,7 +83,6 @@ def create_control_panel(
     # --- Camera Settings Modal ---
     camera_settings_modal = Modal(parent=root_frame, title="Camera Settings", overlay=False, width=308, height=1038)
     build_camera_settings_modal(camera_settings_modal, camera)
-    camera_settings_modal.open()
 
     # --- Camera Settings ---
     camera_control = Section(parent=control_frame, title="Camera Control", collapsible=False, 
