@@ -1,5 +1,6 @@
 ./input/
 output/
+config/amscope/backups/
 
 # Libraries
 focus-stack/

@@ -9,9 +9,13 @@ from UI.modal import Modal
 from UI.camera_view import CameraView
 
 from UI.input.text_field import TextField
-from UI.input.button import Button, ButtonShape, ButtonColors
-from UI.input.slider import Slider
-from UI.input.radio import RadioButton, RadioGroup, SelectedColors
+from UI.input.button import Button, ButtonShape
+from UI.styles import (
+    make_button_text_style,
+    make_display_text_style,
+    make_settings_text_style,
+)
+from UI.camera_settings_modal import build_camera_settings_modal
 
 RIGHT_PANEL_WIDTH = 400
 
@@ -24,15 +28,6 @@ class ControlPanel:
     go_button: Button
     speed_display: Text
     position_display: Text
-
-def make_button_text_style()->TextStyle:
-    return TextStyle(color=pygame.Color("#5a5a5a"), font_size=20)
-
-def make_display_text_style()->TextStyle:
-    return TextStyle(color=pygame.Color(32, 32, 32), font_size=18, font_name="assets/fonts/SofiaSans-Regular.ttf")
-
-def make_settings_text_style()->TextStyle:
-    return TextStyle(color=pygame.Color(32, 32, 32), font_size=20, font_name="assets/fonts/SofiaSans-Regular.ttf")
 
 def make_button(fn, x, y, w, h, text, shape=ButtonShape.RECTANGLE, z_index = 0, args_provider=None):
     btn = Button(
@@ -70,7 +65,7 @@ def create_control_panel(
         width=1.0, height=1.0,
         x_is_percent=True, y_is_percent=True,
         width_is_percent=True, height_is_percent=True,
-        z_index=0,  # keep it behind panels/modals that use higher z
+        z_index=0,
         background_color=pygame.Color("black"),
         right_margin_px=RIGHT_PANEL_WIDTH # reserve space for the control panel
     )
@@ -86,8 +81,8 @@ def create_control_panel(
     _build_automation_control(automation_box, movementSystem)
 
     # --- Camera Settings Modal ---
-    camera_settings_modal = Modal(parent=root_frame, title="Camera Settings", overlay=False, width=308, height=1010)
-    _build_camera_settings_modal(camera_settings_modal, camera)
+    camera_settings_modal = Modal(parent=root_frame, title="Camera Settings", overlay=False, width=308, height=1038)
+    build_camera_settings_modal(camera_settings_modal, camera)
     camera_settings_modal.open()
 
     # --- Camera Settings ---
@@ -112,352 +107,6 @@ def create_control_panel(
         pos1_display,
         pos2_display
     )
-
-
-def _build_camera_settings_modal(modal, camera):
-    NUMERIC_PATTERN = r"^-?\d*\.?\d*$"   # existing for slider text fields
-    DIGITS_NUM = r"^\d{0,5}$"            # allow up to 5 digits while typing; clamp on commit
-    DIGITS_SIGNED = r"^-?\d{0,5}$"
-
-    def clamp_text_to_slider(text_value: str, slider: Slider, tf: TextField, decimals: int | None = None):
-        # Treat empty, "-", ".", or "-." as “in-progress” edits; don’t clamp yet.
-        if text_value in ("", "-", ".", "-."):
-            return
-        try:
-            val = float(text_value)
-        except ValueError:
-            return
-        clamped = max(slider.min_value, min(slider.max_value, val))
-        if clamped != slider.value:
-            slider.value = clamped
-            if slider.on_change:
-                slider.on_change(clamped)
-        if decimals is not None:
-            tf.set_text(f"{clamped:.{decimals}f}", emit=False)
-        else:
-            tf.set_text(str(int(clamped)) if float(clamped).is_integer() else str(clamped), emit=False)
-
-    def create_setting(
-        parent=modal,
-        title="None",
-        x=8,
-        y=0,
-        *,
-        min_value=0,
-        max_value=100,
-        tick_count=8,
-        attr: str,                 # e.g., "exposure"
-        value_type=int,            # int or float
-        decimals: int | None = None
-    ):
-        Text(title, parent=modal, x=x, y=y + 8, style=make_settings_text_style())
-
-        def get_val():
-            return getattr(settings, attr)
-
-        cur = get_val()
-        slider = Slider(
-            parent=modal, x=x, y=y + 28, width=200, height=32,
-            min_value=min_value, max_value=max_value, initial_value=cur,
-            tick_count=tick_count, with_buttons=True
-        )
-
-        text_field = TextField(
-            parent=modal, x=x + 208, y=y + 28, width=80, height=32,
-            placeholder=str(cur), allowed_pattern=NUMERIC_PATTERN,
-            border_color=pygame.Color("#b3b4b6"), text_color=pygame.Color("#5a5a5a")
-        )
-
-        def fmt(v):
-            if value_type is int:
-                return str(int(v))
-            if decimals is not None:
-                return f"{float(v):.{decimals}f}"
-            return str(v if not (isinstance(v, float) and v.is_integer()) else int(v))
-
-        last_applied = [None]  # closure box to avoid re-applying identical values
-
-        def apply_value(v):
-            try:
-                v = float(v)
-            except (TypeError, ValueError):
-                v = float(get_val())
-            clamped = max(min_value, min(max_value, v))
-            if last_applied[0] is not None and clamped == last_applied[0]:
-                return
-            # Live-apply to the active camera without persisting
-            if value_type is int:
-                camera.update_settings(persist=False, **{attr: int(clamped)})
-            else:
-                camera.update_settings(persist=False, **{attr: float(clamped)})
-            text_field.set_text(fmt(clamped), emit=False)
-            last_applied[0] = clamped
-
-        # Slider -> live apply
-        def on_slider(val: float):
-            apply_value(val)
-
-        slider.on_change = on_slider
-
-        # Text while typing: keep it simple; commit applies
-        def on_text_change(txt: str):
-            if txt in ("", "-", ".", "-."):
-                return
-            try:
-                v = float(txt)
-            except ValueError:
-                return
-            v = max(min_value, min(max_value, v))
-            slider.value = v  # keep visuals in sync; apply on commit/drag
-
-        text_field.on_text_change = on_text_change
-
-        # Commit (Enter / blur): apply + snap slider
-        def on_commit(txt: str):
-            if txt in ("", "-", ".", "-."):
-                text_field.set_text(fmt(slider.value), emit=False)
-                return
-            apply_value(txt)
-            slider.value = last_applied[0] if last_applied[0] is not None else slider.value
-
-        text_field.on_commit = on_commit
-        text_field.set_text(fmt(cur), emit=False)
-
-    def post_inc(x: list):
-        val = x[0]
-        x[0] += 1
-        return val
-
-    def create_rgb_triplet(
-        title: str,
-        y: int,
-        get_vals,            # () -> tuple[int, int, int]
-        set_field_name: str, # name of settings field to update via update_settings(...)
-        *,
-        per_channel_bounds=None,   # list[ (min,max), (min,max), (min,max) ]
-        x: int = 8
-    ):
-        Text(title, parent=modal, x=x, y=y + 8, style=make_settings_text_style())
-
-        # Small R/G/B labels
-        Text("R", parent=modal, x=x,         y=y + 34, style=make_settings_text_style())
-        Text("G", parent=modal, x=x + 86,    y=y + 34, style=make_settings_text_style())
-        Text("B", parent=modal, x=x + 172,   y=y + 34, style=make_settings_text_style())
-
-        current = list(get_vals())
-        bounds = per_channel_bounds or [(0, 255), (0, 255), (0, 255)]
-
-        def make_commit(idx: int, tf: "TextField"):
-            lo, hi = bounds[idx]
-            def _commit(txt: str):
-                try:
-                    v = int(txt)
-                except (TypeError, ValueError):
-                    v = lo
-                v = max(lo, min(hi, v))
-                current[idx] = v
-                # Live-apply tuple via update_settings
-                triplet = tuple(current)
-                camera.update_settings(persist=False, **{set_field_name: triplet})
-                tf.set_text(str(v), emit=False)
-            return _commit
-
-        # R
-        r_field = TextField(
-            parent=modal, x=x + 16, y=y + 28, width=64, height=32,
-            placeholder=str(current[0]), allowed_pattern=DIGITS_SIGNED,
-            border_color=pygame.Color("#b3b4b6"), text_color=pygame.Color("#5a5a5a"),
-            on_commit=None
-        )
-        r_field.on_commit = make_commit(0, r_field)
-        r_field.set_text(str(current[0]), emit=False)
-
-        # G
-        g_field = TextField(
-            parent=modal, x=x + 102, y=y + 28, width=64, height=32,
-            placeholder=str(current[1]), allowed_pattern=DIGITS_SIGNED,
-            border_color=pygame.Color("#b3b4b6"), text_color=pygame.Color("#5a5a5a"),
-            on_commit=None
-        )
-        g_field.on_commit = make_commit(1, g_field)
-        g_field.set_text(str(current[1]), emit=False)
-
-        # B
-        b_field = TextField(
-            parent=modal, x=x + 188, y=y + 28, width=64, height=32,
-            placeholder=str(current[2]), allowed_pattern=DIGITS_SIGNED,
-            border_color=pygame.Color("#b3b4b6"), text_color=pygame.Color("#5a5a5a"),
-            on_commit=None
-        )
-        b_field.on_commit = make_commit(2, b_field)
-        b_field.set_text(str(current[2]), emit=False)
-
-    base_colors = ButtonColors(hover_foreground=pygame.Color("#5a5a5a"))
-    sel_colors = SelectedColors(
-        background=pygame.Color("#b3b4b6"),
-        hover_background=pygame.Color("#b3b4b6"),
-        foreground=pygame.Color("#b3b4b6"),
-        hover_foreground=pygame.Color("#5a5a5a")
-    )
-    radio_text_style = TextStyle(
-        font_size=16, color=pygame.Color("#5a5a5a"),
-        hover_color=pygame.Color("#5a5a5a"),
-        disabled_color=pygame.Color("#5a5a5a")
-    )
-
-    settings = camera.settings
-    offset = 60
-    offset_index = [0]
-
-    # File Format
-    Text("File Format", parent=modal, x=8, y=offset * offset_index[0] + 8, style=make_settings_text_style())
-
-    def on_image_format_change(selected_btn):
-        camera.update_settings(persist=False, fformat=(None if selected_btn is None else selected_btn.value))
-
-    image_format = RadioGroup(allow_deselect=False, on_change=on_image_format_change)
-    RadioButton(lambda: None, x=8,   y=offset * offset_index[0] + 28, width=48, height=32, text="png",
-                value="png", group=image_format, selected=True, parent=modal,
-                colors=base_colors, selected_colors=sel_colors, text_style=radio_text_style)
-    RadioButton(lambda: None, x=64,  y=offset * offset_index[0] + 28, width=48, height=32, text="jpeg",
-                value="jpeg", group=image_format, selected=True, parent=modal,
-                colors=base_colors, selected_colors=sel_colors, text_style=radio_text_style)
-    RadioButton(lambda: None, x=120, y=offset * offset_index[0] + 28, width=48, height=32, text="tiff",
-                value="tiff", group=image_format, selected=True, parent=modal,
-                colors=base_colors, selected_colors=sel_colors, text_style=radio_text_style)
-    image_format.set_value(settings.fformat)
-    offset_index[0] += 1
-
-    # Sliders
-    create_setting(title="Camera Temperature", y=offset * post_inc(offset_index),
-                   min_value=settings.temp_min, max_value=settings.temp_max,
-                   attr="temp", value_type=int)
-
-    # Auto Exposure
-    Text("Use Auto Exposure", parent=modal, x=8, y=offset * offset_index[0] + 8, style=make_settings_text_style())
-    def on_auto_expo_change(selected_val):
-        value = True if selected_val == "true" else False
-        camera.update_settings(persist=False, auto_expo=value)
-    auto_expo = RadioGroup(allow_deselect=False, on_change=on_auto_expo_change)
-    RadioButton(lambda: None, x=8,  y=offset * offset_index[0] + 28, width=48, height=32, text="True",
-                value="true", group=auto_expo, selected=True, parent=modal,
-                colors=base_colors, selected_colors=sel_colors, text_style=radio_text_style)
-    RadioButton(lambda: None, x=64, y=offset * offset_index[0] + 28, width=52, height=32, text="False",
-                value="false", group=auto_expo, selected=True, parent=modal,
-                colors=base_colors, selected_colors=sel_colors, text_style=radio_text_style)
-    auto_expo.set_value("true" if settings.auto_expo else "false")
-    offset_index[0] += 1
-
-    create_setting(title="Exposure", y=offset * post_inc(offset_index),
-                   min_value=settings.exposure_min, max_value=settings.exposure_max,
-                   attr="exposure", value_type=int)
-
-    create_setting(title="Tint", y=offset * post_inc(offset_index),
-                   min_value=settings.tint_min, max_value=settings.tint_max,
-                   attr="tint", value_type=int)
-
-    create_setting(title="Contrast", y=offset * post_inc(offset_index),
-                   min_value=settings.contrast_min, max_value=settings.contrast_max,
-                   attr="contrast", value_type=int)
-
-    create_setting(title="Hue", y=offset * post_inc(offset_index),
-                   min_value=settings.hue_min, max_value=settings.hue_max,
-                   attr="hue", value_type=int)
-
-    create_setting(title="Saturation", y=offset * post_inc(offset_index),
-                   min_value=settings.saturation_min, max_value=settings.saturation_max,
-                   attr="saturation", value_type=int)
-
-    create_setting(title="Brightness", y=offset * post_inc(offset_index),
-                   min_value=settings.brightness_min, max_value=settings.brightness_max,
-                   attr="brightness", value_type=int)
-
-    create_setting(title="Gamma", y=offset * post_inc(offset_index),
-                   min_value=settings.gamma_min, max_value=settings.gamma_max,
-                   attr="gamma", value_type=int)
-
-    create_setting(title="Sharpening", y=offset * post_inc(offset_index),
-                   min_value=settings.sharpening_min, max_value=settings.sharpening_max,
-                   attr="sharpening", value_type=int)
-
-    # Linear Tone Mapping
-    Text("Use Linear Tone Mapping", parent=modal, x=8, y=offset * offset_index[0] + 8, style=make_settings_text_style())
-    def on_linear_change(selected_val):
-        value = 1 if (selected_val == "true" or (hasattr(selected_val, "value") and selected_val.value == "true")) else 0
-        camera.update_settings(persist=False, linear=value)
-    linear_tone = RadioGroup(allow_deselect=False, on_change=on_linear_change)
-    RadioButton(lambda: None, x=8,  y=offset * offset_index[0] + 28, width=48, height=32, text="True",
-                value="true", group=linear_tone, selected=True, parent=modal,
-                colors=base_colors, selected_colors=sel_colors, text_style=radio_text_style)
-    RadioButton(lambda: None, x=64, y=offset * offset_index[0] + 28, width=52, height=32, text="False",
-                value="false", group=linear_tone, selected=True, parent=modal,
-                colors=base_colors, selected_colors=sel_colors, text_style=radio_text_style)
-    linear_tone.set_value("true" if settings.linear == 1 else "false")
-    offset_index[0] += 1
-
-    # Curved Tone Mapping
-    Text("Curved Tone Mapping", parent=modal, x=8, y=offset * offset_index[0] + 8, style=make_settings_text_style())
-    def on_curved_change(selected_btn):
-        camera.update_settings(persist=False, curve=(None if selected_btn is None else selected_btn.value))
-    curved_tone = RadioGroup(allow_deselect=False, on_change=on_curved_change)
-    RadioButton(lambda: None, x=8,   y=offset * offset_index[0] + 28, width=104, height=32, text="Logarithmic",
-                value="Logarithmic", group=curved_tone, selected=True, parent=modal,
-                colors=base_colors, selected_colors=sel_colors, text_style=radio_text_style)
-    RadioButton(lambda: None, x=120, y=offset * offset_index[0] + 28, width=104, height=32, text="Polynomial",
-                value="Polynomial", group=curved_tone, selected=True, parent=modal,
-                colors=base_colors, selected_colors=sel_colors, text_style=radio_text_style)
-    RadioButton(lambda: None, x=232, y=offset * offset_index[0] + 28, width=48, height=32, text="Off",
-                value="Off", group=curved_tone, selected=True, parent=modal,
-                colors=base_colors, selected_colors=sel_colors, text_style=radio_text_style)
-    curved_tone.set_value(settings.curve)
-    offset_index[0] += 1
-
-    # Level Range Low — preserve 4th channel
-    def get_level_low_rgb():
-        lr = settings.levelrange_low
-        return (lr[0], lr[1], lr[2], 0)
-    def get_level_high_rgb():
-        lr = settings.levelrange_high
-        return (lr[0], lr[1], lr[2], 255)
-
-    # Bounds for level ranges (use first 3 channels)
-    lr_min = settings.levelrange_min
-    lr_max = settings.levelrange_max
-    lr_bounds = [(lr_min, lr_max), (lr_min, lr_max), (lr_min, lr_max)]
-
-    create_rgb_triplet(
-        title="Level Range Low",
-        y=offset * post_inc(offset_index),
-        get_vals=get_level_low_rgb,
-        set_field_name="levelrange_low",   # update via update_settings
-        per_channel_bounds=lr_bounds
-    )
-
-    create_rgb_triplet(
-        title="Level Range High",
-        y=offset * post_inc(offset_index),
-        get_vals=get_level_high_rgb,
-        set_field_name="levelrange_high",  # update via update_settings
-        per_channel_bounds=lr_bounds
-    )
-
-    # White Balance Gain
-    def get_wbgain():
-        return settings.wbgain  # (R, G, B)
-
-    wb_min = settings.wbgain_min
-    wb_max = settings.wbgain_max
-    wb_bounds = [(wb_min, wb_max), (wb_min, wb_max), (wb_min, wb_max)]
-
-    create_rgb_triplet(
-        title="White Balance Gain",
-        y=offset * post_inc(offset_index),
-        get_vals=get_wbgain,
-        set_field_name="wbgain",
-        per_channel_bounds=wb_bounds
-    )
-
-
 
 def _build_right_control_panel(root_frame)-> Frame:
     # --- Control Panel Container ---
