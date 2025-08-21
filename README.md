@@ -10,9 +10,20 @@ FORGE is an open-source, gigapixel-scale imaging system designed to scan tree co
 
 Note: automatically imaging multiple cores is currently being worked on. Right now, it only images 1 core at a time, but has GUI elements to easily switch between cores.
 
-[<img src="https://github.com/user-attachments/assets/acc4b7ab-5bc3-4d7d-95b1-6783f011dd43" height="350">](https://github.com/user-attachments/assets/acc4b7ab-5bc3-4d7d-95b1-6783f011dd43)
-<img src="https://github.com/user-attachments/assets/9577cd37-8981-4b23-8025-3b61a1911fa0" height="350" />
-
+<table>
+  <tr>
+    <td width="19%">
+      <a href="https://github.com/user-attachments/assets/acc4b7ab-5bc3-4d7d-95b1-6783f011dd43">
+        <img src="https://github.com/user-attachments/assets/acc4b7ab-5bc3-4d7d-95b1-6783f011dd43" width="100%" alt="Stitched sample">
+      </a>
+    </td>
+    <td width="50%">
+      <a href="https://github.com/user-attachments/assets/9577cd37-8981-4b23-8025-3b61a1911fa0">
+        <img src="https://github.com/user-attachments/assets/9577cd37-8981-4b23-8025-3b61a1911fa0" width="100%" alt="GUI">
+      </a>
+    </td>
+  </tr>
+</table>
 
 
 > *Above: A stitched image covering a 1.5mm x 3mm area of a tree core sample and one showing FORGE's GUI. Click to view full resolution.*
