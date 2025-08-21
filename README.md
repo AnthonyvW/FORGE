@@ -6,11 +6,6 @@
 ![Python](https://img.shields.io/badge/Python-3.12-blue?logo=python&logoColor=white)
 
 
-> **📅 Scheduled Release:**  
-> FORGE is currently in active development and is scheduled for release in **August, 2025**.
->
-
-
 FORGE is an open-source, gigapixel-scale imaging system designed to scan tree core samples with high precision. Built upon a modified off-the-shelf 3D printer, it automates the imaging of multiple samples, producing ultra-high-resolution images suitable for dendrochronology and related research.
 
 [<img src="https://github.com/user-attachments/assets/acc4b7ab-5bc3-4d7d-95b1-6783f011dd43" width="300">](https://github.com/user-attachments/assets/acc4b7ab-5bc3-4d7d-95b1-6783f011dd43)
@@ -63,7 +58,7 @@ Before modifying your printer, you must 3D print the following components:
    Unscrew and detach the printer's hotend from the X-axis print carriage.
 
 2. **Disconnect Wiring**  
-   Carefully disconnect the hotend wiring from the printer's control board. This prevents accidental heating or movement of the removed components.
+   Carefully disconnect the hotend and heatbed wiring from the printer's control board. This prevents accidental heating or movement of the removed components.
 
 3. **Install Camera Mount**  
    Use the print head screws to attach the printed camera mount to the same location on the print carriage where the print head was originally mounted.
@@ -74,8 +69,11 @@ Before modifying your printer, you must 3D print the following components:
 5. **Install Camera and Lens**  
    - Insert your digital microscope or Amscope camera into the printed mount.  
    - Screw on the imaging lens securely.  
+   
+6. **Install Light**  
+   Install the light you will be using with Forge
 
-6. **Connect to Computer**  
+7. **Connect to Computer**  
    Plug the 3D printer into your computer via USB for motion control.  
    Then plug in the camera using its USB interface for image capture.
 
@@ -147,7 +145,7 @@ FORGE is designed to run on 3D printers using **Marlin firmware**, which support
 |-------------------------|----------|-------------------|--------------------------------------------------------|
 | Ender 3 v1              | Marlin   | 220 × 220 × 250   | Fully tested and supported                             |
 | Creality CR-10S Pro v2  | Marlin   | 300 × 300 × 400   | Fully tested; camera mount file not available          |
-| Anycubic Kobra Max      | Marlin   | 400 × 400 × 450   | Fully tested; camera mount file not available          |
+| Anycubic Kobra Max      | Marlin   | 400 × 400 × 450   | Fully tested; camera mount file not available. Note that this is for the V1 version and not the new V3 version.          |
 ---
 
 ## Request a New Camera Mount
@@ -191,11 +189,3 @@ please [open a GitHub issue](https://github.com/AnthonyvW/FORGE/issues/new?templ
 ## Contributing
 
 Contributions are welcome! Please fork the repository and submit a pull request with your enhancements. For major changes, open an issue first to discuss your proposed modifications.
-
----
-
-## Attribution
-
-<a href="https://www.flaticon.com/free-icons/open-folder" title="open folder icons">Open folder icons created by kmg design - Flaticon</a>
-
-<a href="https://www.flaticon.com/free-icons/gear" title="gear icons">Gear icons created by Freepik - Flaticon</a>
