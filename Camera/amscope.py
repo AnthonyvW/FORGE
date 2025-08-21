@@ -16,6 +16,9 @@ from .settings import CameraSettings, CameraSettingsManager
 from image_processing.analyzers import ImageAnalyzer
 
 class AmscopeCamera(BaseCamera):
+    # Optional explicit subdir override; otherwise BaseCamera will derive 'amscope'
+    CONFIG_SUBDIR = "amscope"
+
     def __init__(self, frame_width: int, frame_height: int):
         # Minimal vendor state; BaseCamera handles common fields
         self.amcam = None
@@ -31,9 +34,9 @@ class AmscopeCamera(BaseCamera):
 
     def _load_amcam(self):
         project_root = os.path.abspath(os.path.join(os.path.dirname(__file__), '..'))
-        sdk_base = os.path.join(project_root, '3rd_party_imports')
-        extracted_dir = os.path.join(sdk_base, 'official_amscope')
-        zip_path = os.path.join(sdk_base, 'amcamsdk.20210816.zip')
+        sdk_base = os.path.join(sdk_root := os.path.join(project_root, '3rd_party_imports'), 'official_amscope')
+        extracted_dir = sdk_base
+        zip_path = os.path.join(sdk_root, 'amcamsdk.20210816.zip')
 
         # Auto-extract if zip exists and folder doesn't
         if not os.path.exists(extracted_dir) and os.path.exists(zip_path):
@@ -129,9 +132,8 @@ class AmscopeCamera(BaseCamera):
             return
 
         try:
-            # Load and apply settings first
-            self.settings = CameraSettingsManager.load_settings("./config/amscope_camera_configuration.yaml")
-            self._apply_settings(self.settings)
+            # Load and apply settings from config/amscope/settings.yaml (via BaseCamera helpers)
+            self.load_and_apply_settings(filename="settings.yaml")
 
             # Start the pull mode BEFORE trying to stream
             self.camera.StartPullModeWithCallback(self._camera_callback, self)
@@ -144,7 +146,7 @@ class AmscopeCamera(BaseCamera):
             print(f"Unexpected error starting stream: {e}")
 
     def _apply_settings(self, settings: CameraSettings):
-        """Apply camera settings."""
+        """Apply camera settings to the hardware."""
         try:
             self.camera.put_AutoExpoEnable(settings.auto_expo)
             self.camera.put_AutoExpoTarget(settings.exposure)

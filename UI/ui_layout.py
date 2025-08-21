@@ -135,7 +135,7 @@ def _build_camera_settings_modal(modal, camera):
         if decimals is not None:
             tf.set_text(f"{clamped:.{decimals}f}", emit=False)
         else:
-            tf.set_text(str(int(clamped)) if clamped.is_integer() else str(clamped), emit=False)
+            tf.set_text(str(int(clamped)) if float(clamped).is_integer() else str(clamped), emit=False)
 
     def create_setting(
         parent=modal,
@@ -154,9 +154,6 @@ def _build_camera_settings_modal(modal, camera):
 
         def get_val():
             return getattr(settings, attr)
-
-        def set_val(v):
-            setattr(settings, attr, value_type(v))
 
         cur = get_val()
         slider = Slider(
@@ -188,8 +185,11 @@ def _build_camera_settings_modal(modal, camera):
             clamped = max(min_value, min(max_value, v))
             if last_applied[0] is not None and clamped == last_applied[0]:
                 return
-            set_val(clamped)
-            camera._apply_settings(settings)
+            # Live-apply to the active camera without persisting
+            if value_type is int:
+                camera.update_settings(persist=False, **{attr: int(clamped)})
+            else:
+                camera.update_settings(persist=False, **{attr: float(clamped)})
             text_field.set_text(fmt(clamped), emit=False)
             last_applied[0] = clamped
 
@@ -203,13 +203,12 @@ def _build_camera_settings_modal(modal, camera):
         def on_text_change(txt: str):
             if txt in ("", "-", ".", "-."):
                 return
-            # Optionally keep slider visually in sync without applying immediately:
             try:
                 v = float(txt)
             except ValueError:
                 return
             v = max(min_value, min(max_value, v))
-            slider.value = v  # apply_value will guard against repeated calls
+            slider.value = v  # keep visuals in sync; apply on commit/drag
 
         text_field.on_text_change = on_text_change
 
@@ -233,7 +232,7 @@ def _build_camera_settings_modal(modal, camera):
         title: str,
         y: int,
         get_vals,            # () -> tuple[int, int, int]
-        set_vals,            # (tuple[int, int, int]) -> None
+        set_field_name: str, # name of settings field to update via update_settings(...)
         *,
         per_channel_bounds=None,   # list[ (min,max), (min,max), (min,max) ]
         x: int = 8
@@ -257,8 +256,9 @@ def _build_camera_settings_modal(modal, camera):
                     v = lo
                 v = max(lo, min(hi, v))
                 current[idx] = v
-                set_vals(tuple(current))
-                camera._apply_settings(camera.settings)
+                # Live-apply tuple via update_settings
+                triplet = tuple(current)
+                camera.update_settings(persist=False, **{set_field_name: triplet})
                 tf.set_text(str(v), emit=False)
             return _commit
 
@@ -313,8 +313,7 @@ def _build_camera_settings_modal(modal, camera):
     Text("File Format", parent=modal, x=8, y=offset * offset_index[0] + 8, style=make_settings_text_style())
 
     def on_image_format_change(selected_btn):
-        settings.fformat = None if selected_btn is None else selected_btn.value
-        camera._apply_settings(camera.settings)
+        camera.update_settings(persist=False, fformat=(None if selected_btn is None else selected_btn.value))
 
     image_format = RadioGroup(allow_deselect=False, on_change=on_image_format_change)
     RadioButton(lambda: None, x=8,   y=offset * offset_index[0] + 28, width=48, height=32, text="png",
@@ -331,15 +330,14 @@ def _build_camera_settings_modal(modal, camera):
 
     # Sliders
     create_setting(title="Camera Temperature", y=offset * post_inc(offset_index),
-                min_value=settings.temp_min, max_value=settings.temp_max,
-                attr="temp", value_type=int)
-                
+                   min_value=settings.temp_min, max_value=settings.temp_max,
+                   attr="temp", value_type=int)
+
     # Auto Exposure
     Text("Use Auto Exposure", parent=modal, x=8, y=offset * offset_index[0] + 8, style=make_settings_text_style())
     def on_auto_expo_change(selected_val):
         value = True if selected_val == "true" else False
-        settings.auto_expo = value
-        camera._apply_settings(camera.settings)
+        camera.update_settings(persist=False, auto_expo=value)
     auto_expo = RadioGroup(allow_deselect=False, on_change=on_auto_expo_change)
     RadioButton(lambda: None, x=8,  y=offset * offset_index[0] + 28, width=48, height=32, text="True",
                 value="true", group=auto_expo, selected=True, parent=modal,
@@ -347,47 +345,46 @@ def _build_camera_settings_modal(modal, camera):
     RadioButton(lambda: None, x=64, y=offset * offset_index[0] + 28, width=52, height=32, text="False",
                 value="false", group=auto_expo, selected=True, parent=modal,
                 colors=base_colors, selected_colors=sel_colors, text_style=radio_text_style)
-    auto_expo.set_value("true" if settings.auto_expo == 1 else "false")
+    auto_expo.set_value("true" if settings.auto_expo else "false")
     offset_index[0] += 1
 
     create_setting(title="Exposure", y=offset * post_inc(offset_index),
-                min_value=settings.exposure_min, max_value=settings.exposure_max,
-                attr="exposure", value_type=int)
+                   min_value=settings.exposure_min, max_value=settings.exposure_max,
+                   attr="exposure", value_type=int)
 
     create_setting(title="Tint", y=offset * post_inc(offset_index),
-                min_value=settings.tint_min, max_value=settings.tint_max,
-                attr="tint", value_type=int)
+                   min_value=settings.tint_min, max_value=settings.tint_max,
+                   attr="tint", value_type=int)
 
     create_setting(title="Contrast", y=offset * post_inc(offset_index),
-                min_value=settings.contrast_min, max_value=settings.contrast_max,
-                attr="contrast", value_type=int)
+                   min_value=settings.contrast_min, max_value=settings.contrast_max,
+                   attr="contrast", value_type=int)
 
     create_setting(title="Hue", y=offset * post_inc(offset_index),
-                min_value=settings.hue_min, max_value=settings.hue_max,
-                attr="hue", value_type=int)
+                   min_value=settings.hue_min, max_value=settings.hue_max,
+                   attr="hue", value_type=int)
 
     create_setting(title="Saturation", y=offset * post_inc(offset_index),
-                min_value=settings.saturation_min, max_value=settings.saturation_max,
-                attr="saturation", value_type=int)
+                   min_value=settings.saturation_min, max_value=settings.saturation_max,
+                   attr="saturation", value_type=int)
 
     create_setting(title="Brightness", y=offset * post_inc(offset_index),
-                min_value=settings.brightness_min, max_value=settings.brightness_max,
-                attr="brightness", value_type=int)
+                   min_value=settings.brightness_min, max_value=settings.brightness_max,
+                   attr="brightness", value_type=int)
 
     create_setting(title="Gamma", y=offset * post_inc(offset_index),
-                min_value=settings.gamma_min, max_value=settings.gamma_max,
-                attr="gamma", value_type=int)
+                   min_value=settings.gamma_min, max_value=settings.gamma_max,
+                   attr="gamma", value_type=int)
 
     create_setting(title="Sharpening", y=offset * post_inc(offset_index),
-                min_value=settings.sharpening_min, max_value=settings.sharpening_max,
-                attr="sharpening", value_type=int)
+                   min_value=settings.sharpening_min, max_value=settings.sharpening_max,
+                   attr="sharpening", value_type=int)
 
     # Linear Tone Mapping
     Text("Use Linear Tone Mapping", parent=modal, x=8, y=offset * offset_index[0] + 8, style=make_settings_text_style())
     def on_linear_change(selected_val):
         value = 1 if (selected_val == "true" or (hasattr(selected_val, "value") and selected_val.value == "true")) else 0
-        settings.linear = value
-        camera._apply_settings(camera.settings)
+        camera.update_settings(persist=False, linear=value)
     linear_tone = RadioGroup(allow_deselect=False, on_change=on_linear_change)
     RadioButton(lambda: None, x=8,  y=offset * offset_index[0] + 28, width=48, height=32, text="True",
                 value="true", group=linear_tone, selected=True, parent=modal,
@@ -401,8 +398,7 @@ def _build_camera_settings_modal(modal, camera):
     # Curved Tone Mapping
     Text("Curved Tone Mapping", parent=modal, x=8, y=offset * offset_index[0] + 8, style=make_settings_text_style())
     def on_curved_change(selected_btn):
-        settings.curve = None if selected_btn is None else selected_btn.value
-        camera._apply_settings(camera.settings)
+        camera.update_settings(persist=False, curve=(None if selected_btn is None else selected_btn.value))
     curved_tone = RadioGroup(allow_deselect=False, on_change=on_curved_change)
     RadioButton(lambda: None, x=8,   y=offset * offset_index[0] + 28, width=104, height=32, text="Logarithmic",
                 value="Logarithmic", group=curved_tone, selected=True, parent=modal,
@@ -419,18 +415,10 @@ def _build_camera_settings_modal(modal, camera):
     # Level Range Low — preserve 4th channel
     def get_level_low_rgb():
         lr = settings.levelrange_low
-        return (lr[0], lr[1], lr[2])
-    def set_level_low_rgb(rgb):
-        lr = settings.levelrange_low
-        settings.levelrange_low = (rgb[0], rgb[1], rgb[2], lr[3])
-
-    # Level Range High — preserve 4th channel
+        return (lr[0], lr[1], lr[2], 0)
     def get_level_high_rgb():
         lr = settings.levelrange_high
-        return (lr[0], lr[1], lr[2])
-    def set_level_high_rgb(rgb):
-        lr = settings.levelrange_high
-        settings.levelrange_high = (rgb[0], rgb[1], rgb[2], lr[3])
+        return (lr[0], lr[1], lr[2], 255)
 
     # Bounds for level ranges (use first 3 channels)
     lr_min = settings.levelrange_min
@@ -441,7 +429,7 @@ def _build_camera_settings_modal(modal, camera):
         title="Level Range Low",
         y=offset * post_inc(offset_index),
         get_vals=get_level_low_rgb,
-        set_vals=set_level_low_rgb,
+        set_field_name="levelrange_low",   # update via update_settings
         per_channel_bounds=lr_bounds
     )
 
@@ -449,15 +437,13 @@ def _build_camera_settings_modal(modal, camera):
         title="Level Range High",
         y=offset * post_inc(offset_index),
         get_vals=get_level_high_rgb,
-        set_vals=set_level_high_rgb,
+        set_field_name="levelrange_high",  # update via update_settings
         per_channel_bounds=lr_bounds
     )
 
     # White Balance Gain
     def get_wbgain():
         return settings.wbgain  # (R, G, B)
-    def set_wbgain(rgb):
-        settings.wbgain = rgb
 
     wb_min = settings.wbgain_min
     wb_max = settings.wbgain_max
@@ -467,7 +453,7 @@ def _build_camera_settings_modal(modal, camera):
         title="White Balance Gain",
         y=offset * post_inc(offset_index),
         get_vals=get_wbgain,
-        set_vals=set_wbgain,
+        set_field_name="wbgain",
         per_channel_bounds=wb_bounds
     )
 
