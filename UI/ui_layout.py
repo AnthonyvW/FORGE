@@ -86,7 +86,7 @@ def create_control_panel(
     _build_automation_control(automation_box, movementSystem)
 
     # --- Camera Settings Modal ---
-    camera_settings_modal = Modal(parent=root_frame, title="Camera Settings", overlay=False, width=308, height=650)
+    camera_settings_modal = Modal(parent=root_frame, title="Camera Settings", overlay=False, width=308, height=1010)
     _build_camera_settings_modal(camera_settings_modal, camera)
     camera_settings_modal.open()
 
@@ -191,7 +191,7 @@ def _build_camera_settings_modal(modal, camera):
     offset_index = [0]
 
 
-    path_label = Text("File Format", parent=modal, x=8, y=offset * offset_index[0] + 8, style=make_settings_text_style())
+    Text("File Format", parent=modal, x=8, y=offset * offset_index[0] + 8, style=make_settings_text_style())
 
     def on_image_format_change(selected_btn):
         print("Selected:", None if selected_btn is None else selected_btn.value)
@@ -203,10 +203,10 @@ def _build_camera_settings_modal(modal, camera):
     RadioButton(lambda: None, x=8, y=offset * offset_index[0] + 28, width=48, height=32, text="png",
                 value="png", group=image_format, selected=True, parent=modal,
                 colors=base_colors, selected_colors=sel_colors, text_style=radio_text_style)
-    RadioButton(lambda: None, x=60, y=offset * offset_index[0] + 28, width=48, height=32, text="jpeg",
+    RadioButton(lambda: None, x=64, y=offset * offset_index[0] + 28, width=48, height=32, text="jpeg",
                 value="jpeg", group=image_format, selected=True, parent=modal,
                 colors=base_colors, selected_colors=sel_colors, text_style=radio_text_style)
-    RadioButton(lambda: None, x=112, y=offset * offset_index[0] + 28, width=48, height=32, text="tiff",
+    RadioButton(lambda: None, x=120, y=offset * offset_index[0] + 28, width=48, height=32, text="tiff",
                 value="tiff", group=image_format, selected=True, parent=modal,
                 colors=base_colors, selected_colors=sel_colors, text_style=radio_text_style)
     image_format.set_value(settings.fformat)
@@ -221,6 +221,46 @@ def _build_camera_settings_modal(modal, camera):
     create_setting(title="Brightness", y=offset*post_inc(offset_index), min=settings.brightness_min, max=settings.brightness_max, initial_value=settings.brightness)
     create_setting(title="Gamma"     , y=offset*post_inc(offset_index), min=settings.gamma_min     , max=settings.gamma_max     , initial_value=settings.gamma)
     create_setting(title="Sharpening", y=offset*post_inc(offset_index), min=settings.sharpening_min, max=settings.sharpening_max, initial_value=settings.sharpening)
+    
+    Text("Use Linear Tone Mapping", parent=modal, x=8, y=offset * offset_index[0] + 8, style=make_settings_text_style())
+
+    def on_linear_change(selected_btn):
+        print("Selected:", None if selected_btn is None else selected_btn.value)
+        value = 1 if selected_btn == "true" else 0
+        settings.linear = value
+        camera._apply_settings(camera.settings)
+        
+    linear_tone = RadioGroup(allow_deselect=False, on_change=on_linear_change)
+
+    RadioButton(lambda: None, x=8, y=offset * offset_index[0] + 28, width=48, height=32, text="True",
+                value="true", group=linear_tone, selected=True, parent=modal,
+                colors=base_colors, selected_colors=sel_colors, text_style=radio_text_style)
+    RadioButton(lambda: None, x=64, y=offset * offset_index[0] + 28, width=52, height=32, text="False",
+                value="false", group=linear_tone, selected=True, parent=modal,
+                colors=base_colors, selected_colors=sel_colors, text_style=radio_text_style)
+    linear_tone.set_value("true" if settings.linear == 1 else "false")
+    offset_index[0] += 1
+    
+    Text("Curved Tone Mapping", parent=modal, x=8, y=offset * offset_index[0] + 8, style=make_settings_text_style())
+
+    def on_curved_change(selected_btn):
+        print("Selected:", None if selected_btn is None else selected_btn.value)
+        settings.curve = selected_btn.value
+        camera._apply_settings(camera.settings)
+        
+    curved_tone = RadioGroup(allow_deselect=False, on_change=on_curved_change)
+
+    RadioButton(lambda: None, x=8, y=offset * offset_index[0] + 28, width=104, height=32, text="Logarithmic",
+                value="Logarithmic", group=curved_tone, selected=True, parent=modal,
+                colors=base_colors, selected_colors=sel_colors, text_style=radio_text_style)
+    RadioButton(lambda: None, x=120, y=offset * offset_index[0] + 28, width=104, height=32, text="Polynomial",
+                value="Polynomial", group=curved_tone, selected=True, parent=modal,
+                colors=base_colors, selected_colors=sel_colors, text_style=radio_text_style)
+    RadioButton(lambda: None, x=232, y=offset * offset_index[0] + 28, width=48, height=32, text="Off",
+                value="Off", group=curved_tone, selected=True, parent=modal,
+                colors=base_colors, selected_colors=sel_colors, text_style=radio_text_style)
+    curved_tone.set_value(settings.curve)
+    offset_index[0] += 1
 
 
 
