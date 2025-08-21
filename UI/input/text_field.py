@@ -12,7 +12,7 @@ class TextField(Frame):
                  text_color=pygame.Color("black"),
                  border_color=pygame.Color("black"),
                  padding=5,
-                 on_text_change=None, # This is a callback
+                 on_text_change=None, allowed_pattern: str = None, on_commit=None,
                  **kwargs):
         super().__init__(parent=parent, x=x, y=y, width=width, height=height,
                          background_color=background_color, **kwargs)
@@ -22,7 +22,11 @@ class TextField(Frame):
         self.text = ""
         self.style = style or TextStyle(color=text_color, font_size=18)
         self.border_color = border_color
+
+        # Callbacks
         self.on_text_change = on_text_change  
+        self.allowed_pattern = re.compile(allowed_pattern) if allowed_pattern else None
+        self.on_commit = on_commit
 
         # Rendered text element inside the field
         self._text = Text(self.placeholder, parent=self, x=padding, y=height // 2,
@@ -54,8 +58,10 @@ class TextField(Frame):
             self._caret_index = len(self.text)
             self._reset_blink()
         elif not self.active and was_active:
+            if self.on_commit:
+                self.on_commit(self.text)
             self._caret_visible = False
-            self._repeat_key = None      # NEW: stop repeating when losing focus
+            self._repeat_key = None
 
 
     def _decode_clip_bytes(self, raw: bytes) -> str:
@@ -117,6 +123,12 @@ class TextField(Frame):
         s = self._sanitize_paste_text(s)
         if not s:
             return
+        
+        # Validate pasted text
+        candidate = self.text[:self._caret_index] + s + self.text[self._caret_index:]
+        if self.allowed_pattern and not self.allowed_pattern.fullmatch(candidate):
+            return  # reject paste if it violates the pattern
+
         self.text = self.text[:self._caret_index] + s + self.text[self._caret_index:]
         self._caret_index += len(s)
         self._refresh()
@@ -230,16 +242,27 @@ class TextField(Frame):
             return
 
         if event.unicode and event.unicode.isprintable():
-            self.text = self.text[:self._caret_index] + event.unicode + self.text[self._caret_index:]
+            candidate = self.text[:self._caret_index] + event.unicode + self.text[self._caret_index:]
+            if self.allowed_pattern and not self.allowed_pattern.fullmatch(candidate):
+                return  # reject this character
+            self.text = candidate
             self._caret_index += 1
             self._refresh()
             self._reset_blink()
             self._ensure_caret_visible()
-            # printable keys cancel backspace repeat
             if self._repeat_key == pygame.K_BACKSPACE:
                 self._repeat_key = None
     
-
+    def set_text(self, new_text: str, *, emit: bool = True):
+        self.text = str(new_text)
+        self._caret_index = len(self.text)
+        if emit:
+            self._refresh()
+        else:
+            cb = self.on_text_change
+            self.on_text_change = None
+            self._refresh()
+            self.on_text_change = cb
 
     # --- Carat Movement ---
 

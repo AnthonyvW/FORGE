@@ -30,6 +30,9 @@ def make_button_text_style()->TextStyle:
 def make_display_text_style()->TextStyle:
     return TextStyle(color=pygame.Color(32, 32, 32), font_size=18, font_name="assets/fonts/SofiaSans-Regular.ttf")
 
+def make_settings_text_style()->TextStyle:
+    return TextStyle(color=pygame.Color(32, 32, 32), font_size=20, font_name="assets/fonts/SofiaSans-Regular.ttf")
+
 def make_button(fn, x, y, w, h, text, shape=ButtonShape.RECTANGLE, z_index = 0, args_provider=None):
     btn = Button(
         function_to_call=fn,
@@ -82,8 +85,8 @@ def create_control_panel(
     _build_automation_control(automation_box, movementSystem)
 
     # --- Camera Settings Modal ---
-    camera_settings_modal = Modal(parent=root_frame, title="Camera Settings", overlay=False)
-    _build_camera_settings_modal(camera_settings_modal)
+    camera_settings_modal = Modal(parent=root_frame, title="Camera Settings", overlay=False, width=308, height=650)
+    _build_camera_settings_modal(camera_settings_modal, camera)
     camera_settings_modal.open()
 
     # --- Camera Settings ---
@@ -110,10 +113,67 @@ def create_control_panel(
     )
 
 
-def _build_camera_settings_modal(modal):
-    
-    Slider(parent=modal, min_value=0, max_value=100, tick_count=8, x=8,y=8,width=200,height=32,initial_value=50, with_buttons=True)
-    
+def _build_camera_settings_modal(modal, camera):
+    NUMERIC_PATTERN = r"^-?\d*\.?\d*$"  # optional leading '-', optional single '.', digits otherwise
+
+    def clamp_text_to_slider(text_value: str, slider: Slider, tf: TextField, decimals: int | None = None):
+        # Treat empty, "-", ".", or "-." as “in-progress” edits; don’t clamp yet.
+        if text_value in ("", "-", ".", "-."):
+            return
+
+        try:
+            val = float(text_value)
+        except ValueError:
+            return
+
+        # Clamp to slider bounds
+        clamped = max(slider.min_value, min(slider.max_value, val))
+
+        # Push to slider if changed
+        if clamped != slider.value:
+            slider.value = clamped
+            if slider.on_change:
+                slider.on_change(clamped)
+
+        # Format and normalize the field text on commit (caller decides when)
+        if decimals is not None:
+            tf.set_text(f"{clamped:.{decimals}f}", emit=False)
+        else:
+            # trim trailing .0 if you prefer ints when whole
+            tf.set_text(str(int(clamped)) if clamped.is_integer() else str(clamped), emit=False)
+
+    def create_setting(parent=modal, title = "None", x=8, y=0, min=0, max=100, initial_value=50, tick_count=8):
+        path_label = Text(title, parent=modal, 
+            x=x, y=y+8, style=make_settings_text_style())
+        
+        slider = Slider(parent=modal, 
+            x=x, y=y+28, width=200, height=32, 
+            min_value=min, max_value=max, initial_value=initial_value, 
+            tick_count=tick_count, with_buttons=True
+        )
+
+        text_field = TextField(parent=modal, 
+            x=x+208, y=y+28, width=80, height=32,
+            placeholder=str(int(slider.value)), allowed_pattern=NUMERIC_PATTERN,
+            border_color=pygame.Color("#b3b4b6"), text_color=pygame.Color("#5a5a5a")
+        )
+        
+        slider.on_change = lambda val: text_field.set_text(str(int(val)), emit=False)
+        text_field.on_text_change = lambda txt: clamp_text_to_slider(txt, slider, text_field, decimals=None)
+
+    settings = camera.settings
+
+    offset = 60
+
+    create_setting(title="Camera Temperature", y=0, min=settings.temp_min, max=settings.temp_max, initial_value=settings.temp)
+    create_setting(title="Exposure", y=offset*1, min=settings.exposure_min, max=settings.exposure_max, initial_value=settings.exposure)
+    create_setting(title="Tint", y=offset*2, min=settings.tint_min, max=settings.tint_max, initial_value=settings.tint)
+    create_setting(title="Contrast", y=offset*3, min=settings.contrast_min, max=settings.contrast_max, initial_value=settings.contrast)
+    create_setting(title="Hue", y=offset*4, min=settings.hue_min, max=settings.hue_max, initial_value=settings.hue)
+    create_setting(title="Saturation", y=offset*5, min=settings.saturation_min, max=settings.saturation_max, initial_value=settings.saturation)
+    create_setting(title="Brightness", y=offset*6, min=settings.brightness_min, max=settings.brightness_max, initial_value=settings.brightness)
+    create_setting(title="Gamma", y=offset*7, min=settings.gamma_min, max=settings.gamma_max, initial_value=settings.gamma)
+    create_setting(title="Sharpening", y=offset*8, min=settings.sharpening_min, max=settings.sharpening_max, initial_value=settings.sharpening)
 
 
 

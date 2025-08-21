@@ -1,5 +1,5 @@
 from dataclasses import dataclass
-from typing import Tuple, Optional
+from typing import Tuple
 
 
 #   (From the API...)
@@ -23,47 +23,92 @@ from typing import Tuple, Optional
 
 @dataclass
 class CameraSettings:
-    """Data class for camera settings."""
-    auto_expo: bool = False  # Changed from auto_exposure to match config
-    exposure: int = 120
-    temp: int = 11616
-    tint: int = 925
-    levelrange_low: Tuple[int, int, int, int] = (0, 0, 0, 0)  # Changed from level_range_low
-    levelrange_high: Tuple[int, int, int, int] = (255, 255, 255, 255)  # Changed from level_range_high
+    """Data class for camera settings, including value ranges."""
+    # Values
+    auto_expo: bool = False
+    
+    exposure: int = 120                      # Auto Exposure Target
+    temp: int = 11616                        # White balance temperature
+
+    tint: int = 925                          # White balance tint
+    levelrange_low: Tuple[int, int, int, int] = (0, 0, 0, 0)
+    levelrange_high: Tuple[int, int, int, int] = (255, 255, 255, 255)
     contrast: int = 0
     hue: int = 0
     saturation: int = 126
     brightness: int = -64
     gamma: int = 100
-    wbgain: Tuple[int, int, int] = (0, 0, 0)  # Changed from wb_gain
+    wbgain: Tuple[int, int, int] = (0, 0, 0)  # (R, G, B)
     sharpening: int = 500
-    linear: int = 0
+    linear: int = 0                           # 0/1
     curve: str = 'Polynomial'
-    fformat: str = 'png'  # Changed from image_file_format
+    fformat: str = 'png'
+
+    # Ranges (from table above)
+    exposure_min: int = 16
+    exposure_max: int = 235
+
+    temp_min: int = 2000
+    temp_max: int = 15000
+
+    tint_min: int = 200
+    tint_max: int = 2500
+
+    # Applies per-channel for levelrange_low/high
+    levelrange_min: int = 0
+    levelrange_max: int = 255
+
+    contrast_min: int = -100
+    contrast_max: int = 100
+
+    hue_min: int = -180
+    hue_max: int = 180
+
+    saturation_min: int = 0
+    saturation_max: int = 255
+
+    brightness_min: int = -64
+    brightness_max: int = 64
+
+    gamma_min: int = 20
+    gamma_max: int = 180
+
+    # Applies per-channel for wbgain (R,G,B)
+    wbgain_min: int = -127
+    wbgain_max: int = 127
+
+    sharpening_min: int = 0
+    sharpening_max: int = 500
+
+    linear_min: int = 0
+    linear_max: int = 1
+
 
 class CameraSettingsManager:
     """Manager class for handling camera settings."""
-    
+
     @staticmethod
     def load_settings(config_path: str) -> CameraSettings:
         """Load camera settings from YAML file."""
         import yaml
-        
         try:
             with open(config_path, "r") as stream:
-                settings_dict = yaml.safe_load(stream)
-                return CameraSettings(**settings_dict)
+                data = yaml.safe_load(stream) or {}
+                return CameraSettings(**data)
         except Exception as e:
             print(f'Error loading camera settings: {e}')
             return CameraSettings()
 
     @staticmethod
     def save_settings(settings: CameraSettings, config_path: str):
-        """Save camera settings to YAML file."""
+        """Save camera settings to YAML file, preserving key order."""
         import yaml
-        
         try:
             with open(config_path, "w") as stream:
-                yaml.dump(settings.__dict__, stream)
+                yaml.safe_dump(
+                    settings.__dict__,
+                    stream,
+                    sort_keys=False
+                )
         except Exception as e:
             print(f'Error saving camera settings: {e}')
