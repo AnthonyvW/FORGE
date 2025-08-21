@@ -6,11 +6,16 @@
 ![Python](https://img.shields.io/badge/Python-3.12-blue?logo=python&logoColor=white)
 
 
-FORGE is an open-source, gigapixel-scale imaging system designed to scan tree core samples with high precision. Built upon a modified off-the-shelf 3D printer, it automates the imaging of multiple samples, producing ultra-high-resolution images suitable for dendrochronology and related research.
+FORGE is an open-source, gigapixel-scale imaging system designed to scan tree core samples with high precision. Built upon a modified off-the-shelf 3D printer, it automates the imaging of multiple samples, producing ultra-high-resolution images suitable for dendrochronology and related research. 
 
-[<img src="https://github.com/user-attachments/assets/acc4b7ab-5bc3-4d7d-95b1-6783f011dd43" width="300">](https://github.com/user-attachments/assets/acc4b7ab-5bc3-4d7d-95b1-6783f011dd43)
+Note: automatically imaging multiple cores is currently being worked on. Right now, it only images 1 core at a time, but has GUI elements to easily switch between cores.
 
-> *Above: A stitched image covering a 1.5mm x 3mm area of a tree core sample. Click to view full resolution.*
+[<img src="https://github.com/user-attachments/assets/acc4b7ab-5bc3-4d7d-95b1-6783f011dd43" height="400">](https://github.com/user-attachments/assets/acc4b7ab-5bc3-4d7d-95b1-6783f011dd43)
+<img src="https://github.com/user-attachments/assets/9577cd37-8981-4b23-8025-3b61a1911fa0" height="400" />
+
+
+
+> *Above: A stitched image covering a 1.5mm x 3mm area of a tree core sample and one showing FORGE's GUI. Click to view full resolution.*
 
 ---
 
