@@ -1,5 +1,6 @@
 ./input/
 output/
+config/amscope/settings.yaml
 config/amscope/backups/
 
 # Libraries
