@@ -24,7 +24,7 @@ wbgain:
 - 0
 linear: 1
 curve: Polynomial
-fformat: tiff
+fformat: jpeg
 exposure_min: 16
 exposure_max: 220
 temp_min: 2000
