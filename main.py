@@ -43,7 +43,7 @@ current_sample_index = 1
 def get_sample_position(index: int) -> Position:
     return Position(
         x=int((20 + 11 * (index - 1)) * 100),
-        y=int(210 * 100),
+        y=int(212 * 100),
         z=int(9.4 * 100)
     )
 
