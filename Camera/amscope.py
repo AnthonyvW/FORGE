@@ -147,6 +147,11 @@ class AmscopeCamera(BaseCamera):
 
     def _apply_settings(self, settings: CameraSettings):
         """Apply camera settings to the hardware."""
+        
+        # if camera is not initialized, don't apply settings
+        if not self.initialized:
+            return
+
         try:
             self.camera.put_AutoExpoEnable(settings.auto_expo)
             self.camera.put_AutoExpoTarget(settings.exposure)

@@ -39,8 +39,9 @@ class BaseCamera(ABC):
         self.name = ""
         self.is_taking_image = False
         self.last_image = None
+        self.initialized = False
         # Safe default for save_image() until a subclass loads real settings
-        self.settings = type("DefaultSettings", (), {"fformat": "png"})()
+        self.settings = CameraSettings()
 
         # Dimensions of the UI frame we render into
         self.frame_width = frame_width
@@ -71,7 +72,7 @@ class BaseCamera(ABC):
 
         # Allow subclasses to do pre-initialize work (e.g., load SDKs) before initialize()
         self.pre_initialize()
-        self.initialize()
+        self.initialized = self.initialize()
         # Run the default resize scaffold once so scale/fallback are consistent
         self.resize(frame_width, frame_height)
 
@@ -81,7 +82,7 @@ class BaseCamera(ABC):
         pass
 
     @abstractmethod
-    def initialize(self):
+    def initialize(self) -> bool:
         """Initialize camera hardware and settings."""
         pass
 

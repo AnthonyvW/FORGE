@@ -1,6 +1,7 @@
 import pygame
 from typing import Optional
 from UI.frame import Frame
+from UI.text import Text, TextStyle
 
 class CameraView(Frame):
     """
@@ -54,6 +55,19 @@ class CameraView(Frame):
             z_index=z_index, x_align=x_align, y_align=y_align,
             background_color=None,  # we fill manually to keep margins clean
         )
+
+        self.no_camera_text = Text(
+            text="No Camera Detected",
+            parent=self,
+            x=0.5, y=0.5,
+            x_is_percent=True, y_is_percent=True,
+            x_align="center", y_align="center",
+            style=TextStyle(font_size=32),
+        )
+
+        # Show/hide based on current init state
+        if self.camera.initialized:
+            self.no_camera_text.add_hidden_reason("SYSTEM")
 
     def _compute_inner_rect(self):
         # Base geometry from normal frame rules
