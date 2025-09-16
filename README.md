@@ -134,6 +134,9 @@ FORGE supports USB cameras through a modular driver architecture.
 |-------------------------|-----------------------------|
 | Amscope MU500           | Fully tested and supported  |
 | Amscope MU1000          | Fully tested and supported  |
+| Amscope MU1000 HS       | Fully tested and supported  |
+
+⚠️ Amscope's SDK is currently out of date as of 9/16/2025, but according to support should be updated in a few weeks.
 
 > Support for generic USB cameras, and raspberry pi HQ cameras is planned, but not yet implemented
 
