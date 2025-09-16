@@ -41,10 +41,31 @@ camera.resize(width - right_panel_width, height)
 current_sample_index = 1
 
 def get_sample_position(index: int) -> Position:
+    lookup_table = { # Somehow they are just inconsistent enough to be unable to calculate them on the fly.
+        1:  19.00,
+        2:  29.64,
+        3:  41.44,
+        4:  53.28,
+        5:  64.55,
+        6:  75.70,
+        7:  87.24,
+        8:  98.60,
+        9:  110.16,
+        10: 122.00,
+        11: 132.96,
+        12: 144.46,
+        13: 156.04,
+        14: 167.44,
+        15: 179.08,
+        16: 190.72,
+        17: 202.04,
+        18: 213.36,
+        19: 224.88,
+    }
     return Position(
-        x=int((20 + 11 * (index - 1)) * 100),
+        x=int(lookup_table[index] * 100),
         y=int(212 * 100),
-        z=int(9.4 * 100)
+        z=int(3.4 * 100)
     )
 
 (
