@@ -32,22 +32,48 @@ class AmscopeCamera(BaseCamera):
     def pre_initialize(self):
         self._load_amcam()
 
+    def _ensure_sdk(self, project_root: Path) -> tuple[Path, Path]:
+        """
+        Ensure the AmScope SDK is available under:
+            project_root / "3rd_party_imports" / "official_amscope"
+        If not, extract the first amcamsdk*.zip in 3rd_party_imports.
+        Returns (sdk_root_dir, sdk_py_path).
+        """
+        sdk_dir = project_root / "3rd_party_imports"
+        official_dir = sdk_dir / "official_amscope"
+        sdk_py = official_dir / "python" / "amcam.py"
+
+        # Already extracted?
+        if sdk_py.is_file():
+            return official_dir, sdk_py
+
+        # Look for a zip starting with "amcamsdk"
+        for f in sdk_dir.iterdir():
+            if f.is_file() and f.name.lower().startswith("amcamsdk") and f.suffix.lower() == ".zip":
+                with zipfile.ZipFile(f, "r") as zf:
+                    zf.extractall(official_dir)
+                break
+        else:
+            raise RuntimeError(f"No AmScope SDK found in {sdk_dir}")
+
+        # Handle case with nested folder
+        if not sdk_py.is_file():
+            subdirs = [d for d in official_dir.iterdir() if d.is_dir()]
+            if len(subdirs) == 1 and (subdirs[0] / "python" / "amcam.py").is_file():
+                tmp = subdirs[0]
+                for item in tmp.iterdir():
+                    shutil.move(str(item), official_dir)
+                tmp.rmdir()
+
+        if not sdk_py.is_file():
+            raise RuntimeError("Extracted SDK does not contain python/amcam.py")
+
+        return official_dir, sdk_py
+
     def _load_amcam(self):
-        project_root = os.path.abspath(os.path.join(os.path.dirname(__file__), '..'))
-        sdk_base = os.path.join(sdk_root := os.path.join(project_root, '3rd_party_imports'), 'official_amscope')
-        extracted_dir = sdk_base
-        zip_path = os.path.join(sdk_root, 'amcamsdk.20210816.zip')
+        project_root = Path(__file__).resolve().parent.parent
 
-        # Auto-extract if zip exists and folder doesn't
-        if not os.path.exists(extracted_dir) and os.path.exists(zip_path):
-            with zipfile.ZipFile(zip_path, 'r') as zip_ref:
-                zip_ref.extractall(extracted_dir)
-
-        if not os.path.exists(extracted_dir):
-            raise RuntimeError("AmScope SDK not found. Please place 'amcamsdk.20210816.zip' in 3rd_party_imports/")
-
-        sdk_root = extracted_dir
-        sdk_py = os.path.join(sdk_root, 'python', 'amcam.py')
+        sdk_root, sdk_py = self._ensure_sdk(project_root)
 
         # Determine platform and architecture
         system = platform.system().lower()
@@ -147,6 +173,11 @@ class AmscopeCamera(BaseCamera):
 
     def _apply_settings(self, settings: CameraSettings):
         """Apply camera settings to the hardware."""
+        
+        # if camera is not initialized, don't apply settings
+        if not self.initialized:
+            return
+
         try:
             self.camera.put_AutoExpoEnable(settings.auto_expo)
             self.camera.put_AutoExpoTarget(settings.exposure)

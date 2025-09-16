@@ -220,7 +220,7 @@ class Text(Frame):
 
     # --- Rendering ---
     def draw(self, surface: pygame.Surface) -> None:
-        if not self._surface:
+        if not self._surface or self.is_effectively_hidden:
             return
 
         parent_x, parent_y, parent_w, parent_h = (

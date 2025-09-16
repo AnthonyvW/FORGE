@@ -247,7 +247,7 @@ class BasePrinterController:
 
     def adjust_speed(self, amount: int) -> None:
         """Adjust movement speed"""
-        self.speed = max(1, self.speed + amount)  # Prevent negative speed
+        self.speed = max(4, self.speed + amount)  # Prevent negative speed
         print("Current Speed", self.speed / 100)
 
     def home(self) -> None:
@@ -264,7 +264,7 @@ class BasePrinterController:
     def move_y_forward(self): self.move_axis('y', -1)
 
     # Convenience methods for speed
-    def increase_speed(self): self.adjust_speed(1)
-    def decrease_speed(self): self.adjust_speed(-1)
+    def increase_speed(self): self.adjust_speed(4)
+    def decrease_speed(self): self.adjust_speed(-4)
     def increase_speed_fast(self): self.adjust_speed(100)
     def decrease_speed_fast(self): self.adjust_speed(-100)
