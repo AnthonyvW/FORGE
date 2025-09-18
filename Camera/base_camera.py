@@ -8,7 +8,7 @@ from tkinter import filedialog
 
 # Optional relative import for settings manager/types
 try:
-    from .settings import (
+    from .camera_settings import (
         CameraSettings,
         CameraSettingsManager,
         ACTIVE_FILENAME,
