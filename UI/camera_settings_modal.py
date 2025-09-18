@@ -16,7 +16,7 @@ from UI.styles import (
     RADIO_TEXT_STYLE,
 )
 
-from camera.settings import CameraSettingsManager  # adjust import if needed
+from camera.camera_settings import CameraSettingsManager  # adjust import if needed
 
 # ---------------------------------------------------------------------------
 # Constants / patterns
