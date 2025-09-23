@@ -4,7 +4,7 @@ from typing import List
 
 from camera.amscope import AmscopeCamera
 from printer.automated_controller import AutomatedPrinter, Position
-from printer.config import PrinterConfig, AutomationConfig
+from printer.config import AutomationConfig
 
 from UI.text import Text, TextStyle
 from UI.frame import Frame
@@ -29,11 +29,10 @@ right_panel_width = RIGHT_PANEL_WIDTH
 camera = AmscopeCamera(width - right_panel_width, height)
 
 # Initialize printer configurations
-printer_config = PrinterConfig()  # Using default values
 automation_config = AutomationConfig()  # Using default values
 
 # Initialize the automated printer with configurations
-movementSystem = AutomatedPrinter(printer_config, automation_config, camera)
+movementSystem = AutomatedPrinter(automation_config, camera)
 
 time.sleep(1.5)
 camera.resize(width - right_panel_width, height)

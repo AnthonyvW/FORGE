@@ -1,19 +1,3 @@
-class PrinterConfig:
-    """Base configuration for printer hardware settings"""
-    def __init__(
-        self,
-        serial_port: str = 'COM9',
-        baud_rate: int = 115200,
-        max_x: int = 23500,  # Maximum X dimension in steps
-        max_y: int = 22000,  # Maximum Y dimension in steps
-        max_z: int = 6000,   # Maximum Z dimension in steps
-    ):
-        self.serial_port = serial_port
-        self.baud_rate = baud_rate
-        self.max_x = max_x
-        self.max_y = max_y
-        self.max_z = max_z
-
 class AutomationConfig:
     """Configuration for automated scanning"""
     def __init__(

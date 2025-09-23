@@ -6,15 +6,24 @@ import queue
 import threading
 import re
 from .models import Position
-from .config import PrinterConfig
+from .printerConfig import (
+    PrinterSettings,
+    PrinterSettingsManager,
+    ACTIVE_FILENAME,
+    DEFAULT_FILENAME,
+)
 
 class BasePrinterController:
+    CONFIG_SUBDIR = "Ender3"
     """Base class for 3D printer control"""
-    def __init__(self, config: PrinterConfig):
-        self.config = config
+    def __init__(self):
+        self.config = PrinterSettings()
+        PrinterSettingsManager.scope_dir(self.CONFIG_SUBDIR)
+
+        self.serial_port: str = 'COM9'
         self.command_queue = queue.Queue()
         self.position = Position(0, 0, 0)
-        self.speed = 4  # Default speed
+        self.speed = self.config.step_size  # Default speed
         self.paused = False
         
         # Initialize serial connection
@@ -27,11 +36,11 @@ class BasePrinterController:
     def _initialize_printer(self):
         """Initialize printer serial connection"""
         # First try the configured serial port if it exists
-        if hasattr(self.config, 'serial_port') and self.config.serial_port:
+        if hasattr(self.config, 'serial_port') or self.serial_port:
             try:
-                print(f"Trying configured port: {self.config.serial_port}")
+                print(f"Trying configured port: {self.serial_port}")
                 test_connection = serial.Serial(
-                    self.config.serial_port,
+                    self.serial_port,
                     self.config.baud_rate,
                     timeout=5  # Longer timeout
                 )
@@ -54,7 +63,7 @@ class BasePrinterController:
                     if test_connection.in_waiting > 0:
                         line = test_connection.readline().decode('utf-8', errors='ignore').strip()
                         response_lines.append(line)
-                        print(f"Response from {self.config.serial_port}: {line}")
+                        print(f"Response from {self.serial_port}: {line}")
                         
                         # Check for any of our valid printer response indicators
                         for indicator in valid_responses:
@@ -70,16 +79,16 @@ class BasePrinterController:
                 # If we found any printer-like responses, this is probably our printer
                 if printer_found:
                     self.printer_serial = test_connection
-                    print(f"Printer found on configured port: {self.config.serial_port}")
+                    print(f"Printer found on configured port: {self.serial_port}")
                     print(f"Responses: {response_lines}")
                     return
                 
                 # Not the right device, close and continue to port scanning
                 test_connection.close()
-                print(f"Configured port {self.config.serial_port} did not respond as expected. Scanning all ports...")
+                print(f"Configured port {self.serial_port} did not respond as expected. Scanning all ports...")
                 
             except (serial.SerialException, UnicodeDecodeError, Exception) as e:
-                print(f"Configured port {self.config.serial_port} failed: {e}")
+                print(f"Configured port {self.serial_port} failed: {e}")
                 print("Falling back to scanning all available ports...")
         
         # Fall back to scanning all available ports
@@ -147,8 +156,8 @@ class BasePrinterController:
         
         # If we get here, we couldn't find the printer
         ports_tried = [p.device for p in available_ports]
-        if hasattr(self.config, 'serial_port') and self.config.serial_port:
-            ports_tried.append(self.config.serial_port + " (from config)")
+        if hasattr(self.config, 'serial_port') and self.serial_port:
+            ports_tried.append(self.serial_port + " (from config)")
                 
         raise RuntimeError(f"Printer not found on any available serial port. Tried: {ports_tried}")
 
@@ -247,7 +256,7 @@ class BasePrinterController:
 
     def adjust_speed(self, amount: int) -> None:
         """Adjust movement speed"""
-        self.speed = max(4, self.speed + amount)  # Prevent negative speed
+        self.speed = max(self.config.step_size, self.speed + amount)  # Prevent negative speed
         print("Current Speed", self.speed / 100)
 
     def home(self) -> None:
@@ -264,7 +273,7 @@ class BasePrinterController:
     def move_y_forward(self): self.move_axis('y', -1)
 
     # Convenience methods for speed
-    def increase_speed(self): self.adjust_speed(4)
-    def decrease_speed(self): self.adjust_speed(-4)
-    def increase_speed_fast(self): self.adjust_speed(100)
-    def decrease_speed_fast(self): self.adjust_speed(-100)
+    def increase_speed(self): self.adjust_speed(self.config.step_size)
+    def decrease_speed(self): self.adjust_speed(-self.config.step_size)
+    def increase_speed_fast(self): self.adjust_speed(self.config.step_size * 25)
+    def decrease_speed_fast(self): self.adjust_speed(-self.config.step_size * 25)

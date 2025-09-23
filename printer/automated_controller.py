@@ -1,14 +1,14 @@
 from typing import Tuple
 import time
 from .models import Position, FocusScore
-from .config import PrinterConfig, AutomationConfig
+from .config import AutomationConfig
 from .base_controller import BasePrinterController
 from image_processing.analyzers import ImageAnalyzer
 
 class AutomatedPrinter(BasePrinterController):
     """Extended printer controller with automation capabilities"""
-    def __init__(self, printer_config: PrinterConfig, automation_config: AutomationConfig, camera):
-        super().__init__(printer_config)
+    def __init__(self, automation_config: AutomationConfig, camera):
+        super().__init__()
         self.automation_config = automation_config
         self.camera = camera
         self.is_automated = False
