@@ -479,7 +479,7 @@ def add_save_load_reset_section(modal, camera, *, y: int, x: int = 8) -> None:
         if not filepath:
             return
         try:
-            loaded = CameraSettingsManager.load_settings(filepath)
+            loaded = CameraSettingsManager.load_from_file(filepath)
             camera.set_settings(loaded, persist=False)  # applies immediately
             sync_modal_from_camera(modal, camera)       # <-- refresh widgets in-place
         except Exception as e:

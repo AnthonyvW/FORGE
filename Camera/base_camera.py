@@ -6,26 +6,12 @@ from PIL import Image
 import tkinter as tk
 from tkinter import filedialog
 
-# Optional relative import for settings manager/types
-try:
-    from .camera_settings import (
-        CameraSettings,
-        CameraSettingsManager,
-        ACTIVE_FILENAME,
-        DEFAULT_FILENAME,
-    )
-except Exception:
-    # Fallback if used as a standalone module (not recommended in this project)
-    CameraSettings = object  # type: ignore
-
-    class CameraSettingsManager:  # type: ignore
-        @staticmethod
-        def load_settings(config_path: str):
-            raise RuntimeError("CameraSettingsManager unavailable; import failed")
-
-        @staticmethod
-        def save_settings(settings, config_path: str):
-            raise RuntimeError("CameraSettingsManager unavailable; import failed")
+from .camera_settings import (
+    CameraSettings,
+    CameraSettingsManager,
+    ACTIVE_FILENAME,
+    DEFAULT_FILENAME,
+)
 
 
 class BaseCamera(ABC):
@@ -42,6 +28,8 @@ class BaseCamera(ABC):
         self.initialized = False
         # Safe default for save_image() until a subclass loads real settings
         self.settings = CameraSettings()
+        self._scope = self.get_impl_key()
+        CameraSettingsManager.scope_dir(self._scope)
 
         # Dimensions of the UI frame we render into
         self.frame_width = frame_width
@@ -62,7 +50,6 @@ class BaseCamera(ABC):
         self.printer_position = (0, 0, 0)
 
         # Config roots
-        self.project_config_root = Path("./config").resolve()
         self.impl_config_dir = self.get_config_dir()  # e.g., config/amscope
         self.impl_config_dir.mkdir(parents=True, exist_ok=True)
 
@@ -128,30 +115,18 @@ class BaseCamera(ABC):
         """
         if isinstance(self.CONFIG_SUBDIR, str) and self.CONFIG_SUBDIR.strip():
             return self.CONFIG_SUBDIR.strip()
-
         cls = self.__class__.__name__
-        key = cls
-        if cls.lower().endswith("camera"):
-            key = cls[:-6]  # drop 'Camera'
-        return key.lower()
+        return (cls[:-6] if cls.lower().endswith("camera") else cls).lower()
 
     def get_config_dir(self) -> Path:
-        """Return the per-implementation config directory (e.g., ./config/amscope)."""
-        return (self.project_config_root / self.get_impl_key()).resolve()
-
-    def get_config_path(self, filename: str = ACTIVE_FILENAME) -> Path:
-        """Return the path to a config file inside the per-implementation config folder."""
-        return (self.get_config_dir() / filename).resolve()
+        return CameraSettingsManager.scope_dir(self._scope)
 
     def load_and_apply_settings(self, filename: str = ACTIVE_FILENAME):
         """
         Load settings from YAML and apply to the live camera.
         If the active file is missing, this falls back to default_settings.yaml, else built-in defaults.
         """
-        cfg_path = self.get_config_path(filename)
-        cfg_path.parent.mkdir(parents=True, exist_ok=True)
-
-        loaded = CameraSettingsManager.load_settings(str(cfg_path))
+        loaded = CameraSettingsManager.load(self._scope)
         self.settings = loaded
         self.apply_settings(self.settings)
 
@@ -173,9 +148,7 @@ class BaseCamera(ABC):
         Persist current settings to YAML in the per-implementation folder.
         Automatically creates a timestamped backup of the previous version and keeps the 5 most recent.
         """
-        cfg_path = self.get_config_path(filename)
-        cfg_path.parent.mkdir(parents=True, exist_ok=True)
-        CameraSettingsManager.save_settings(self.settings, str(cfg_path))
+        CameraSettingsManager.save(self._scope, self.settings)
 
     def set_settings(self, settings, persist: bool = False, filename: str = ACTIVE_FILENAME):
         """
@@ -218,27 +191,26 @@ class BaseCamera(ABC):
         Write default_settings.yaml in this camera's config directory.
         If 'settings' is None, writes built-in defaults.
         """
-        return CameraSettingsManager.write_default_file(str(self.get_config_dir()), settings)
+        return CameraSettingsManager.write_defaults(self._scope, settings)
 
     def load_default_settings(self):
         """
         Load defaults from default_settings.yaml (or built-in defaults if file doesn't exist),
         apply to hardware, but do NOT persist to the active file.
         """
-        defaults = CameraSettingsManager.load_defaults(str(self.get_config_dir()))
+        defaults = CameraSettingsManager.load_defaults(self._scope)
         self.set_settings(defaults, persist=False)
         return defaults
 
-    def restore_default_settings(self, persist: bool = True, active_filename: str = ACTIVE_FILENAME):
+    def restore_default_settings(self, persist: bool = True):
         """
         Restore defaults into the active settings file (backup the current one), apply, and optionally persist.
         Useful for a "Restore Defaults" button in the UI.
         """
-        active_path = self.get_config_path(active_filename)
-        restored = CameraSettingsManager.restore_defaults_to_active(str(active_path))
+        restored = CameraSettingsManager.restore_defaults_into_active(self._scope)
         self.set_settings(restored, persist=False)
         if persist:
-            self.save_settings(filename=active_filename)
+            self.save_settings()
         return restored
 
     # -------------------------------
