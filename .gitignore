@@ -1,7 +1,9 @@
 ./input/
 output/
-config/amscope/settings.yaml
-config/amscope/backups/
+config/cameras/amscope/settings.yaml
+config/cameras/amscope/backups/
+config/printers/Ender3/backups/
+config/printers/Ender3/settings.yaml
 
 # Libraries
 focus-stack/

@@ -87,7 +87,7 @@ class CameraSettings:
 # You can instantiate this wherever you need camera configs.
 def make_camera_settings_manager(
     *,
-    root_dir: str = "./config",
+    root_dir: str = "./config/cameras",
     default_filename: str = "default_settings.yaml",
     backup_dirname: str = "backups",
     backup_keep: int = 5,
@@ -101,7 +101,7 @@ def make_camera_settings_manager(
     )
 
 CameraSettingsManager = make_camera_settings_manager(
-    root_dir="./config",
+    root_dir="./config/cameras",
     default_filename=DEFAULT_FILENAME,
     backup_dirname="backups",
     backup_keep=5,
