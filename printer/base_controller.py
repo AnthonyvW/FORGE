@@ -14,6 +14,72 @@ from forgeConfig import (
     ForgeSettings,
 )
 
+def _probe_port(port_device, baud, indicators, request=b"M115\r\n", read_window_s=10, min_lines=3):
+    """
+    Try to identify a Marlin-like printer on a single serial port.
+    Returns (serial_connection, response_lines) on success, or (None, response_lines) on failure.
+    On success, the serial connection is LEFT OPEN for the caller.
+    """
+    responses = []
+    ser = None
+    success = False
+    try:
+        ser = serial.Serial(
+            port_device,
+            baudrate=baud,
+            timeout=0.25,       # slightly less chatty spin
+            write_timeout=1
+        )
+
+        # Some controllers reset on open due to DTR; give them a brief window to chatter.
+        start = time.time()
+        quiet_since = start
+        while time.time() - start < 2.0:   # ~2s settle (exits earlier if quiet)
+            while ser.in_waiting:
+                line = ser.readline().decode("utf-8", errors="ignore").strip()
+                if line:
+                    responses.append(line)
+                    quiet_since = time.time()
+            if time.time() - quiet_since > 0.25:
+                break
+            time.sleep(0.05)
+
+        # Ask for firmware info
+        ser.reset_input_buffer()
+        ser.write(request)
+
+        # Read with a firm window
+        start = time.time()
+        while time.time() - start < read_window_s:
+            if ser.in_waiting:
+                line = ser.readline().decode("utf-8", errors="ignore").strip()
+                if line:
+                    responses.append(line)
+                    if any(ind in line for ind in indicators):
+                        success = True
+                        break
+                    # Heuristic: enough lines + a few seconds → likely the right device
+                    if len(responses) >= min_lines and time.time() - start > 3:
+                        success = True
+                        break
+            else:
+                time.sleep(0.05)
+
+        if success:
+            return ser, responses  # leave open
+        else:
+            return None, responses
+    except Exception:
+        return None, responses
+    finally:
+        # Only close when NOT successful
+        if ser is not None and ser.is_open and not success:
+            try:
+                ser.close()
+            except Exception:
+                pass
+
+
 class BasePrinterController:
     CONFIG_SUBDIR = "Ender3"
     """Base class for 3D printer control"""
@@ -35,131 +101,50 @@ class BasePrinterController:
 
     def _initialize_printer(self, forgeConfig):
         """Initialize printer serial connection"""
-        # First try the configured serial port if it exists
-        if forgeConfig.serial_port:
-            try:
-                print(f"Trying configured port: {forgeConfig.serial_port}")
-                test_connection = serial.Serial(
-                    forgeConfig.serial_port,
-                    self.config.baud_rate,
-                    timeout=5  # Longer timeout
-                )
-                
-                # Clear any startup messages first
-                time.sleep(2)  # Give the printer time to send initial messages
-                test_connection.reset_input_buffer()
-                
-                # Send firmware info request
-                test_connection.write(b"M115\n")
-                
-                # Read multiple lines with a timeout
-                printer_found = False
-                valid_responses = ["FIRMWARE_NAME", "Marlin", "Ender", "TF init", "echo:"]
-                start_time = time.time()
-                response_lines = []
-                
-                # Try reading for up to 10 seconds (increased from 5)
-                while time.time() - start_time < 10:
-                    if test_connection.in_waiting > 0:
-                        line = test_connection.readline().decode('utf-8', errors='ignore').strip()
-                        response_lines.append(line)
-                        print(f"Response from {forgeConfig.serial_port}: {line}")
-                        
-                        # Check for any of our valid printer response indicators
-                        for indicator in valid_responses:
-                            if indicator in line:
-                                printer_found = True
-                        
-                        # If we got at least some response and enough time has passed, consider it a success
-                        if len(response_lines) >= 3 and time.time() - start_time > 3:
-                            printer_found = True
-                    
-                    time.sleep(0.1)  # Small delay between reads
-                
-                # If we found any printer-like responses, this is probably our printer
-                if printer_found:
-                    self.printer_serial = test_connection
-                    print(f"Printer found on configured port: {forgeConfig.serial_port}")
-                    print(f"Responses: {response_lines}")
-                    return
-                
-                # Not the right device, close and continue to port scanning
-                test_connection.close()
-                print(f"Configured port {forgeConfig.serial_port} did not respond as expected. Scanning all ports...")
-                
-            except (serial.SerialException, UnicodeDecodeError, Exception) as e:
-                print(f"Configured port {forgeConfig.serial_port} failed: {e}")
-                print("Falling back to scanning all available ports...")
-        
-        # Fall back to scanning all available ports
-        available_ports = list(serial.tools.list_ports.comports())
+        baud = self.config.baud_rate
+        indicators = getattr(self.config, "valid_response_indicators", None) or [
+            "FIRMWARE_NAME", "Marlin", "Ender", "TF init", "echo:"
+        ]
 
-        if not available_ports:
+        # Ports list: configured (first) then all others (no duplicates)
+        detected = [p.device for p in serial.tools.list_ports.comports()]
+        if not detected:
             raise RuntimeError("No serial ports found. Is the printer connected?")
-        
-        print(f"Available ports: {[port.device for port in available_ports]}")
-        
-        # Try to find the printer by testing each available port
-        for port in available_ports:
+
+        preferred = []
+        cfg_port = getattr(forgeConfig, "serial_port", None)
+        if cfg_port:
+            preferred = [cfg_port]
+        remaining = [p for p in detected if p not in set(preferred)]
+        ports_to_try = preferred + remaining
+
+        print(f"Available ports (preferred first): {ports_to_try}")
+
+        for dev in ports_to_try:
             try:
-                print(f"Trying port: {port.device}")
-                test_connection = serial.Serial(
-                    port.device,
-                    self.config.baud_rate,
-                    timeout=5  # Longer timeout
+                label = "(configured)" if preferred and dev == preferred[0] else ""
+                print(f"Trying port {dev} {label}".strip())
+                ser, lines = _probe_port(
+                    port_device=dev,
+                    baud=baud,
+                    indicators=indicators,
+                    request=b"M115\r\n",
+                    read_window_s=10,
+                    min_lines=3,
                 )
-                
-                # Clear any startup messages first
-                time.sleep(2)  # Give the printer time to send initial messages
-                test_connection.reset_input_buffer()
-                
-                # Send firmware info request
-                test_connection.write(b"M115\n")
-                
-                # Read multiple lines with a timeout
-                printer_found = False
-                valid_responses = ["FIRMWARE_NAME", "Marlin", "Ender", "TF init", "echo:"]
-                start_time = time.time()
-                response_lines = []
-                
-                # Try reading for up to 10 seconds (increased from 5)
-                while time.time() - start_time < 10:
-                    if test_connection.in_waiting > 0:
-                        line = test_connection.readline().decode('utf-8', errors='ignore').strip()
-                        response_lines.append(line)
-                        print(f"Response from {port.device}: {line}")
-                        
-                        # Check for any of our valid printer response indicators
-                        for indicator in valid_responses:
-                            if indicator in line:
-                                printer_found = True
-                        
-                        # If we got at least some response and enough time has passed, consider it a success
-                        if len(response_lines) >= 3 and time.time() - start_time > 3:
-                            printer_found = True
-                    
-                    time.sleep(0.1)  # Small delay between reads
-                
-                # If we found any printer-like responses, this is probably our printer
-                if printer_found:
-                    self.printer_serial = test_connection
-                    print(f"Printer found on port: {port.device}")
-                    print(f"Responses: {response_lines}")
+                if ser is not None:
+                    self.printer_serial = ser  # keep open
+                    print(f"Printer found on port: {dev}")
+                    # show last few lines like old version
+                    for ln in lines[-10:]:
+                        print(f"[{dev}] {ln}")
                     return
-                
-                # Not the right device, close and try next
-                test_connection.close()
-                
-            except (serial.SerialException, UnicodeDecodeError, Exception) as e:
-                print(f"Port {port.device} failed: {e}")
-                continue
-        
-        # If we get here, we couldn't find the printer
-        ports_tried = [p.device for p in available_ports]
-        if hasattr(self.config, 'serial_port') and self.serial_port:
-            ports_tried.append(self.serial_port + " (from config)")
-                
-        raise RuntimeError(f"Printer not found on any available serial port. Tried: {ports_tried}")
+                else:
+                    print(f"Port {dev} did not respond as a compatible printer. Observed {len(lines)} line(s).")
+            except Exception as e:
+                print(f"Port {dev} failed: {e}")
+
+        raise RuntimeError(f"Printer not found on any available serial port. Tried: {ports_to_try}")
 
     def _process_commands(self):
         """Main thread for processing commands from the queue"""
