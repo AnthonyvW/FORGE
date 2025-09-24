@@ -12,7 +12,7 @@ import ctypes
 import zipfile
 
 from .base_camera import BaseCamera
-from .settings import CameraSettings, CameraSettingsManager
+from .camera_settings import CameraSettings, CameraSettingsManager
 from image_processing.analyzers import ImageAnalyzer
 
 class AmscopeCamera(BaseCamera):
