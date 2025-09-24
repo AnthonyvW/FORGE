@@ -5,10 +5,14 @@ from .config import AutomationConfig
 from .base_controller import BasePrinterController
 from image_processing.analyzers import ImageAnalyzer
 
+from forgeConfig import (
+    ForgeSettings,
+)
+
 class AutomatedPrinter(BasePrinterController):
     """Extended printer controller with automation capabilities"""
-    def __init__(self, automation_config: AutomationConfig, camera):
-        super().__init__()
+    def __init__(self, forgeConfig: ForgeSettings, automation_config: AutomationConfig, camera):
+        super().__init__(forgeConfig)
         self.automation_config = automation_config
         self.camera = camera
         self.is_automated = False

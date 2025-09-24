@@ -8,39 +8,39 @@ import re
 from .models import Position
 from .printerConfig import (
     PrinterSettings,
-    PrinterSettingsManager,
-    ACTIVE_FILENAME,
-    DEFAULT_FILENAME,
+    PrinterSettingsManager
+)
+from forgeConfig import (
+    ForgeSettings,
 )
 
 class BasePrinterController:
     CONFIG_SUBDIR = "Ender3"
     """Base class for 3D printer control"""
-    def __init__(self):
+    def __init__(self, forgeConfig: ForgeSettings):
         self.config = PrinterSettings()
         PrinterSettingsManager.scope_dir(self.CONFIG_SUBDIR)
 
-        self.serial_port: str = 'COM9'
         self.command_queue = queue.Queue()
         self.position = Position(0, 0, 0)
         self.speed = self.config.step_size  # Default speed
         self.paused = False
         
         # Initialize serial connection
-        self._initialize_printer()
+        self._initialize_printer(forgeConfig)
         
         # Start command processing thread
         self._processing_thread = threading.Thread(target=self._process_commands, daemon=True)
         self._processing_thread.start()
 
-    def _initialize_printer(self):
+    def _initialize_printer(self, forgeConfig):
         """Initialize printer serial connection"""
         # First try the configured serial port if it exists
-        if hasattr(self.config, 'serial_port') or self.serial_port:
+        if forgeConfig.serial_port:
             try:
-                print(f"Trying configured port: {self.serial_port}")
+                print(f"Trying configured port: {forgeConfig.serial_port}")
                 test_connection = serial.Serial(
-                    self.serial_port,
+                    forgeConfig.serial_port,
                     self.config.baud_rate,
                     timeout=5  # Longer timeout
                 )
@@ -63,7 +63,7 @@ class BasePrinterController:
                     if test_connection.in_waiting > 0:
                         line = test_connection.readline().decode('utf-8', errors='ignore').strip()
                         response_lines.append(line)
-                        print(f"Response from {self.serial_port}: {line}")
+                        print(f"Response from {forgeConfig.serial_port}: {line}")
                         
                         # Check for any of our valid printer response indicators
                         for indicator in valid_responses:
@@ -79,16 +79,16 @@ class BasePrinterController:
                 # If we found any printer-like responses, this is probably our printer
                 if printer_found:
                     self.printer_serial = test_connection
-                    print(f"Printer found on configured port: {self.serial_port}")
+                    print(f"Printer found on configured port: {forgeConfig.serial_port}")
                     print(f"Responses: {response_lines}")
                     return
                 
                 # Not the right device, close and continue to port scanning
                 test_connection.close()
-                print(f"Configured port {self.serial_port} did not respond as expected. Scanning all ports...")
+                print(f"Configured port {forgeConfig.serial_port} did not respond as expected. Scanning all ports...")
                 
             except (serial.SerialException, UnicodeDecodeError, Exception) as e:
-                print(f"Configured port {self.serial_port} failed: {e}")
+                print(f"Configured port {forgeConfig.serial_port} failed: {e}")
                 print("Falling back to scanning all available ports...")
         
         # Fall back to scanning all available ports

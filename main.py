@@ -6,6 +6,11 @@ from camera.amscope import AmscopeCamera
 from printer.automated_controller import AutomatedPrinter, Position
 from printer.config import AutomationConfig
 
+from forgeConfig import (
+    ForgeSettings,
+    ForgeSettingsManager
+)
+
 from UI.text import Text, TextStyle
 from UI.frame import Frame
 from UI.ui_layout import create_control_panel, RIGHT_PANEL_WIDTH
@@ -13,9 +18,11 @@ from UI.ui_layout import create_control_panel, RIGHT_PANEL_WIDTH
 from UI.input.text_field import TextField
 from UI.input.button import Button, ButtonShape
 
+config = ForgeSettings()
+
 pygame.init()
 pygame.display.set_caption("FORGE")
-width, height = (1920, 1080)
+width, height = (config.windowWidth, config.windowHeight)
 screen = pygame.display.set_mode((width, height), pygame.RESIZABLE)
 
 # Frame in which everything is based on
@@ -32,7 +39,7 @@ camera = AmscopeCamera(width - right_panel_width, height)
 automation_config = AutomationConfig()  # Using default values
 
 # Initialize the automated printer with configurations
-movementSystem = AutomatedPrinter(automation_config, camera)
+movementSystem = AutomatedPrinter(config, automation_config, camera)
 
 time.sleep(1.5)
 camera.resize(width - right_panel_width, height)
