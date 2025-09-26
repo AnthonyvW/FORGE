@@ -2,7 +2,7 @@
 from dataclasses import dataclass
 from enum import Enum
 from queue import Queue
-from typing import Optional, Callable, List, Dict
+from typing import Optional, Callable, List, Dict, Iterable
 import serial
 import serial.tools.list_ports
 import time
@@ -88,7 +88,7 @@ def _probe_port(port_device, baud, indicators, request=b"M115\r\n", read_window_
 @dataclass
 class command:
     kind: str 
-    value: str
+    value: any
     message: Optional[str] = None   
     log: bool = False
 
@@ -110,7 +110,10 @@ class BasePrinterController:
         self._handlers: Dict[str, Callable[[command], None]] = {}
         # register built-ins
         self.register_handler("PRINTER", self._handle_printer)
-        
+        self.register_handler("MACRO", self._handle_macro)
+        self.register_handler("MACRO_WAIT", self._handle_macro)
+
+
         # Initialize serial connection
         self._initialize_printer(forgeConfig)
         
@@ -297,23 +300,110 @@ class BasePrinterController:
         self.paused = not self.paused
         self._emit_message("Unpaused" if not self.paused else "Paused", True, None)
 
-    def adjust_speed(self, amount: int) -> None:
-        """Adjust movement speed"""
-        self.speed = max(self.config.step_size, self.speed + amount)  # Prevent negative speed
-        print("Current Speed", self.speed / 100)
-
     def home(self) -> None:
         self.enqueue_printer("G28", "Homing Printer. . .")
             
     def flush_moves(self) -> None:
         self._exec_gcode("M400", wait=True, update_position=False, message="Waiting for moves...", log=True)
 
-    def enqueue(self, kind: str, value: str, message: str = "", log: bool = False) -> None:
+
+    # Command Queuer
+    def enqueue_cmd(self, kind: str, value: str, message: str = "", log: bool = False) -> None:
         """Enqueue any command by kind."""
         self.command_queue.put(command(kind, value, message or None, log))
 
     def enqueue_printer(self, gc: str, message: str = "", log: bool = True) -> None:
-        self.enqueue("PRINTER", gc, message, log)
+        self.enqueue_cmd(self.printer_cmd(gc, message, log))
+
+    def printer_cmd(self, gc: str, message: str = "", log: bool = False) -> command:
+        """
+        Create a PRINTER command.
+
+        Printer commands wrap raw G-code strings so they can be placed on the
+        controller queue or used inside macros. The command is executed by
+        sending the G-code to the printer.
+
+        Args:
+            gc: G-code string (e.g. "G28", "G0 X10 Y10").
+            message: Optional message displayed when the command runs.
+            log: If True, also print the message to stdout.
+
+        Example:
+            # Build a simple move command
+            move = self.printer_cmd("G0 X50 Y50 Z5", message="Move to 50,50,5", log=True)
+
+            # Enqueue immediately
+            self.enqueue_cmd(move)
+
+            # Or include it in a macro
+            steps = [
+                self.printer_cmd("G28", message="Home"),
+                move,
+            ]
+            home_and_move = self.macro_cmd(steps, wait_printer=True)
+            self.enqueue_cmd(home_and_move)
+        """
+        return command("PRINTER", gc, message or None, log)
+
+
+    # Macro Handling
+    def _handle_macro(self, cmd: command) -> None:
+        steps: list[command] = cmd.value or []
+        wait_printer = (cmd.kind.upper() == "MACRO_WAIT")
+
+        if cmd.message:
+            self._emit_message(cmd.message, cmd.log, cmd)
+
+        for sub in steps:
+            if sub.message:
+                self._emit_message(sub.message, sub.log, sub)
+
+            if sub.kind == "PRINTER":
+                self._exec_gcode(sub.value, wait=wait_printer)
+            else:
+                (self._handlers.get(sub.kind) or self._handle_unknown)(sub)
+
+    def macro_cmd(self, items: Iterable[command], *, wait_printer: bool = False, message: str | None = None, log: bool = False) -> command:
+        """
+        Create a MACRO command (a batch of commands executed atomically).
+
+        Macros are useful for grouping a sequence of commands into one logical
+        unit. When enqueued, the macro will expand and run its steps in order.
+
+        Args:
+            steps: Iterable of `command` objects (e.g. from printer_cmd, camera_cmd, etc.)
+            wait_printer: If True, each PRINTER move waits (M400) before the next.
+            message: Optional message displayed when the macro begins.
+            log: If True, also print messages to stdout.
+
+        Example:
+            # Build a square-move macro
+            steps = [
+                self.printer_cmd("G28", message="Homing...", log=True),
+                self.printer_cmd("G0 X0 Y0", message="Start corner"),
+                self.printer_cmd("G0 X10 Y0", message="Move right"),
+                self.printer_cmd("G0 X10 Y10", message="Move up"),
+                self.printer_cmd("G0 X0 Y10", message="Move left"),
+                self.printer_cmd("G0 X0 Y0", message="Back to start"),
+            ]
+
+            square_macro = self.macro_cmd(
+                steps,
+                wait_printer=True,
+                message="Square pattern macro",
+                log=True,
+            )
+
+            # Enqueue like any other command
+            self.enqueue_cmd(square_macro)
+        """
+        return command(
+            kind="MACRO_WAIT" if wait_printer else "MACRO",
+            value=items,
+            message=message,
+            log=log,
+        )
+
 
 
     # Message Listener Hooks
@@ -353,7 +443,12 @@ class BasePrinterController:
     def move_y_forward(self): self.move_axis('y', -1)
 
 
-    # Convenience methods for speed
+    # Methods for speed
+    def adjust_speed(self, amount: int) -> None:
+        """Adjust movement speed"""
+        self.speed = max(self.config.step_size, self.speed + amount)  # Prevent negative speed
+        print("Current Speed", self.speed / 100)
+
     def increase_speed(self): self.adjust_speed(self.config.step_size)
     def decrease_speed(self): self.adjust_speed(-self.config.step_size)
     def increase_speed_fast(self): self.adjust_speed(self.config.step_size * 25)
