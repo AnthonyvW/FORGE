@@ -85,6 +85,9 @@ def _probe_port(port_device, baud, indicators, request=b"M115\r\n", read_window_
                 pass
 
 
+class PrinterFault(Exception): pass
+class PrinterTimeout(Exception): pass
+
 @dataclass
 class command:
     kind: str 
@@ -98,16 +101,22 @@ class BasePrinterController:
     def __init__(self, forgeConfig: ForgeSettings):
         self.config = PrinterSettings()
         PrinterSettingsManager.scope_dir(self.CONFIG_SUBDIR)
+        self.position = Position(0, 0, 0) # Current position
+        self.speed = self.config.step_size  # Current Speed
+        self.paused = False
+        self.stop_requested = False
+        self.faulted = False
 
         self.command_queue: Queue[command] = Queue()
-        self.position = Position(0, 0, 0)
-        self.speed = self.config.step_size  # Default speed
-        self.paused = False
+
+        # Buffer for macros when paused.
+        self._front_buffer: List[command] = []
+        self._front_lock = threading.Lock()
         
         # Callbacks
         self._message_listeners: List[Callable[[str, bool, command], None]] = []
-        
         self._handlers: Dict[str, Callable[[command], None]] = {}
+        
         # register built-ins
         self.register_handler("PRINTER", self._handle_printer)
         self.register_handler("MACRO", self._handle_macro)
@@ -172,15 +181,28 @@ class BasePrinterController:
         time.sleep(1)
         while True:
             if self.paused:
+                time.sleep(0.05)
                 continue
             try:
-                cmd = self.command_queue.get()
+                cmd = None
+                with self._front_lock:
+                    if self._front_buffer:
+                        cmd = self._front_buffer.pop(0)
+                if cmd is None:
+                    cmd = self.command_queue.get()
+
                 if cmd.message:
                     self._emit_message(cmd.message, cmd.log, cmd)
                 (self._handlers.get(cmd.kind) or self._handle_unknown)(cmd)
+
+            except (PrinterFault, PrinterTimeout) as e:
+                self.halt(f"Printer error: {e}")
             except Exception as e:
-                self._emit_message(f"Error: {e}", True, None)
-                self.halt()
+                self.halt(f"Unhandled error: {e}")
+
+    def _push_front(self, cmd: command) -> None:
+        with self._front_lock:
+            self._front_buffer.insert(0, cmd)
 
     def _exec_gcode(
         self,
@@ -284,21 +306,17 @@ class BasePrinterController:
         if 0 <= new_value <= max_value:
             self.enqueue_printer(f"G1 {axis.upper()}{new_value / 100}", log=False)
 
-    def halt(self) -> None:
-        """Halt all operations and clear queue"""
+    def force_stop(self, reason="fault"):
+        self.faulted = True
+        self.stop_requested = True
         self.paused = True
-        while not self.command_queue.empty():
-            self.command_queue.get(False)
+        self._flush_pipeline()
+        self._emit_message(f"[FORCE STOP] {reason}", True, None)
 
-        # Wait 2/10 of a second to allow the printer thread to see that its paused
-        time.sleep(0.2)
+    def reset_force_stop(self):
+        self.faulted = False
+        self.stop_requested = False
         self.paused = False
-        self._emit_message("Cleared Queue", True, None)
-
-    def toggle_pause(self) -> None:
-        """Toggle pause state"""
-        self.paused = not self.paused
-        self._emit_message("Unpaused" if not self.paused else "Paused", True, None)
 
     def home(self) -> None:
         self.enqueue_printer("G28", "Homing Printer. . .")
@@ -310,6 +328,10 @@ class BasePrinterController:
     # Command Queuer
     def enqueue_cmd(self, kind: str, value: str, message: str = "", log: bool = False) -> None:
         """Enqueue any command by kind."""
+        if self.faulted:
+            self._emit_message("Ignored: controller faulted; call reset()", True, command(kind, value, message or None, log))
+            return
+        
         self.command_queue.put(command(kind, value, message or None, log))
 
     def enqueue_printer(self, gc: str, message: str = "", log: bool = True) -> None:
@@ -345,19 +367,56 @@ class BasePrinterController:
         """
         return command("PRINTER", gc, message or None, log)
 
+    def _flush_pipeline(self):
+        with self._front_lock:
+            self._front_buffer.clear()
+        try:
+            while True:
+                self.command_queue.get_nowait()
+        except queue.Empty:
+            pass
+
+
+    # Automation
+    def stop(self, reason="user"):
+        # Soft stop: pause, mark stop, nuke anything pending/resumable
+        self.stop_requested = True
+        self.paused = True
+        self._flush_pipeline()
+    
+    def resume(self):
+        # Clearing stop lets new commands run; nothing old will resume
+        self.stop_requested = False
+        self.paused = False
+
+    def toggle_pause(self) -> None:
+        """Toggle pause state"""
+        self.paused = not self.paused
+        self._emit_message("Unpaused" if not self.paused else "Paused", True, None)
+
 
     # Macro Handling
     def _handle_macro(self, cmd: command) -> None:
-        steps: list[command] = cmd.value or []
+        steps = list(cmd.value or [])
         wait_printer = (cmd.kind.upper() == "MACRO_WAIT")
 
-        if cmd.message:
-            self._emit_message(cmd.message, cmd.log, cmd)
+        for i, sub in enumerate(steps):
+            if self.stop_requested:
+                # Abort immediately; do NOT requeue the remainder.
+                return
 
-        for sub in steps:
-            if sub.message:
-                self._emit_message(sub.message, sub.log, sub)
+            if self.paused:
+                # Only resume later if not stopping.
+                remaining = steps[i:]
+                if remaining and not self.stop_requested:
+                    self._push_front(command(cmd.kind, remaining, None, cmd.log))
+                return
 
+            # cooperative pause/stop point between sub-steps
+            if self._pause_point():
+                return  # stop requested; do not requeue
+
+            # Execute one atomic sub-step
             if sub.kind == "PRINTER":
                 self._exec_gcode(sub.value, wait=wait_printer)
             else:
@@ -404,6 +463,11 @@ class BasePrinterController:
             log=log,
         )
 
+    def pause_point(self):
+        """Pause points that can be inserted into automation to pause it"""
+        while self.paused and not self.stop_requested:
+            time.sleep(0.05)
+        return self.stop_requested
 
 
     # Message Listener Hooks

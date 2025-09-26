@@ -261,7 +261,7 @@ def _build_camera_control(camera_control, movementSystem, camera, camera_setting
 def _build_automation_control(automation_box, movementSystem):
     
     Button(movementSystem.start_automation, 10,  10, 115, 40, "Start", parent=automation_box, text_style=make_button_text_style())
-    Button(movementSystem.halt,             133, 10, 115, 40, "Stop" , parent=automation_box, text_style=make_button_text_style())
+    Button(movementSystem.stop,             133, 10, 115, 40, "Stop" , parent=automation_box, text_style=make_button_text_style())
     pause = Button(movementSystem.toggle_pause,     255, 10, 115, 40, "Pause", parent=automation_box, text_style=make_button_text_style())
     pause.add_hidden_reason("SYSTEM")
 
