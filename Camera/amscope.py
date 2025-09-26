@@ -200,15 +200,15 @@ class AmscopeCamera(BaseCamera):
     @staticmethod
     def _camera_callback(event, _self):
         """Handle camera events."""
-        if event == _self.amcam.AMCAM_EVENT_STILLIMAGE:
-            _self._process_frame()
-        elif event == _self.amcam.AMCAM_EVENT_IMAGE:
-            # Call stream directly from the callback when an image is ready
+        if event == _self.amcam.AMCAM_EVENT_IMAGE:
             try:
                 _self.camera.PullImageV2(_self.buffer, 24, None)
-                _self.frame = pygame.image.frombuffer(_self.buffer, [_self.width, _self.height], 'RGB')
+                frame = pygame.image.frombuffer(_self.buffer, [_self.width, _self.height], "RGB")
+                _self._set_frame(frame)
             except _self.amcam.HRESULTException as e:
                 print(f"Error in callback stream: {e}")
+        elif event == _self.amcam.AMCAM_EVENT_STILLIMAGE:
+            _self._process_frame()  # will set last_image, see below
         elif event == _self.amcam.AMCAM_EVENT_EXPO_START:
             print("Exposure start event detected")
 
@@ -230,17 +230,17 @@ class AmscopeCamera(BaseCamera):
         self.camera.Snap(0)
 
     def _process_frame(self):
-        """Process captured frame."""
         self.is_taking_image = True
         try:
-            cam_width, cam_height = self.camera.get_StillResolution(0)
-            buffer_size = cam_width * cam_height * 3
-            buf = bytes(buffer_size)
+            w, h = self.camera.get_StillResolution(0)
+            buf = bytes(w * h * 3)
             self.camera.PullStillImageV2(buf, 24, None)
+            arr = np.frombuffer(buf, np.uint8).reshape((h, w, 3))
+            self.last_image = arr
 
-            decoded = np.frombuffer(buf, np.uint8)
-            self.last_image = decoded.reshape((cam_height, cam_width, 3))
-
+            # Optional: briefly show the still in the preview, scaled correctly
+            still_surface = pygame.image.frombuffer(buf, (w, h), "RGB")
+            self._set_frame(still_surface)  # <- scale computed for still size
         except self.amcam.HRESULTException as e:
             print(f"Error processing frame: {e}")
         finally:

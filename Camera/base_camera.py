@@ -104,6 +104,16 @@ class BaseCamera(ABC):
         """Capture a still image (subclass must implement)."""
         pass
 
+    def _set_frame(self, surf: pygame.Surface):
+        """Set a new frame and recompute scale for the current view box."""
+        self.frame = surf
+        try:
+            fw, fh = surf.get_width(), surf.get_height()
+            if fw > 0 and fh > 0:
+                self.scale = min(self.frame_width / fw, self.frame_height / fh)
+        except Exception:
+            pass
+
     # -------------------------------
     # Config & settings convenience
     # -------------------------------
