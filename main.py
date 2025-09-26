@@ -19,6 +19,7 @@ from UI.input.text_field import TextField
 from UI.input.button import Button, ButtonShape
 
 config = ForgeSettings()
+config = ForgeSettingsManager.load_defaults("")
 
 pygame.init()
 pygame.display.set_caption("FORGE")
