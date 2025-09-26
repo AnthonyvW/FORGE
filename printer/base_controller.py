@@ -1,10 +1,15 @@
-from typing import Tuple
+
+from dataclasses import dataclass
+from enum import Enum
+from queue import Queue
+from typing import Optional, Callable, List, Dict
 import serial
 import serial.tools.list_ports
 import time
 import queue
 import threading
 import re
+
 from .models import Position
 from .printerConfig import (
     PrinterSettings,
@@ -80,6 +85,13 @@ def _probe_port(port_device, baud, indicators, request=b"M115\r\n", read_window_
                 pass
 
 
+@dataclass
+class command:
+    kind: str 
+    value: str
+    message: Optional[str] = None   
+    log: bool = False
+
 class BasePrinterController:
     CONFIG_SUBDIR = "Ender3"
     """Base class for 3D printer control"""
@@ -87,10 +99,17 @@ class BasePrinterController:
         self.config = PrinterSettings()
         PrinterSettingsManager.scope_dir(self.CONFIG_SUBDIR)
 
-        self.command_queue = queue.Queue()
+        self.command_queue: Queue[command] = Queue()
         self.position = Position(0, 0, 0)
         self.speed = self.config.step_size  # Default speed
         self.paused = False
+        
+        # Callbacks
+        self._message_listeners: List[Callable[[str, bool, command], None]] = []
+        
+        self._handlers: Dict[str, Callable[[command], None]] = {}
+        # register built-ins
+        self.register_handler("PRINTER", self._handle_printer)
         
         # Initialize serial connection
         self._initialize_printer(forgeConfig)
@@ -147,18 +166,63 @@ class BasePrinterController:
         raise RuntimeError(f"Printer not found on any available serial port. Tried: {ports_to_try}")
 
     def _process_commands(self):
-        """Main thread for processing commands from the queue"""
-        time.sleep(1)  # Allow time for serial connection to stabilize
+        time.sleep(1)
         while True:
-            if not self.paused:
-                try:
-                    command = self.command_queue.get()
-                    if command.startswith("G"):
-                        self._update_position(command)
-                        self._send_and_wait(command)
-                except Exception as e:
-                    print(f"Error in command processing: {e}")
-                    self.halt()
+            if self.paused:
+                continue
+            try:
+                cmd = self.command_queue.get()
+                if cmd.message:
+                    self._emit_message(cmd.message, cmd.log, cmd)
+                (self._handlers.get(cmd.kind) or self._handle_unknown)(cmd)
+            except Exception as e:
+                self._emit_message(f"Error: {e}", True, None)
+                self.halt()
+
+    def _exec_gcode(
+        self,
+        gc: str,
+        *,
+        wait: bool = False,                 # add M400 after sending (ensures motion complete)
+        update_position: bool | None = None, # auto: update for G*; override if needed
+        message: str | None = None,
+        log: bool = False,
+    ) -> None:
+        if message:
+            self._emit_message(message, log, None)
+
+        gc_stripped = gc.strip()
+        if update_position is None:
+            update_position = gc_stripped.upper().startswith("G")
+
+        if update_position:
+            self._update_position(gc_stripped)
+
+        # send primary command
+        self._send_and_wait(gc_stripped)
+
+        # optionally ensure the move fully finishes at firmware level
+        if wait and gc_stripped.upper() != "M400":
+            self._send_and_wait("M400")
+
+    def _parse_kv(self, s: str) -> dict[str, str]:
+        out = {}
+        for tok in s.split():
+            if "=" in tok:
+                k, v = tok.split("=", 1)
+                out[k] = v
+        return out
+
+    def register_handler(self, kind: str, fn: Callable[[command], None]) -> None:
+        self._handlers[kind] = fn
+
+    def _handle_printer(self, cmd):    # default
+        gc = cmd.value.strip()
+        self._exec_gcode(gc, wait=False, message=cmd.message, log=cmd.log)
+
+    def _handle_unknown(self, cmd):    
+        self._emit_message(f"Unknown kind: {cmd.kind}", True, cmd)
+
 
     def _send_and_wait(self, command: str) -> None:
         """Send command and wait for OK response"""
@@ -198,8 +262,6 @@ class BasePrinterController:
 
     def _send_command(self, command: str) -> None:
         """Send command to printer"""
-        if not command.startswith("G0") and command != "M400":
-            print(command)
         self.printer_serial.write(f"{command}\n".encode())
 
     def get_position(self) -> Position:
@@ -208,20 +270,16 @@ class BasePrinterController:
 
     def move_to_position(self, position: Position) -> None:
         """Move to specified position"""
-        self.command_queue.put(f"G0 {position.to_gcode()}")
+        self.enqueue_printer(f"G0 {position.to_gcode()}", message=f"Moving to {position}", log=False)
 
     def move_axis(self, axis: str, direction: int) -> None:
         """Move specified axis by current speed * direction"""
         current_value = getattr(self.position, axis)
         new_value = current_value + (self.speed * direction)
-        
-        # Check bounds
+
         max_value = getattr(self.config, f"max_{axis}")
         if 0 <= new_value <= max_value:
-            # Create and send the G-code command
-            command = f"G1 {axis.upper()}{new_value / 100}"
-            self.command_queue.put(command)
-            # Position will be updated by _update_position when command is processed
+            self.enqueue_printer(f"G1 {axis.upper()}{new_value / 100}", log=False)
 
     def halt(self) -> None:
         """Halt all operations and clear queue"""
@@ -232,12 +290,12 @@ class BasePrinterController:
         # Wait 2/10 of a second to allow the printer thread to see that its paused
         time.sleep(0.2)
         self.paused = False
-        print("Cleared Queue")
+        self._emit_message("Cleared Queue", True, None)
 
     def toggle_pause(self) -> None:
         """Toggle pause state"""
         self.paused = not self.paused
-        print("Unpaused" if not self.paused else "Paused")
+        self._emit_message("Unpaused" if not self.paused else "Paused", True, None)
 
     def adjust_speed(self, amount: int) -> None:
         """Adjust movement speed"""
@@ -245,9 +303,46 @@ class BasePrinterController:
         print("Current Speed", self.speed / 100)
 
     def home(self) -> None:
-        print("Homing")
-        # Home the printer
-        self.command_queue.put("G28")
+        self.enqueue_printer("G28", "Homing Printer. . .")
+            
+    def flush_moves(self) -> None:
+        self._exec_gcode("M400", wait=True, update_position=False, message="Waiting for moves...", log=True)
+
+    def enqueue(self, kind: str, value: str, message: str = "", log: bool = False) -> None:
+        """Enqueue any command by kind."""
+        self.command_queue.put(command(kind, value, message or None, log))
+
+    def enqueue_printer(self, gc: str, message: str = "", log: bool = True) -> None:
+        self.enqueue("PRINTER", gc, message, log)
+
+
+    # Message Listener Hooks
+    def add_message_listener(self, listener: Callable[[str, bool, command], None]) -> None:
+        """Subscribe to command messages. Signature: (text, log, cmd) -> None"""
+        if not callable(listener):
+            raise TypeError("listener must be callable")
+        self._message_listeners.append(listener)
+
+    def remove_message_listener(self, listener: Callable[[str, bool, command], None]) -> None:
+        try:
+            self._message_listeners.remove(listener)
+        except ValueError:
+            pass  # already removed / never added
+
+    def _emit_message(self, text: str, log: bool, cmd: Optional[command] = None) -> None:
+        # Console logging only when requested
+        if log and text:
+            print(text)
+
+        # Notify listeners (e.g., UI)
+        if text:
+            for listener in list(self._message_listeners):
+                try:
+                    listener(text, log, cmd)
+                except Exception as e:
+                    # Keep the pipeline resilient if a listener explodes
+                    print(f"[warn] message listener raised: {e}")
+
 
     # Convenience methods for movement
     def move_z_up(self): self.move_axis('z', 1)
@@ -256,6 +351,7 @@ class BasePrinterController:
     def move_x_right(self): self.move_axis('x', -1)
     def move_y_backward(self): self.move_axis('y', 1)
     def move_y_forward(self): self.move_axis('y', -1)
+
 
     # Convenience methods for speed
     def increase_speed(self): self.adjust_speed(self.config.step_size)

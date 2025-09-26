@@ -17,23 +17,6 @@ class AutomatedPrinter(BasePrinterController):
         self.camera = camera
         self.is_automated = False
 
-    def _process_commands(self):
-        """Main thread for processing commands from the queue"""
-        time.sleep(1)  # Allow time for serial connection to stabilize
-        self.home()
-        while True:
-            if not self.paused:
-                try:
-                    command = self.command_queue.get()
-                    if command.startswith("G"):
-                        self._update_position(command)
-                        self._send_and_wait(command)
-                        # Trigger z-scan after any movement command during automation
-                        if self.is_automated and (command.startswith("G0") or command.startswith("G1")):
-                            self._handle_automated_z_scan()
-                except Exception as e:
-                    print(f"Error in command processing: {e}")
-                    self.halt()
 
     def _evaluate_focus(self, focus_score: float) -> FocusScore:
         """Evaluate focus score and return corresponding enum"""
