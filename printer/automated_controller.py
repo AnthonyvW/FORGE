@@ -9,6 +9,8 @@ from forgeConfig import (
     ForgeSettings,
 )
 
+from .base_controller import command
+
 class AutomatedPrinter(BasePrinterController):
     """Extended printer controller with automation capabilities"""
     def __init__(self, forgeConfig: ForgeSettings, automation_config: AutomationConfig, camera):
@@ -17,6 +19,7 @@ class AutomatedPrinter(BasePrinterController):
         self.camera = camera
         self.is_automated = False
 
+        self.register_handler("AUTOMATION", self.automation_macro)
 
     def _evaluate_focus(self, focus_score: float) -> FocusScore:
         """Evaluate focus score and return corresponding enum"""
@@ -26,25 +29,40 @@ class AutomatedPrinter(BasePrinterController):
             return FocusScore.MODERATE
         return FocusScore.POOR
 
+    def automation_macro(self, cmd: command) -> None:
+        self._handle_status(self.status_cmd(cmd.message), True),
+        for i in range(50):
+            self._handle_status(self.status_cmd(f"Starting {i}"), True),
+            
+            if self.pause_point():
+                return  # stop requested; do not requeue
+            self._exec_gcode("G0 X10 Y10", wait=True)
+            
+            if self.pause_point():
+                return  # stop requested; do not requeue
+            self._exec_gcode("G0 X40 Y10", wait=True)
+
+            if self.pause_point():
+                return  # stop requested; do not requeue
+            self._exec_gcode("G0 X40 Y40", wait=True)
+
+            if self.pause_point():
+                return  # stop requested; do not requeue
+            self._exec_gcode("G0 X10 Y40", wait=True)
+
+
     def start_automation(self) -> None:
         """Start the automation process"""
-        config = self.automation_config
-        start_pos = Position(config.x_start, config.y_start, config.z_start)
-        self.move_to_position(start_pos)
+
+        self.reset_after_stop()
         
-        x_range = self._get_range(config.x_start, config.x_end, config.xy_step)
-        y_range = range(config.y_start, config.y_end + config.xy_step, config.xy_step)
-        
-        direction = 1
-        for y in y_range:
-            if y != config.y_start:
-                direction *= -1
-            x_positions = x_range if direction > 0 else reversed(x_range)
-            for x in x_positions:
-                self.command_queue.put(f"G0 X{x/100} Y{y/100}")
-        
-        print("Automation Queued")
-        self.is_automated = True
+        # Enqueue the macro like any other command
+        self.enqueue_cmd(command(
+            kind="AUTOMATION",
+            value="",
+            message= "Beginning Square Macro",
+            log=True
+        ))
 
     def setPosition1(self) -> None:
         self.automation_config.x_start = self.position.x

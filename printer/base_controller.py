@@ -397,9 +397,10 @@ class BasePrinterController:
         # Soft stop: pause, mark stop, nuke anything pending/resumable
         self.stop_requested = True
         self.paused = True
+        self._emit_message("Stopped", True, None)
         self._flush_pipeline()
     
-    def resume(self):
+    def reset_after_stop(self):
         # Clearing stop lets new commands run; nothing old will resume
         self.stop_requested = False
         self.paused = False
@@ -412,8 +413,10 @@ class BasePrinterController:
     def status_cmd(self, message: str, log: bool = True):
         return command(kind="STATUS", value=message, message = message, log=log)
 
-    def _handle_status(self, cmd: command):
-        if(cmd.log):
+    def _handle_status(self, cmd: command, emit = False):
+        if(emit):
+            self._emit_message(cmd.message, cmd.log, cmd)
+        elif(cmd.log):
             print("[Status]", cmd.message)
 
 
