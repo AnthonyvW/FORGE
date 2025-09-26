@@ -1,7 +1,11 @@
 import pygame
 from typing import Optional
+import numpy as np
+
 from UI.frame import Frame
 from UI.text import Text, TextStyle
+
+from image_processing.analyzers import find_focused_areas
 
 class CameraView(Frame):
     """
@@ -46,6 +50,7 @@ class CameraView(Frame):
         # track last applied size to avoid redundant resizes
         self._last_draw_w = None
         self._last_draw_h = None
+        self._last_frame_rect = None  # (dx, dy, fw, fh)
 
         super().__init__(
             parent=parent,
@@ -79,6 +84,13 @@ class CameraView(Frame):
         ih = max(0, abs_h - self.top_margin_px - self.bottom_margin_px)
         return ix, iy, iw, ih
 
+    def get_frame_rect(self):
+        """
+        Returns (x, y, w, h) of the currently drawn camera frame within the surface,
+        accounting for letterboxing. May be None if nothing drawn yet.
+        """
+        return self._last_frame_rect
+
     def get_absolute_geometry(self):
         # Expose the *inner* rect as the geometry of this view
         return self._compute_inner_rect()
@@ -106,9 +118,110 @@ class CameraView(Frame):
         # Center the frame (already scaled in camera.get_frame())
         dx = ix + (iw - fw) // 2
         dy = iy + (ih - fh) // 2
+        self._last_frame_rect = (dx, dy, fw, fh)
+
         if frame and iw > 0 and ih > 0:
             surface.blit(frame, (dx, dy))
 
         # Draw overlays/children on top
         for child in reversed(self.children):
             child.draw(surface)
+
+class FocusOverlay(Frame):
+    def __init__(
+        self,
+        camera_view: "CameraView",
+        *,
+        enabled = True,
+        tile_size: int = 48,
+        stride: int = 48,
+        top_percent: float = 0.15,
+        alpha_hard: int = 100,
+        border_alpha_hard: int = 200,
+        alpha_soft: int = 50,
+        border_alpha_soft: int = 120,
+        min_score: float | None = None,        # NEW
+        soft_min_score: float | None = None,   # NEW
+    ):
+        super().__init__(parent=camera_view, x=0, y=0, width=1, height=1,
+                         x_is_percent=True, y_is_percent=True,
+                         width_is_percent=True, height_is_percent=True,
+                         z_index=camera_view.z_index + 1,
+                         background_color=None)
+        self.camera_view = camera_view
+        self.tile_size = tile_size
+        self.stride = stride
+        self.top_percent = top_percent
+        self.alpha_hard = alpha_hard
+        self.border_alpha_hard = border_alpha_hard
+        self.alpha_soft = alpha_soft
+        self.border_alpha_soft = border_alpha_soft
+        self.min_score = min_score
+        self.soft_min_score = soft_min_score
+
+        self._frame_counter = 0
+        self._cached_tiles = None
+        self.enabled = enabled
+        
+    def set_enabled(self, value: bool) -> None:
+        self.enabled = bool(value)
+
+    def toggle_overlay(self) -> None:
+        self.enabled = not self.enabled
+
+    def draw(self, surface: pygame.Surface) -> None:
+        if not self.enabled:
+            return
+
+        fr = self.camera_view.get_frame_rect()
+        if not fr:
+            return
+        dx, dy, fw, fh = fr
+        if fw <= 0 or fh <= 0:
+            return
+
+        frame_surface = self.camera_view.camera.get_frame()
+        if not frame_surface:
+            return
+
+        pg_pixels = pygame.surfarray.array3d(frame_surface)
+        img_rgb = np.transpose(pg_pixels, (1, 0, 2))
+        img_bgr = img_rgb[:, :, ::-1]
+
+        self._frame_counter = (self._frame_counter + 1) % 2
+        if self._frame_counter == 0 or self._cached_tiles is None:
+            self._cached_tiles = find_focused_areas(
+                img_bgr,
+                tile_size=self.tile_size,
+                stride=self.stride,
+                top_percent=self.top_percent,
+                min_score=self.min_score,
+                soft_min_score=self.soft_min_score,
+            )
+
+        tiles = self._cached_tiles or []
+
+        # Style: hard = cyan-ish, soft = amber-ish
+        fill_hard = pygame.Color(0, 200, 255, self.alpha_hard)
+        border_hard = pygame.Color(0, 200, 255, self.border_alpha_hard)
+        fill_soft = pygame.Color(255, 180, 0, self.alpha_soft)
+        border_soft = pygame.Color(255, 180, 0, self.border_alpha_soft)
+
+        for t in tiles:
+            rx = dx + t.x
+            ry = dy + t.y
+            rw = t.w
+            rh = t.h
+
+            if t.band == "hard":
+                fill, border = fill_hard, border_hard
+                border_w = 2
+            else:
+                fill, border = fill_soft, border_soft
+                border_w = 1
+
+            rect_surf = pygame.Surface((rw, rh), pygame.SRCALPHA)
+            rect_surf.fill(fill)
+            surface.blit(rect_surf, (rx, ry))
+            pygame.draw.rect(surface, border, pygame.Rect(rx, ry, rw, rh), width=border_w)
+

@@ -9,7 +9,7 @@ from UI.text import Text, TextStyle
 from UI.frame import Frame
 from UI.section_frame import Section
 from UI.modal import Modal
-from UI.camera_view import CameraView
+from UI.camera_view import CameraView, FocusOverlay
 
 from UI.input.text_field import TextField
 from UI.input.button import Button, ButtonShape
@@ -72,6 +72,13 @@ def create_control_panel(
         background_color=pygame.Color("black"),
         right_margin_px=RIGHT_PANEL_WIDTH # reserve space for the control panel
     )
+    machine_vision_overlay = FocusOverlay(
+        camera_view,
+        tile_size=48,
+        stride=48,
+        min_score=50.0,       # hard band
+        soft_min_score=40.0,  # soft band
+    )
 
     # --- Control Box ---
     control_box = Section(parent=control_frame, title="Control", collapsible=False,
@@ -90,7 +97,7 @@ def create_control_panel(
     # --- Camera Settings ---
     camera_control = Section(parent=control_frame, title="Camera Control", collapsible=False, 
         x=10,y=automation_box.y + automation_box.height + box_spacing, width = RIGHT_PANEL_WIDTH - 20, height = 168)
-    _build_camera_control(camera_control, movementSystem, camera, camera_settings_modal)
+    _build_camera_control(camera_control, machine_vision_overlay, movementSystem, camera, camera_settings_modal)
 
     # --- Sample Box ---
     sample_box = Section(parent=control_frame, title="Sample Management", 
@@ -242,7 +249,7 @@ def _build_sample_box(sample_box, movementSystem, camera, current_sample_index):
     return go_to_sample_button, decrement_button, increment_button, sample_label, pos1_display, pos2_display
 
 
-def _build_camera_control(camera_control, movementSystem: AutomatedPrinter, camera, camera_settings_modal):
+def _build_camera_control(camera_control, machine_vision_overlay, movementSystem: AutomatedPrinter, camera, camera_settings_modal):
     camera_control.add_child(make_button(
         lambda pos: camera.capture_image() or camera.save_image(False, filename=pos.to_gcode()),
         10, 10, 117, 40, "Take Photo",
@@ -262,6 +269,12 @@ def _build_camera_control(camera_control, movementSystem: AutomatedPrinter, came
     
     Button(lambda: movementSystem.start_autofocus(), 10, 85, 117, 40, "Autofocus", parent=camera_control, text_style=make_button_text_style())
     Button(lambda: movementSystem.start_fine_autofocus(), 132, 85, 167, 40, "Fine Autofocus", parent=camera_control, text_style=make_button_text_style())
+    
+    def toggle_overlay():
+        print("Toggling Overlay")
+        machine_vision_overlay.toggle_overlay()
+
+    Button(toggle_overlay,x=304, y=85, width=40, height=40,text="MV", parent=camera_control, text_style=make_button_text_style())
     
 
 def _build_automation_control(automation_box, movementSystem):
