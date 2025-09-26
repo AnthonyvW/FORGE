@@ -2,6 +2,9 @@ from dataclasses import dataclass
 from typing import List, Tuple
 
 import pygame
+
+from printer.automated_controller import AutomatedPrinter
+
 from UI.text import Text, TextStyle
 from UI.frame import Frame
 from UI.section_frame import Section
@@ -44,7 +47,7 @@ def make_button(fn, x, y, w, h, text, shape=ButtonShape.RECTANGLE, z_index = 0, 
 
 def create_control_panel(
     root_frame: Frame,
-    movementSystem,
+    movementSystem: AutomatedPrinter,
     camera,
     current_sample_index: int
 ) -> Tuple[Frame, Text, Button, Button, Button, Text, Text]:
@@ -86,7 +89,7 @@ def create_control_panel(
 
     # --- Camera Settings ---
     camera_control = Section(parent=control_frame, title="Camera Control", collapsible=False, 
-        x=10,y=automation_box.y + automation_box.height + box_spacing, width = RIGHT_PANEL_WIDTH - 20, height = 123)
+        x=10,y=automation_box.y + automation_box.height + box_spacing, width = RIGHT_PANEL_WIDTH - 20, height = 168)
     _build_camera_control(camera_control, movementSystem, camera, camera_settings_modal)
 
     # --- Sample Box ---
@@ -239,7 +242,7 @@ def _build_sample_box(sample_box, movementSystem, camera, current_sample_index):
     return go_to_sample_button, decrement_button, increment_button, sample_label, pos1_display, pos2_display
 
 
-def _build_camera_control(camera_control, movementSystem, camera, camera_settings_modal):
+def _build_camera_control(camera_control, movementSystem: AutomatedPrinter, camera, camera_settings_modal):
     camera_control.add_child(make_button(
         lambda pos: camera.capture_image() or camera.save_image(False, filename=pos.to_gcode()),
         10, 10, 117, 40, "Take Photo",
@@ -256,6 +259,9 @@ def _build_camera_control(camera_control, movementSystem, camera, camera_setting
 
     
     Button(lambda: camera_settings_modal.open(), 254,  10, 117, 40, "Settings", parent=camera_control, text_style=make_button_text_style())
+    
+    Button(lambda: movementSystem.start_autofocus(), 10, 85, 117, 40, "Autofocus", parent=camera_control, text_style=make_button_text_style())
+    Button(lambda: movementSystem.start_fine_autofocus(), 132, 85, 167, 40, "Fine Autofocus", parent=camera_control, text_style=make_button_text_style())
     
 
 def _build_automation_control(automation_box, movementSystem):
