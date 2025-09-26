@@ -121,6 +121,7 @@ class BasePrinterController:
         self.register_handler("PRINTER", self._handle_printer)
         self.register_handler("MACRO", self._handle_macro)
         self.register_handler("MACRO_WAIT", self._handle_macro)
+        self.register_handler("STATUS", self._handle_status)
 
 
         # Initialize serial connection
@@ -159,7 +160,7 @@ class BasePrinterController:
                     port_device=dev,
                     baud=baud,
                     indicators=indicators,
-                    request=b"M115\r\n",
+                    request=b"M115\n",
                     read_window_s=10,
                     min_lines=3,
                 )
@@ -242,8 +243,7 @@ class BasePrinterController:
         self._handlers[kind] = fn
 
     def _handle_printer(self, cmd):    # default
-        gc = cmd.value.strip()
-        self._exec_gcode(gc, wait=False, message=cmd.message, log=cmd.log)
+        self._exec_gcode(cmd.value, wait=False, message=None, log=False)
 
     def _handle_unknown(self, cmd):    
         self._emit_message(f"Unknown kind: {cmd.kind}", True, cmd)
@@ -254,16 +254,25 @@ class BasePrinterController:
         self._send_command(command)
         self._wait_for_ok()
 
-    def _wait_for_ok(self) -> None:
-        """Wait for 'ok' response from printer"""
+    def _wait_for_ok(self, deadline_s: float = 60.0) -> None:
+        """Wait for 'ok' (or 'processing'), ignore empty reads, and time out cleanly."""
+        end = time.time() + deadline_s
         while True:
-            response = self.printer_serial.readline().decode().strip()
-            if response.lower() == 'ok' or response.lower() == 'processing':
+            if time.time() > end:
+                raise PrinterTimeout("Timed out waiting for 'ok' from printer")
+
+            response = self.printer_serial.readline().decode("utf-8", errors="ignore").strip()
+            if not response:
+                # Nothing arrived during the serial timeout window; don't print a blank line.
+                time.sleep(0.02)
+                continue
+
+            low = response.lower()
+            if low == "ok" or low == "processing":
                 break
-            elif response.startswith('error'):
-                raise RuntimeError(f"Printer reported error: {response}")
-            else:
-                print(response)
+            if response.startswith("error"):
+                raise PrinterFault(f"Printer reported error: {response}")
+            print(response)  # only non-empty, informative lines
 
     def _update_position(self, command: str) -> None:
         """Update internal position tracking based on G-code command"""
@@ -325,14 +334,20 @@ class BasePrinterController:
         self._exec_gcode("M400", wait=True, update_position=False, message="Waiting for moves...", log=True)
 
 
+
+
+
     # Command Queuer
-    def enqueue_cmd(self, kind: str, value: str, message: str = "", log: bool = False) -> None:
+    def enqueue_cmd(self, cmd: command) -> None:
         """Enqueue any command by kind."""
         if self.faulted:
-            self._emit_message("Ignored: controller faulted; call reset()", True, command(kind, value, message or None, log))
+            self._emit_message("Ignored: controller faulted; call reset()", True, cmd)
             return
-        
-        self.command_queue.put(command(kind, value, message or None, log))
+        self.command_queue.put(cmd)
+
+    def create_cmd(self, kind: str, value: str, message: str = "", log: bool = False) -> None:
+        # Creates a command with the arguments
+        return command(kind, value, message or None, log)
 
     def enqueue_printer(self, gc: str, message: str = "", log: bool = True) -> None:
         self.enqueue_cmd(self.printer_cmd(gc, message, log))
@@ -365,7 +380,7 @@ class BasePrinterController:
             home_and_move = self.macro_cmd(steps, wait_printer=True)
             self.enqueue_cmd(home_and_move)
         """
-        return command("PRINTER", gc, message or None, log)
+        return command(kind="PRINTER", value=gc, message = message or None, log=log)
 
     def _flush_pipeline(self):
         with self._front_lock:
@@ -394,6 +409,13 @@ class BasePrinterController:
         self.paused = not self.paused
         self._emit_message("Unpaused" if not self.paused else "Paused", True, None)
 
+    def status_cmd(self, message: str, log: bool = True):
+        return command(kind="STATUS", value=message, message = message, log=log)
+
+    def _handle_status(self, cmd: command):
+        if(cmd.log):
+            print("[Status]", cmd.message)
+
 
     # Macro Handling
     def _handle_macro(self, cmd: command) -> None:
@@ -413,12 +435,17 @@ class BasePrinterController:
                 return
 
             # cooperative pause/stop point between sub-steps
-            if self._pause_point():
+            if self.pause_point():
                 return  # stop requested; do not requeue
 
             # Execute one atomic sub-step
             if sub.kind == "PRINTER":
-                self._exec_gcode(sub.value, wait=wait_printer)
+                self._exec_gcode(
+                    sub.value,
+                    wait=wait_printer,
+                    message=sub.message,
+                    log=sub.log,
+                )
             else:
                 (self._handlers.get(sub.kind) or self._handle_unknown)(sub)
 
