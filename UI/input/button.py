@@ -63,6 +63,7 @@ class Button(Frame):
         self.is_hover = False
         self.is_enabled = True
         self.colors = colors or ButtonColors()
+        self.text_style = text_style or TextStyle(font_size=min(height - 4, 32))
 
         # If hover border isn't given, keep border consistent with normal foreground.
         if self.colors.hover_foreground is None:
@@ -70,8 +71,6 @@ class Button(Frame):
 
         # Create text child if provided
         if text:
-            if not text_style:
-                text_style = TextStyle(font_size=min(height - 4, 32))
             self.text = Text(
                 text,
                 x=0.5, y=0.5,
@@ -79,7 +78,7 @@ class Button(Frame):
                 y_is_percent=True,
                 x_align="center",
                 y_align="center",
-                style=text_style
+                style=self.text_style
             )
             # Inherit initial state
             self.text.set_is_enabled(self.is_enabled)
@@ -149,7 +148,7 @@ class Button(Frame):
                 y_is_percent=True,
                 x_align="center",
                 y_align="center",
-                style=TextStyle(font_size=min(self.height - 4, 32))
+                style=self.text_style,
             )
             self.text.set_is_enabled(self.is_enabled)
             self.text.set_is_hover(self.is_hover)

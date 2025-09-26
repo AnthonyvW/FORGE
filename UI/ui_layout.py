@@ -10,9 +10,11 @@ from UI.frame import Frame
 from UI.section_frame import Section
 from UI.modal import Modal
 from UI.camera_view import CameraView, FocusOverlay
+from UI.list_frame import ListFrame
 
 from UI.input.text_field import TextField
 from UI.input.button import Button, ButtonShape
+from UI.input.toggle_button import ToggleButton, ToggledColors
 from UI.styles import (
     make_button_text_style,
     make_display_text_style,
@@ -74,6 +76,7 @@ def create_control_panel(
     )
     machine_vision_overlay = FocusOverlay(
         camera_view,
+        enabled=False,
         tile_size=48,
         stride=48,
         min_score=50.0,       # hard band
@@ -101,7 +104,7 @@ def create_control_panel(
 
     # --- Sample Box ---
     sample_box = Section(parent=control_frame, title="Sample Management", 
-        x=10, y=camera_control.y + camera_control.height + box_spacing, width = RIGHT_PANEL_WIDTH - 20, height = 233)
+        x=10, y=camera_control.y + camera_control.height + box_spacing, width = RIGHT_PANEL_WIDTH - 20, height = 233+35*5)
     go_to_sample_button, decrement_button, increment_button, sample_label, pos1_display, pos2_display = _build_sample_box(sample_box, movementSystem, camera, current_sample_index)
   
     # --- Modal ---
@@ -238,13 +241,70 @@ def _build_sample_box(sample_box, movementSystem, camera, current_sample_index):
     )
 
     # 4th Row
-    Text(
-        text=f"Sample Name :",
+    """
+    on_overrides = ToggledColors(
+        background=pygame.Color("#7ed957"),        # green-ish when ON
+        hover_background=pygame.Color("#6bc24b"),
+        foreground=pygame.Color("#2f6f2a"),
+        hover_foreground=pygame.Color("#2f6f2a"),
+    )
+
+    def on_state_changed(state: bool, btn: ToggleButton):
+        # Fires only when the ON/OFF value changes.
+        btn.set_text("X" if state else "")
+
+    toggle = ToggleButton(
         parent=sample_box,
-        x=10, y=165,
+        x=10, y=160, width=30, height=30,
+        text="",             # label is independent of state; change it in on_change if you want
+        toggled=False,
+        on_change=on_state_changed,
+        toggled_colors=on_overrides,
+        text_style=make_button_text_style()
+    )
+
+    Text(
+        text=f"Sample 1:",
+        parent=sample_box,
+        x=50, y=165,
         style=make_button_text_style()
     )
-    TextField(parent=sample_box, x=170, y=160, width=200, height=30, placeholder="sample", border_color=pygame.Color("#b3b4b6"), text_color=pygame.Color("#5a5a5a"), on_text_change=camera.set_capture_name)
+    TextField(parent=sample_box, x=150, y=160, width=220, height=30, placeholder="sample", border_color=pygame.Color("#b3b4b6"), text_color=pygame.Color("#5a5a5a"), on_text_change=camera.set_capture_name)
+    """
+    def build_row(i: int, parent: Frame) -> None:
+        on_overrides = ToggledColors(
+            background=pygame.Color("#7ed957"),        # green-ish when ON
+            hover_background=pygame.Color("#6bc24b"),
+            foreground=pygame.Color("#2f6f2a"),
+            hover_foreground=pygame.Color("#2f6f2a"),
+        )
+
+        def on_state_changed(state: bool, btn: ToggleButton):
+            # Fires only when the ON/OFF value changes.
+            btn.set_text("X" if state else "")
+
+        ToggleButton(
+            parent=parent,
+            x=0, y=0, width=30, height=30,
+            text="",             # label is independent of state; change it in on_change if you want
+            toggled=False,
+            on_change=on_state_changed,
+            toggled_colors=on_overrides,
+            text_style=make_button_text_style()
+        )
+
+        Text(
+            text=f"Sample {i+1}:",
+            parent=parent,
+            x=40, y=5,
+            style=make_button_text_style()
+        )
+
+        TextField(parent=parent, x=140, y=0, width=220, height=30, placeholder=f"sample {i+1}", border_color=pygame.Color("#b3b4b6"), text_color=pygame.Color("#5a5a5a"), on_text_change=camera.set_capture_name)
+        
+    lst = ListFrame(parent=sample_box, x=10, y=160, width=1.0, height=300,
+                width_is_percent=True, height_is_percent=False,
+                row_height=35, count=6, row_builder=build_row)
 
     return go_to_sample_button, decrement_button, increment_button, sample_label, pos1_display, pos2_display
 
