@@ -6,8 +6,8 @@ from generic_config import ConfigManager, DEFAULT_FILENAME, ACTIVE_FILENAME
 
 @dataclass
 class PrinterSettings():
-        FIRMWARE_NAME: string = "Marlin"
-        MACHINE_TYPE: string = "Ender-3"
+        FIRMWARE_NAME: str = "Marlin"
+        MACHINE_TYPE: str = "Ender-3"
         baud_rate: int = 115200
         max_x: int = 23500  # Maximum X dimension in steps
         max_y: int = 22000  # Maximum Y dimension in steps

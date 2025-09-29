@@ -4,6 +4,7 @@ import time
 from pathlib import Path
 from PIL import Image
 import tkinter as tk
+import numpy as np
 from tkinter import filedialog
 
 from .camera_settings import (
@@ -251,8 +252,6 @@ class BaseCamera(ABC):
             return
 
         try:
-            import numpy as np
-            from PIL import Image
 
             # Accept either NumPy array or pygame.Surface
             if hasattr(img_data, "get_view") and hasattr(img_data, "get_size"):
@@ -291,7 +290,7 @@ class BaseCamera(ABC):
                 final_filename = f"{self.capture_name}{self.capture_index}{position_suffix}"
                 self.capture_index += 1
 
-            fformat = getattr(self.settings, "fformat", "png") or "png"
+            fformat = self.settings.fformat
             full_path = save_path / f"{final_filename}.{fformat}"
 
             print(f"Saving Image: {full_path}")
