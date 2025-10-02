@@ -71,7 +71,7 @@ def get_sample_position(index: int) -> Position:
     }
     return Position(
         x=int(lookup_table[index] * 100),
-        y=int(212 * 100),
+        y=int(200 * 100),
         z=int(11 * 100)
     )
 

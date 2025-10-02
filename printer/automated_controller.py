@@ -3,6 +3,7 @@ from .models import Position, FocusScore
 from .config import AutomationConfig
 from .base_controller import BasePrinterController
 from image_processing.analyzers import ImageAnalyzer
+from image_processing.machine_vision import MachineVision
 
 from forgeConfig import (
     ForgeSettings,
@@ -16,6 +17,7 @@ class AutomatedPrinter(BasePrinterController):
         super().__init__(forgeConfig)
         self.automation_config = automation_config
         self.camera = camera
+        self.machine_vision = MachineVision(camera, tile_size=48, stride=48, top_percent=0.15, min_score=50.0, soft_min_score=35.0)
         self.is_automated = False
 
         self.register_handler("AUTOFOCUS_DESCENT", self.autofocus_descent_macro)

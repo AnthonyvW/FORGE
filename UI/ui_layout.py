@@ -75,14 +75,7 @@ def create_control_panel(
         background_color=pygame.Color("black"),
         right_margin_px=RIGHT_PANEL_WIDTH # reserve space for the control panel
     )
-    machine_vision_overlay = FocusOverlay(
-        camera_view,
-        visible=False,
-        tile_size=48,
-        stride=48,
-        min_score=50.0,       # hard band
-        soft_min_score=35.0,  # soft band
-    )
+    machine_vision_overlay = FocusOverlay(camera_view, movementSystem.machine_vision)
 
     # --- Control Box ---
     control_box = Section(parent=control_frame, title="Control", collapsible=False,
