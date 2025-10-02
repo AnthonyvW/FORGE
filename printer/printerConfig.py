@@ -10,7 +10,7 @@ class PrinterSettings():
         MACHINE_TYPE: str = "Ender-3"
         baud_rate: int = 115200
         max_x: int = 23500  # Maximum X dimension in steps
-        max_y: int = 22000  # Maximum Y dimension in steps
+        max_y: int = 23500  # Maximum Y dimension in steps
         max_z: int = 6000   # Maximum Z dimension in steps
         step_size: int = 4  # minimum distance that can be moved in 0.01mm
     

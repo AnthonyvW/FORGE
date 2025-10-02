@@ -9,7 +9,8 @@ from UI.text import Text, TextStyle
 from UI.frame import Frame
 from UI.section_frame import Section
 from UI.modal import Modal
-from UI.camera_view import CameraView, FocusOverlay
+from UI.camera_view import CameraView
+from UI.focus_overlay import FocusOverlay
 from UI.list_frame import ListFrame
 
 from UI.input.text_field import TextField
@@ -76,11 +77,11 @@ def create_control_panel(
     )
     machine_vision_overlay = FocusOverlay(
         camera_view,
-        enabled=False,
+        visible=False,
         tile_size=48,
         stride=48,
         min_score=50.0,       # hard band
-        soft_min_score=40.0,  # soft band
+        soft_min_score=35.0,  # soft band
     )
 
     # --- Control Box ---
@@ -335,6 +336,14 @@ def _build_camera_control(camera_control, machine_vision_overlay, movementSystem
         machine_vision_overlay.toggle_overlay()
 
     Button(toggle_overlay,x=304, y=85, width=40, height=40,text="MV", parent=camera_control, text_style=make_button_text_style())
+
+    def toggle_overlay():
+        print("Setting Hot Pixel Map")
+        machine_vision_overlay.clear_hot_pixel_map()
+        count = machine_vision_overlay.build_hot_pixel_map(include_soft=True)  
+        print(f"Marked {count} hot tiles invalid")
+
+    Button(toggle_overlay,x=349, y=85, width=40, height=40,text="HP", parent=camera_control, text_style=make_button_text_style())
     
 
 def _build_automation_control(automation_box, movementSystem):

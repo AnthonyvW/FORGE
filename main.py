@@ -50,7 +50,7 @@ current_sample_index = 1
 def get_sample_position(index: int) -> Position:
     lookup_table = { # Somehow they are just inconsistent enough to be unable to calculate them on the fly.
         1:  19.00,
-        2:  29.64,
+        2:  30.56,
         3:  41.44,
         4:  53.28,
         5:  64.55,
@@ -72,7 +72,7 @@ def get_sample_position(index: int) -> Position:
     return Position(
         x=int(lookup_table[index] * 100),
         y=int(212 * 100),
-        z=int(3.4 * 100)
+        z=int(11 * 100)
     )
 
 (
