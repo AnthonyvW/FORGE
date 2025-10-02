@@ -18,8 +18,208 @@ class AutomatedPrinter(BasePrinterController):
         self.camera = camera
         self.is_automated = False
 
+        self.register_handler("AUTOFOCUS_DESCENT", self.autofocus_descent_macro)
         self.register_handler("AUTOFOCUS", self.autofocus_macro)
         self.register_handler("FINE_AUTOFOCUS", self.fine_autofocus)
+
+
+    def autofocus_descent_macro(self, cmd: command) -> None:
+        """
+        Autofocus (known descent): start above the sample and move *down only* to find focus.
+        Strategy:
+        - Coarse descent in 0.20 mm steps *until Z floor (0.00 mm)*.
+        - Fine polish in 0.04 mm steps around the coarse peak (both directions, clamped).
+        Units are ticks (0.01 mm). Printer min step = 4 ticks (0.04 mm).
+        """
+
+        # ---------------------- constants ---------------------------------------
+        Z_MIN_MM     = 0.00
+        TICKS_PER_MM = 100                 # 0.01 mm
+        STEP_TICKS   = 4                   # 0.04 mm
+        MAX_OFFSET_MM     = 5.60
+        MAX_OFFSET_TICKS  = int(round(MAX_OFFSET_MM * TICKS_PER_MM))  # 560
+        Z_MIN_TICKS  = int(round(Z_MIN_MM * TICKS_PER_MM))  # -> 0
+
+        # Coarse descent
+        COARSE_STEP_MM    = 0.20
+        COARSE_STEP_TICKS = int(round(COARSE_STEP_MM * TICKS_PER_MM))  # 20
+
+        # Optional early-stop guards (kept as-is unless you want them disabled)
+        DROP_STOP_PEAK_THRESHOLD = 100   # stop if we fall ≥ this from the best-so-far while descending
+        DROP_STOP_BASE_THRESHOLD = 100   # if baseline is best and we drop far below it, stop
+
+        # Refine pass
+        REFINE_FINE_STEP_TICKS   = STEP_TICKS    # 0.04 mm
+        REFINE_NO_IMPROVE_LIMIT  = 2
+
+        # ---------------------- helpers -----------------------------------------
+        def status(msg: str, log: bool = True) -> None:
+            self._handle_status(self.status_cmd(msg), log)
+
+        def quantize_ticks(z_ticks: int) -> int:
+            return int(round(z_ticks / STEP_TICKS) * STEP_TICKS)
+
+        def move_to_ticks(z_ticks: int) -> None:
+            z_ticks = max(z_ticks, Z_MIN_TICKS)  # clamp to floor
+            z_mm = z_ticks / TICKS_PER_MM
+            self._exec_gcode(f"G0 Z{z_mm:.2f}", wait=True)
+
+        def capture_and_score() -> float:
+            self._exec_gcode("M400", wait=True)
+            time.sleep(0.1)  # vibration settle
+            self.camera.capture_image()
+            while self.camera.is_taking_image:
+                time.sleep(0.01)
+            image = getattr(self.camera, "get_last_image", lambda: None)()
+            if image is None:
+                return float("-inf")
+            try:
+                if ImageAnalyzer.is_black(image):
+                    return float("-inf")
+                res = ImageAnalyzer.analyze_focus(image)
+                return float(getattr(res, "focus_score", float("-inf")))
+            except Exception:
+                return float("-inf")
+
+        # envelope: only allow start down to start - MAX_OFFSET (bounded by Z_MIN)
+        def within_envelope(zt: int) -> bool:
+            return (start_ticks - MAX_OFFSET_TICKS) <= zt <= start_ticks and zt >= Z_MIN_TICKS
+
+        # Score cache to avoid re-imaging the same Z
+        scores = {}  # z_ticks -> score
+        def score_at(zt: int) -> float:
+            zt = quantize_ticks(zt)
+            if zt < Z_MIN_TICKS or not within_envelope(zt):
+                return float("-inf")
+            if zt in scores:
+                return scores[zt]
+            move_to_ticks(zt)
+            s = capture_and_score()
+            scores[zt] = s
+            return s
+
+        # ---------------------- start / baseline --------------------------------
+        status(cmd.message or "Autofocus (descent) starting…", cmd.log)
+
+        if self.pause_point():
+            return
+
+        pos = self.get_position()
+        start_ticks = quantize_ticks(int(round(getattr(pos, "z", 1600))))  # default 16.00 mm
+        status(f"Start @ Z={start_ticks / TICKS_PER_MM:.2f} mm (descent expected)", cmd.log)
+
+        move_to_ticks(start_ticks)
+        baseline = capture_and_score()
+        scores[start_ticks] = baseline
+        best_ticks = start_ticks
+        best_score = baseline
+        status(f"[AF-Descent] Baseline Z={start_ticks / TICKS_PER_MM:.2f}  score={baseline:.3f}", False)
+
+        # ---------------------- COARSE: down-only until floor --------------------
+        if self.pause_point():
+            status("Autofocus paused/stopped.", True); return
+
+        max_k_down = min(MAX_OFFSET_TICKS // COARSE_STEP_TICKS,
+                        (start_ticks - Z_MIN_TICKS) // COARSE_STEP_TICKS)
+
+        peak_score = baseline
+        peak_ticks = start_ticks
+
+        for k in range(1, max_k_down + 1):
+            if self.pause_point():
+                status("Autofocus paused/stopped.", True); return
+
+            target = quantize_ticks(start_ticks - k * COARSE_STEP_TICKS)
+
+            # If the next step reaches or crosses the floor, take a final measurement at the floor then stop.
+            if target <= Z_MIN_TICKS:
+                target = Z_MIN_TICKS
+                s = score_at(target)
+                delta_base = s - baseline
+                status(f"[AF-Descent] ↓0.20mm  Z={target / TICKS_PER_MM:.2f} (FLOOR)  score={s:.3f}  Δbase={delta_base:+.1f}", True)
+                if s > best_score:
+                    best_score, best_ticks = s, target
+                if s > peak_score:
+                    peak_score, peak_ticks = s, target
+                break
+
+            s = score_at(target)
+            delta_base = s - baseline
+            status(f"[AF-Descent] ↓0.20mm  Z={target / TICKS_PER_MM:.2f}  score={s:.3f}  Δbase={delta_base:+.1f}", False)
+
+            # Track best/peak
+            if s > best_score:
+                best_score, best_ticks = s, target
+            if s > peak_score:
+                peak_score, peak_ticks = s, target
+
+            # Optional guards (leave enabled/disable as you prefer)
+            if best_ticks == start_ticks:
+                base_drop = baseline - s
+                if base_drop >= DROP_STOP_BASE_THRESHOLD:
+                    status(f"[AF-Descent] Early stop (baseline-drop): {base_drop:.1f} below baseline "
+                        f"({baseline:.1f} → {s:.1f})", True)
+                    break
+
+            peak_drop = peak_score - s
+            if peak_drop >= DROP_STOP_PEAK_THRESHOLD:
+                status(f"[AF-Descent] Early stop (peak-drop): {peak_drop:.1f} from peak "
+                    f"({peak_score:.1f} → {s:.1f})", True)
+                break
+
+        # Use the best coarse point as center for fine search
+        center = best_ticks
+
+        # ---------------------- REFINE: fine polish around peak ------------------
+        if self.pause_point():
+            status("Autofocus paused/stopped.", True); return
+
+        def climb_one_side(start: int, step_ticks: int) -> tuple[int, float]:
+            """
+            Move from start in +/-step_ticks increments until score worsens N times.
+            Clamped to Z_MIN and descent envelope (allows small 'up' around peak).
+            """
+            zt = start
+            best_local_z = start
+            best_local_s = scores.get(start, score_at(start))
+            no_imp = 0
+            while True:
+                if self.pause_point():
+                    status("Autofocus paused/stopped.", True); return best_local_z, best_local_s
+                nxt = quantize_ticks(zt + step_ticks)
+                if nxt < Z_MIN_TICKS:
+                    status("[AF-Descent] Z floor hit; stopping in this direction.", False)
+                    break
+                # allow slight 'up' from center if still ≤ start and within global envelope
+                if not within_envelope(min(nxt, start)):
+                    break
+                s = score_at(nxt)
+                status(f"[AF-Descent] 0.04mm {'up' if step_ticks>0 else 'down'}: Z={nxt / TICKS_PER_MM:.2f}  score={s:.3f}", False)
+                if s > best_local_s + 1e-6:
+                    best_local_z, best_local_s = nxt, s
+                    zt = nxt
+                    no_imp = 0
+                else:
+                    no_imp += 1
+                    zt = nxt
+                    if no_imp >= REFINE_NO_IMPROVE_LIMIT:
+                        break
+            return best_local_z, best_local_s
+
+        # Explore finely both sides around center
+        up_z, up_s     = climb_one_side(center,  REFINE_FINE_STEP_TICKS)
+        down_z, down_s = climb_one_side(center, -REFINE_FINE_STEP_TICKS)
+
+        local_best_z, local_best_s = (up_z, up_s) if up_s >= down_s else (down_z, down_s)
+        if local_best_s > best_score:
+            best_ticks, best_score = local_best_z, local_best_s
+
+        # ---------------------- finalize ----------------------------------------
+        if self.pause_point():
+            return
+        move_to_ticks(best_ticks)
+        status(f"Autofocus (descent) complete: Best Z={best_ticks / TICKS_PER_MM:.2f} mm  Score={best_score:.3f}", True)
+
 
 
 
@@ -85,10 +285,11 @@ class AutomatedPrinter(BasePrinterController):
         center = quantize_ticks(int(round(getattr(pos, "z", 1600))))  # fallback 16.00 mm
         status(f"[AF-Fine] Center Z={center / TICKS_PER_MM:.2f} mm", False)
 
-        # Score center
+        # Score center (baseline)
         best_z = center
-        best_s = score_at(center)
-        status(f"[AF-Fine] Baseline score={best_s:.3f}", False)
+        baseline_s = score_at(center)
+        best_s = baseline_s
+        status(f"[AF-Fine] Baseline score={baseline_s:.3f}  Δbase={0:+.1f}", False)
 
         # ---- climb one side helper ----
         def climb_one_side(start: int, step_sign: int) -> tuple[int, float]:
@@ -101,12 +302,19 @@ class AutomatedPrinter(BasePrinterController):
                 if self.pause_point():
                     status("Fine autofocus paused/stopped.", True)
                     return best_local_z, best_local_s
-                nxt = quantize_ticks(zt + step_sign * STEP_TICKS)
 
+                nxt = quantize_ticks(zt + step_sign * STEP_TICKS)
                 if not within_window(nxt, center):
                     break
+
                 s = score_at(nxt)
-                status(f"[AF-Fine] step {'+' if step_sign>0 else '-'}0.04: Z={nxt / TICKS_PER_MM:.2f}  score={s:.3f}", False)
+                d = s - baseline_s
+                status(
+                    f"[AF-Fine] step {'+' if step_sign>0 else '-'}0.04: "
+                    f"Z={nxt / TICKS_PER_MM:.2f}  score={s:.3f}  Δbase={d:+.1f}",
+                    False
+                )
+
                 if s > best_local_s + 1e-6:
                     best_local_z, best_local_s = nxt, s
                     zt = nxt
@@ -119,7 +327,6 @@ class AutomatedPrinter(BasePrinterController):
             return best_local_z, best_local_s
 
         # ---- search both sides (down and up) ----
-        # Try one step each way first to choose direction, but still explore both with early-stop
         down_z, down_s = climb_one_side(center, -1)
         up_z,   up_s   = climb_one_side(center,  1)
 
@@ -132,7 +339,11 @@ class AutomatedPrinter(BasePrinterController):
         if self.pause_point():
             return
         move_to_ticks(best_z)
-        status(f"[AF-Fine] Best Z={best_z / TICKS_PER_MM:.2f} mm  Score={best_s:.3f}", True)
+        status(
+            f"[AF-Fine] Best Z={best_z / TICKS_PER_MM:.2f} mm  "
+            f"Score={best_s:.3f}  Δbase={(best_s - baseline_s):.1f}",
+            True
+        )
 
 
 
