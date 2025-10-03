@@ -220,7 +220,7 @@ class AutomatedPrinter(BasePrinterController):
             self.camera.capture_image()
             while self.camera.is_taking_image:
                 time.sleep(0.01)
-            image = getattr(self.camera, "get_last_image", lambda: None)()
+            image = self.camera.get_last_frame(prefer="still", wait_for_still=False)
             if image is None:
                 return float("-inf")
             try:
@@ -404,7 +404,7 @@ class AutomatedPrinter(BasePrinterController):
             self.camera.capture_image()
             while self.camera.is_taking_image:
                 time.sleep(0.01)
-            image = getattr(self.camera, "get_last_image", lambda: None)()
+            image = self.camera.get_last_frame(prefer="still", wait_for_still=False)
             if image is None:
                 return float("-inf")
             try:
@@ -539,14 +539,14 @@ class AutomatedPrinter(BasePrinterController):
             self.camera.capture_image()
             while self.camera.is_taking_image:
                 time.sleep(0.01)
-            image = getattr(self.camera, "get_last_image", lambda: None)()
+            image = self.camera.get_last_frame(prefer="still", wait_for_still=False)
             if image is None:
                 return float("-inf")
             try:
                 if ImageAnalyzer.is_black(image):
                     return float("-inf")
                 res = ImageAnalyzer.analyze_focus(image)
-                return float(getattr(res, "focus_score", float("-inf")))
+                return float(res.focus_score)
             except Exception:
                 return float("-inf")
 

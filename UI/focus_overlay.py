@@ -87,21 +87,26 @@ class FocusOverlay(Frame):
 
     # ------------------------------- draw -------------------------------
     def draw(self, surface: pygame.Surface) -> None:
-        """
-        Draw order:
-        1) soft tiles (below min_score, above soft_min_score)
-        2) hard tiles (>= min_score)
-        3) invalid tiles (hot-pixel map) on top
-        """
         if not self.visible:
             return
 
         fr = self.camera_view.get_frame_rect()
         if not fr:
             return
-        dx, dy, _, _ = fr
 
-        # Compute once for this frame
+        fx, fy, fw, fh = fr
+
+        # Get raw frame shape so we can map RAW → GUI coordinates
+        raw = self.mv.capture_current_frame(color="rgb", source="latest")
+        if raw is None:
+            return
+        h, w = raw.shape[:2]
+
+        # Scale factors from RAW pixel space to the drawn frame rectangle
+        sx = float(fw) / float(w) if w else 1.0
+        sy = float(fh) / float(h) if h else 1.0
+
+        # Compute focused tiles once in RAW
         res = self.mv.compute_focused_tiles(include_soft=True, filter_invalid=True)
         soft_tiles = res["soft"]
         hard_tiles = res["hard"]
@@ -116,17 +121,26 @@ class FocusOverlay(Frame):
 
         # Soft tiles
         for t in soft_tiles:
-            _blit_rect(self.soft_fill, self.soft_border, self.soft_border_w,
-                       dx + int(t.x), dy + int(t.y), int(t.w), int(t.h))
+            rx = fx + int(round(t.x * sx))
+            ry = fy + int(round(t.y * sy))
+            rw = int(round(t.w * sx))
+            rh = int(round(t.h * sy))
+            _blit_rect(self.soft_fill, self.soft_border, self.soft_border_w, rx, ry, rw, rh)
 
         # Hard tiles
         for t in hard_tiles:
-            _blit_rect(self.hard_fill, self.hard_border, self.hard_border_w,
-                       dx + int(t.x), dy + int(t.y), int(t.w), int(t.h))
+            rx = fx + int(round(t.x * sx))
+            ry = fy + int(round(t.y * sy))
+            rw = int(round(t.w * sx))
+            rh = int(round(t.h * sy))
+            _blit_rect(self.hard_fill, self.hard_border, self.hard_border_w, rx, ry, rw, rh)
 
         # Invalid (hot) tiles
         if self.draw_invalid and self.mv.invalid_tiles:
             for (col, row) in self.mv.invalid_tiles:
-                r = self.mv.tile_rect_from_index(col, row)
-                _blit_rect(self.invalid_fill, self.invalid_border, self.invalid_border_w,
-                           dx + r.x, dy + r.y, r.w, r.h)
+                r = self.mv.tile_rect_from_index(col, row)  # RAW rect
+                rx = fx + int(round(r.x * sx))
+                ry = fy + int(round(r.y * sy))
+                rw = int(round(r.w * sx))
+                rh = int(round(r.h * sy))
+                _blit_rect(self.invalid_fill, self.invalid_border, self.invalid_border_w, rx, ry, rw, rh)

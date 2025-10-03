@@ -1,6 +1,5 @@
 import time
 from pathlib import Path
-import pygame
 import numpy as np
 from PIL import Image
 
@@ -19,14 +18,13 @@ class AmscopeCamera(BaseCamera):
     # Optional explicit subdir override; otherwise BaseCamera will derive 'amscope'
     CONFIG_SUBDIR = "amscope"
 
-    def __init__(self, frame_width: int, frame_height: int):
+    def __init__(self):
         # Minimal vendor state; BaseCamera handles common fields
         self.amcam = None
         self._callback_ref = None  # must keep a reference to avoid garbage collection
         self.buffer = None
         self.camera = None
-        self.frame = None
-        super().__init__(frame_width, frame_height)
+        super().__init__()
 
     # Load vendor SDK before initialize()
     def pre_initialize(self):
@@ -163,8 +161,6 @@ class AmscopeCamera(BaseCamera):
 
             # Start the pull mode BEFORE trying to stream
             self.camera.StartPullModeWithCallback(self._camera_callback, self)
-            # Recompute scale now that width/height are known
-            self.resize(self.frame_width, self.frame_height)
 
         except self.amcam.HRESULTException as e:
             print(f"Error starting stream: {e}")
@@ -203,12 +199,17 @@ class AmscopeCamera(BaseCamera):
         if event == _self.amcam.AMCAM_EVENT_IMAGE:
             try:
                 _self.camera.PullImageV2(_self.buffer, 24, None)
-                frame = pygame.image.frombuffer(_self.buffer, [_self.width, _self.height], "RGB")
-                _self._set_frame(frame)
+                
+                arr = np.frombuffer(_self.buffer, np.uint8).reshape((_self.height, _self.width, 3))
+                _self.last_stream_array = arr  # (H, W, 3), RGB
+                _self.last_stream_ts = time.time()
+
             except _self.amcam.HRESULTException as e:
                 print(f"Error in callback stream: {e}")
+
         elif event == _self.amcam.AMCAM_EVENT_STILLIMAGE:
             _self._process_frame()  # will set last_image, see below
+
         elif event == _self.amcam.AMCAM_EVENT_EXPO_START:
             print("Exposure start event detected")
 
@@ -237,10 +238,7 @@ class AmscopeCamera(BaseCamera):
             self.camera.PullStillImageV2(buf, 24, None)
             arr = np.frombuffer(buf, np.uint8).reshape((h, w, 3))
             self.last_image = arr
-
-            # Optional: briefly show the still in the preview, scaled correctly
-            still_surface = pygame.image.frombuffer(buf, (w, h), "RGB")
-            self._set_frame(still_surface)  # <- scale computed for still size
+            self.last_image_ts = time.time()
         except self.amcam.HRESULTException as e:
             print(f"Error processing frame: {e}")
         finally:

@@ -1,5 +1,4 @@
 from abc import ABC, abstractmethod
-import pygame
 import time
 from pathlib import Path
 from PIL import Image
@@ -11,7 +10,7 @@ from .camera_settings import (
     CameraSettings,
     CameraSettingsManager,
     ACTIVE_FILENAME,
-    DEFAULT_FILENAME,
+    DEFAULT_FILENAME
 )
 
 
@@ -21,28 +20,25 @@ class BaseCamera(ABC):
     # Subclasses may override to control config subfolder name
     CONFIG_SUBDIR: str | None = None
 
-    def __init__(self, frame_width: int, frame_height: int):
+    def __init__(self):
         # Public-ish, common state
         self.name = ""
         self.is_taking_image = False
-        self.last_image = None
+        self.last_image: np.ndarray | None = None   # (H, W, 3) RGB uint8
+        self.last_stream_array: np.ndarray | None = None  # (H, W, 3) RGB uint8
+
+        self.last_image_ts: float = 0.0
+        self.last_stream_ts: float = 0.0
+
         self.initialized = False
         # Safe default for save_image() until a subclass loads real settings
         self.settings = CameraSettings()
         self._scope = self.get_impl_key()
         CameraSettingsManager.scope_dir(self._scope)
 
-        # Dimensions of the UI frame we render into
-        self.frame_width = frame_width
-        self.frame_height = frame_height
-
         # Camera-native dimensions (subclasses may set real values during initialize())
-        self.width = frame_width
-        self.height = frame_height
-
-        # Current live frame (pygame Surface) and scale
-        self.frame = None
-        self.scale = 1
+        self.width = 1280
+        self.height = 720
 
         # Capture path/name/index and optional printer position
         self.capture_path = "./output/"
@@ -51,18 +47,14 @@ class BaseCamera(ABC):
         self.printer_position = (0, 0, 0)
 
         # Config roots
+        self._scope = self.get_impl_key()
+        CameraSettingsManager.scope_dir(self._scope)
         self.impl_config_dir = self.get_config_dir()  # e.g., config/amscope
         self.impl_config_dir.mkdir(parents=True, exist_ok=True)
-
-        # Create fallback surface
-        self.fallback_surface = pygame.Surface((frame_width, frame_height))
-        self.fallback_surface.fill((0, 0, 0))  # Black background
 
         # Allow subclasses to do pre-initialize work (e.g., load SDKs) before initialize()
         self.pre_initialize()
         self.initialized = self.initialize()
-        # Run the default resize scaffold once so scale/fallback are consistent
-        self.resize(frame_width, frame_height)
 
     # ----- Lifecycle hooks -----
     def pre_initialize(self):
@@ -74,27 +66,6 @@ class BaseCamera(ABC):
         """Initialize camera hardware and settings."""
         pass
 
-    # Provide a default resize scaffold that most cameras can reuse.
-    # Subclasses can override if they have special behavior.
-    def resize(self, frame_width: int, frame_height: int):
-        """Resize the UI frame dimensions and update scaling/fallback surface."""
-        self.frame_width = frame_width
-        self.frame_height = frame_height
-
-        # Update fallback surface size
-        self.fallback_surface = pygame.Surface((frame_width, frame_height))
-        self.fallback_surface.fill((0, 0, 0))
-
-        # Recompute scale if we have a live frame
-        if self.frame is not None:
-            try:
-                fw, fh = self.frame.get_width(), self.frame.get_height()
-                if fw > 0 and fh > 0:
-                    self.scale = min(frame_width / fw, frame_height / fh)
-            except Exception:
-                # Keep previous scale on error
-                pass
-
     @abstractmethod
     def update(self):
         """Update camera frame."""
@@ -104,16 +75,6 @@ class BaseCamera(ABC):
     def capture_image(self):
         """Capture a still image (subclass must implement)."""
         pass
-
-    def _set_frame(self, surf: pygame.Surface):
-        """Set a new frame and recompute scale for the current view box."""
-        self.frame = surf
-        try:
-            fw, fh = surf.get_width(), surf.get_height()
-            if fw > 0 and fh > 0:
-                self.scale = min(self.frame_width / fw, self.frame_height / fh)
-        except Exception:
-            pass
 
     # -------------------------------
     # Config & settings convenience
@@ -225,7 +186,7 @@ class BaseCamera(ABC):
         return restored
 
     # -------------------------------
-    # Image & UI helpers
+    # Image helpers
     # -------------------------------
     def get_last_image(self):
         """Get the last captured image, waiting if a capture is in progress."""
@@ -233,82 +194,84 @@ class BaseCamera(ABC):
             time.sleep(0.01)
         return self.last_image
 
-    def save_image(self, is_automated: bool, folder: str = "", filename: str = ""):
-        """
-        Save captured image to disk.
+    def get_last_stream_array(self) -> np.ndarray | None:
+        """Return latest live-stream RGB frame as (H, W, 3) uint8, or None."""
+        return self.last_stream_array
 
-        Args:
-            is_automated (bool): Whether to nest images under capture_name/
-            folder (str): Optional subfolder within capture_path to save the image
-            filename (str): Optional custom filename (without extension)
+    def get_last_frame(self, prefer: str = "latest", wait_for_still: bool = True):
         """
-        # Wait for any in-flight capture first
+        Return the latest RGB frame (H, W, 3) uint8 from either a still or the stream.
+
+        prefer:
+        - "latest" (default): whichever arrived most recently (compares timestamps)
+        - "still"           : still if present, else stream
+        - "stream"          : stream if present, else still
+
+        wait_for_still:
+        - If True, block briefly if a still capture is currently in progress.
+        """
+        if wait_for_still and self.is_taking_image:
+            while self.is_taking_image:
+                time.sleep(0.01)
+
+        # Fast paths for legacy behavior
+        if prefer == "still":
+            return self.last_image if self.last_image is not None else self.last_stream_array
+        if prefer == "stream":
+            return self.last_stream_array if self.last_stream_array is not None else self.last_image
+
+        # "latest" behavior: pick the freshest we’ve seen
+        li, ls = self.last_image, self.last_stream_array
+        ti, ts = self.last_image_ts, self.last_stream_ts
+
+        if li is None and ls is None:
+            return None
+        if li is None:
+            return ls
+        if ls is None:
+            return li
+        return li if ti >= ts else ls
+
+    def save_image(self, is_automated: bool, folder: str = "", filename: str = ""):
         while self.is_taking_image:
             time.sleep(0.01)
 
-        img_data = self.last_image
-        if img_data is None:
+        arr = self.last_image
+        if arr is None:
             print("No image to save (last_image is None).")
             return
 
         try:
-
-            # Accept either NumPy array or pygame.Surface
-            if hasattr(img_data, "get_view") and hasattr(img_data, "get_size"):
-                # Pygame Surface
-                w, h = img_data.get_size()
-                raw = pygame.image.tostring(img_data, "RGB")
-                arr = np.frombuffer(raw, dtype=np.uint8).reshape((h, w, 3))
-            else:
-                arr = np.array(img_data)  # makes a copy if needed
-
-            # Validate shape/dtype
+            arr = np.asarray(arr)
             if arr.ndim == 2:
-                # grayscale -> expand to 3 channels
-                arr = np.stack([arr]*3, axis=-1)
+                arr = np.stack([arr] * 3, axis=-1)
             if arr.ndim != 3 or arr.shape[2] not in (3, 4):
                 raise ValueError(f"Unsupported image shape: {arr.shape}")
-
             if arr.dtype != np.uint8:
-                # Try to scale/clip to uint8
                 arr = np.clip(arr, 0, 255).astype(np.uint8)
 
             mode = "RGBA" if arr.shape[2] == 4 else "RGB"
 
-            # Build save path
-            save_path = Path(self.capture_path).joinpath(self.capture_name) if is_automated else Path(self.capture_path)
+            save_path = Path(self.capture_path)
+            if is_automated:
+                save_path = save_path / self.capture_name
             if folder:
                 save_path = save_path / folder
             save_path.mkdir(parents=True, exist_ok=True)
 
-            # Build filename
             if filename:
                 final_filename = filename
             else:
                 x, y, z = getattr(self, "printer_position", (0, 0, 0))
-                position_suffix = f"PX{x}Y{y}Z{z}"
-                final_filename = f"{self.capture_name}{self.capture_index}{position_suffix}"
+                final_filename = f"{self.capture_name}{self.capture_index}PX{x}Y{y}Z{z}"
                 self.capture_index += 1
 
             fformat = self.settings.fformat
             full_path = save_path / f"{final_filename}.{fformat}"
-
             print(f"Saving Image: {full_path}")
             Image.fromarray(arr, mode=mode).save(str(full_path))
-
         except Exception as e:
             print(f"Error saving image: {e}")
-
-    def get_frame(self):
-        """Get the current frame scaled appropriately."""
-        if self.frame is None:
-            return self.fallback_surface
-
-        try:
-            return pygame.transform.scale_by(self.frame, self.scale)
-        except Exception as e:
-            print(f"Error scaling frame: {e}")
-            return self.fallback_surface
 
     def set_capture_path(self, path: str):
         """Set path for saving captured images."""

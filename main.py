@@ -39,7 +39,7 @@ if __name__ == "__main__":
 
     right_panel_width = RIGHT_PANEL_WIDTH
     # Initialize camera with the refactored class
-    camera = AmscopeCamera(width - right_panel_width, height)
+    camera = AmscopeCamera()
 
     # Initialize printer configurations
     automation_config = AutomationConfig()  # Using default values
@@ -48,7 +48,6 @@ if __name__ == "__main__":
     movementSystem = AutomatedPrinter(config, automation_config, camera)
 
     time.sleep(1.5)
-    camera.resize(width - right_panel_width, height)
 
     current_sample_index = 1
 
@@ -146,7 +145,6 @@ if __name__ == "__main__":
 
                 root_frame.width = new_width
                 root_frame.height = new_height
-                camera.resize(width - right_panel_width, height)
 
                 print(width, height)
             elif event.type == pygame.MOUSEBUTTONUP:

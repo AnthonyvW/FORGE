@@ -39,59 +39,150 @@ class MachineVision:
         self.soft_min_score = soft_min_score
 
         # Hot-pixel / invalid tiles as grid indices
-        self._invalid_tiles: Set[Tuple[int, int]] = set()
+        self._invalid_maps: Dict[Tuple[int, int], Set[Tuple[int, int]]] = {}
+
+    # ---------------- internal helpers ----------------
+    def _key_for_shape(self, arr: np.ndarray | None) -> Optional[Tuple[int, int]]:
+        if arr is None or arr.ndim < 2:
+            return None
+        h, w = int(arr.shape[0]), int(arr.shape[1])
+        return (w, h)
+
+    def _get_invalid_set(self, shape_key: Tuple[int, int], *, create: bool) -> Optional[Set[Tuple[int, int]]]:
+        if shape_key in self._invalid_maps:
+            return self._invalid_maps[shape_key]
+        if create:
+            s: Set[Tuple[int, int]] = set()
+            self._invalid_maps[shape_key] = s
+            return s
+        return None
 
     # --------------- public properties ---------------
     @property
     def invalid_tiles(self) -> Set[Tuple[int, int]]:
-        return self._invalid_tiles
+        """
+        Backwards-compatible view: returns the union of all invalid tiles across maps.
+        Prefer invalid_tiles_for_current_frame() when applying to a specific frame.
+        """
+        all_set: Set[Tuple[int, int]] = set()
+        for s in self._invalid_maps.values():
+            all_set |= s
+        return all_set
 
+    def invalid_tiles_for_current_frame(self) -> Set[Tuple[int, int]]:
+        """Invalid tiles set for the most recent available frame (auto-picks source)."""
+        img = self.capture_current_frame(color="rgb")  # auto
+        k = self._key_for_shape(img)
+        if k is None:
+            return set()
+        s = self._invalid_maps.get(k)
+        return s if s is not None else set()
+    
     # --------------- frame I/O ---------------
-    def capture_current_frame_bgr(self) -> np.ndarray | None:
+    def capture_current_frame(self, color: str = "rgb", source: str = "latest") -> np.ndarray | None:
         """
-        Grab the current camera frame and return it as a NumPy BGR array (H,W,3).
-        Returns None if no frame is available.
+        Return the latest RAW frame as a NumPy array in the requested color/order.
+
+        Args:
+            color (str): "rgb" (default), "bgr", or "gray".
+            source (str):
+                - "latest"   -> prefer full-res STILL if available, else STREAM (default)
+                - "still"  -> full-resolution still only
+                - "stream" -> live stream frame only (lower res)
+
+        Returns:
+            np.ndarray | None: (H, W, C) uint8 for rgb/bgr, (H, W) uint8 for gray.
         """
-        frame_surface = self.camera.get_frame()
-        if not frame_surface:
+        color = color.lower()
+        source = source.lower()
+
+        # 1) Choose source
+        if source == "latest":
+            # Prefer still; fall back to stream. Wait if a still is currently being taken.
+            img = self.camera.get_last_frame(prefer="latest", wait_for_still=True)
+        elif source == "still":
+            # Strict: only return a finished still (no fallback)
+            img = self.camera.get_last_image()
+        elif source == "stream":
+            # Strict: only return the latest stream frame (no fallback)
+            img = self.camera.get_last_stream_array()
+        else:
+            raise ValueError("source must be 'latest', 'still', or 'stream'")
+
+        if img is None:
             return None
 
-        pg_pixels = pygame.surfarray.array3d(frame_surface)  # (W,H,3) RGB
-        img_rgb = np.transpose(pg_pixels, (1, 0, 2))         # (H,W,3)
-        img_bgr = img_rgb[:, :, ::-1]                        # RGB->BGR
-        return img_bgr
+        # 2) Convert color request
+        if color == "rgb":
+            arr = img
+        elif color == "bgr":
+            arr = img[..., ::-1]
+        elif color == "gray":
+            # ITU-R BT.601 luma, uint8
+            arr = np.dot(img[..., :3], [0.299, 0.587, 0.114]).astype(np.uint8)
+        else:
+            raise ValueError("Unsupported color. Use 'rgb', 'bgr', or 'gray'.")
+
+        # 3) Ensure contiguous
+        return arr if arr.flags.c_contiguous else np.ascontiguousarray(arr)
 
     # --------------- tile helpers ---------------
     def tile_index_from_xy(self, x: int, y: int) -> Tuple[int, int]:
-        """Top-left pixel (overlay space) → (col,row) index using stride."""
         col = max(0, int(x) // self.stride)
         row = max(0, int(y) // self.stride)
         return (col, row)
 
     def tile_rect_from_index(self, col: int, row: int, w: int | None = None, h: int | None = None) -> pygame.Rect:
-        """(col,row) grid index → pygame.Rect in overlay space."""
         rw = int(w if w is not None else self.tile_size)
         rh = int(h if h is not None else self.tile_size)
         rx = int(col * self.stride)
         ry = int(row * self.stride)
         return pygame.Rect(rx, ry, rw, rh)
-
+    
     # --------------- invalid map ---------------
-    def clear_hot_pixel_map(self) -> None:
-        self._invalid_tiles.clear()
-
-    def is_tile_invalid(self, col: int, row: int) -> bool:
-        return (col, row) in self._invalid_tiles
-
-    def filter_tiles(self, tiles: Iterable) -> list:
+    def clear_hot_pixel_map(self, *, source: Optional[str] = None, shape: Optional[Tuple[int, int]] = None) -> None:
         """
-        Drop any tiles whose top-left falls on an invalid (col,row).
-        Assumes tiles have x,y members in overlay coordinates.
+        Clear invalid maps.
+        - If shape is provided, clears only that (w,h) grid.
+        - Else if source provided, clears the current frame map for that source.
+        - Else clears all maps.
         """
+        if shape is not None:
+            self._invalid_maps.pop(tuple(shape), None)
+            return
+
+        if source is not None:
+            img = self.capture_current_frame(color="rgb", source=source)
+            k = self._key_for_shape(img)
+            if k is not None and k in self._invalid_maps:
+                self._invalid_maps.pop(k, None)
+            return
+
+        # Clear all
+        self._invalid_maps.clear()
+
+    def is_tile_invalid(self, col: int, row: int, *, shape: Optional[Tuple[int, int]] = None) -> bool:
+        """
+        Check invalid tile against the specified shape (w,h) or the latest frame's map.
+        """
+        if shape is None:
+            img = self.capture_current_frame(color="rgb")
+            k = self._key_for_shape(img)
+        else:
+            k = tuple(shape)
+        if k is None:
+            return False
+        s = self._invalid_maps.get(k)
+        return (col, row) in s if s is not None else False
+
+    def _filter_tiles_for_shape(self, tiles: Iterable, shape_key: Tuple[int, int]) -> list:
+        inv = self._invalid_maps.get(shape_key, set())
         out = []
+        stride = self.stride
         for t in tiles:
-            col, row = self.tile_index_from_xy(int(t.x), int(t.y))
-            if (col, row) not in self._invalid_tiles:
+            col = int(t.x) // stride
+            row = int(t.y) // stride
+            if (col, row) not in inv:
                 out.append(t)
         return out
 
@@ -101,18 +192,16 @@ class MachineVision:
         *,
         include_soft: bool = True,
         filter_invalid: bool = True,
+        source: str = "latest",
     ) -> dict:
         """
-        Returns a dict with lists of tiles:
-        {
-          "all":  [...],
-          "hard": [...],  # >= min_score
-          "soft": [...],  # soft_min_score <= score < min_score (if enabled)
-        }
+        Returns a dict with lists of tiles for the requested source/frame grid.
         """
-        img_bgr = self.capture_current_frame_bgr()
+        img_bgr = self.capture_current_frame(color="bgr", source=source)
         if img_bgr is None:
             return {"all": [], "hard": [], "soft": []}
+
+        shape_key = self._key_for_shape(img_bgr)
 
         tiles_all = find_focused_areas(
             img_bgr,
@@ -123,7 +212,7 @@ class MachineVision:
             soft_min_score=(self.soft_min_score if include_soft else None),
         ) or []
 
-        # Split soft/hard by score (if soft band enabled)
+        # Split soft/hard
         soft_tiles, hard_tiles = [], []
         if include_soft and self.soft_min_score is not None:
             hard_cut = self.min_score if self.min_score is not None else float("inf")
@@ -136,9 +225,9 @@ class MachineVision:
         else:
             hard_tiles = tiles_all
 
-        if filter_invalid:
-            soft_tiles = self.filter_tiles(soft_tiles)
-            hard_tiles = self.filter_tiles(hard_tiles)
+        if filter_invalid and shape_key is not None:
+            hard_tiles = self._filter_tiles_for_shape(hard_tiles, shape_key)
+            soft_tiles = self._filter_tiles_for_shape(soft_tiles, shape_key)
 
         return {
             "all":  (hard_tiles + soft_tiles) if include_soft else hard_tiles,
@@ -150,17 +239,18 @@ class MachineVision:
         self,
         *,
         band: str = "all",       # "all" | "hard" | "soft"
-        as_rects: bool = False   # pygame.Rects in overlay coords
+        as_rects: bool = False,  # pygame.Rects in raw image coords
+        source: str = "latest",
     ):
-        result = self.compute_focused_tiles(include_soft=(band in ("all", "soft")), filter_invalid=True)
+        result = self.compute_focused_tiles(include_soft=(band in ("all", "soft")),
+                                            filter_invalid=True,
+                                            source=source)
         tiles = result.get(band, result["all"]) if band in ("all", "hard", "soft") else result["all"]
 
         if not as_rects:
             return tiles
 
-        rects = []
-        for t in tiles:
-            rects.append(pygame.Rect(int(t.x), int(t.y), int(t.w), int(t.h)))
+        rects = [pygame.Rect(int(t.x), int(t.y), int(t.w), int(t.h)) for t in tiles]
         return rects
 
     # --------------- hot-pixel sampler ---------------
@@ -172,55 +262,83 @@ class MachineVision:
         min_hits: int = 1,
         max_fps: int = 30,
         include_soft: bool = True,
+        sources: Sequence[str] = ("stream", "still"),   # <— default: learn both grids
+        still_every_n_frames: int = 1,                  # capture a still each time we sample "still"
     ) -> Dict[str, int]:
         """
-        Sample the camera with the lens cap on. Any tile that appears 'in focus'
-        ≥ min_hits times during duration_sec is marked INVALID (hot).
+        Sample with the lens cap on. Any tile that appears 'in focus' ≥ min_hits times
+        during duration_sec is marked INVALID for that frame's (w,h) grid.
+
+        Builds/updates a separate map per grid. If 'still' is included in sources,
+        we actively capture stills so that map is populated too.
         """
         t_end = time.monotonic() + max(0.05, float(duration_sec))
         min_hits = max(1, int(min_hits))
-        stride = int(self.stride)
-
-        hits: Dict[Tuple[int, int], int] = defaultdict(int)
-
-        # Simple FPS throttle
         min_dt = 1.0 / float(max(1, int(max_fps)))
-        t_next = 0.0
+        stride = self.stride
+
+        # Per-grid hit counters
+        pergrid_hits: Dict[Tuple[int, int], Dict[Tuple[int, int], int]] = defaultdict(lambda: defaultdict(int))
 
         frames = 0
         while time.monotonic() < t_end:
-            now = time.monotonic()
-            if now < t_next:
-                time.sleep(max(0.0, t_next - now))
-            t_next = time.monotonic() + min_dt
+            t0 = time.monotonic()
 
-            res = self.compute_focused_tiles(include_soft=include_soft, filter_invalid=False)
-            for t in res["all"]:
-                col = int(t.x) // stride
-                row = int(t.y) // stride
-                hits[(col, row)] += 1
+            for src in sources:
+                # If sampling 'still', capture a fresh still periodically (default: every pass)
+                if src == "still" and (frames % max(1, still_every_n_frames) == 0):
+                    # Assumes your camera exposes capture_image(). (You mentioned using it.)
+                    self.camera.capture_image()
+                    while self.camera.is_taking_image:
+                        time.sleep(0.01)
+
+                res = self.compute_focused_tiles(include_soft=include_soft, filter_invalid=False, source=src)
+                img = self.capture_current_frame(color="rgb", source=src)
+                k = self._key_for_shape(img)
+                if k is None:
+                    continue
+
+                hits = pergrid_hits[k]
+                for t in res["all"]:
+                    col = int(t.x) // stride
+                    row = int(t.y) // stride
+                    hits[(col, row)] = hits.get((col, row), 0) + 1
 
             frames += 1
 
-        candidates: Set[Tuple[int, int]] = {ij for ij, n in hits.items() if n >= min_hits}
+            # FPS throttle
+            dt = time.monotonic() - t0
+            if dt < min_dt:
+                time.sleep(min_dt - dt)
 
-        if dilate > 0 and candidates:
-            expanded: Set[Tuple[int, int]] = set()
-            for (c, r) in candidates:
-                for dc in range(-dilate, dilate + 1):
-                    for dr in range(-dilate, dilate + 1):
-                        expanded.add((c + dc, r + dr))
-            candidates = expanded
+        # Commit candidates per grid
+        total_new = 0
+        total_candidates = 0
 
-        before = len(self._invalid_tiles)
-        self._invalid_tiles |= candidates
-        after = len(self._invalid_tiles)
+        for grid_key, hits in pergrid_hits.items():
+            candidates: Set[Tuple[int, int]] = {ij for ij, n in hits.items() if n >= min_hits}
 
+            if dilate > 0 and candidates:
+                expanded: Set[Tuple[int, int]] = set()
+                for (c, r) in candidates:
+                    for dc in range(-dilate, dilate + 1):
+                        for dr in range(-dilate, dilate + 1):
+                            expanded.add((c + dc, r + dr))
+                candidates = expanded
+
+            inv = self._get_invalid_set(grid_key, create=True)
+            before = len(inv)
+            inv |= candidates
+            after = len(inv)
+
+            total_new += (after - before)
+            total_candidates += len(candidates)
+        print("Finished Creating Hot Pixel Maps")
         return {
             "frames": frames,
-            "candidates": len(candidates),
-            "newly_marked": after - before,
-            "total_invalid": after,
+            "candidates": total_candidates,
+            "newly_marked": total_new,
+            "total_invalid_maps": {f"{w}x{h}": len(s) for (w, h), s in self._invalid_maps.items()},
         }
 
     # --------------- Color Sampler -----------------
@@ -257,7 +375,7 @@ class MachineVision:
         Returns:
             4-tuple in the chosen space with Y appended, or None if no frame / empty ROI.
         """
-        img_bgr = self.capture_current_frame_bgr()
+        img_bgr = self.capture_current_frame(color="bgr")
         if img_bgr is None:
             return None
 
