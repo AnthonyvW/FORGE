@@ -1,5 +1,8 @@
 from dataclasses import dataclass
 from typing import List, Tuple
+import os
+import sys
+import subprocess
 
 import pygame
 
@@ -93,7 +96,7 @@ def create_control_panel(
 
     # --- Camera Settings ---
     camera_control = Section(parent=control_frame, title="Camera Control", collapsible=False, 
-        x=10,y=automation_box.y + automation_box.height + box_spacing, width = RIGHT_PANEL_WIDTH - 20, height = 168)
+        x=10,y=automation_box.y + automation_box.height + box_spacing, width = RIGHT_PANEL_WIDTH - 20, height = 213)
     _build_camera_control(camera_control, machine_vision_overlay, movementSystem, camera, camera_settings_modal)
 
     # --- Sample Box ---
@@ -324,11 +327,31 @@ def _build_camera_control(camera_control, machine_vision_overlay, movementSystem
     Button(lambda: movementSystem.start_autofocus(), 10, 85, 117, 40, "Autofocus", parent=camera_control, text_style=make_button_text_style())
     Button(lambda: movementSystem.start_fine_autofocus(), 132, 85, 167, 40, "Fine Autofocus", parent=camera_control, text_style=make_button_text_style())
     
+    def open_capture_folder():
+        """Open the capture folder in the system's default file explorer."""
+        # Convert relative paths to absolute
+        folder = os.path.abspath(camera.capture_path)
+
+        if not os.path.isdir(folder):
+            print(f"Path does not exist or is not a folder: {folder}")
+            return
+
+        if sys.platform.startswith("win"):
+            os.startfile(folder)  # type: ignore[attr-defined]
+        elif sys.platform.startswith("darwin"):  # macOS
+            subprocess.run(["open", folder])
+        else:  # Linux and other Unix
+            subprocess.run(["xdg-open", folder])
+
+        print("Opened Image Output Folder")
+
+    Button(open_capture_folder,x=304, y=85, width=40, height=40,text="OF", parent=camera_control, text_style=make_button_text_style())
+
     def toggle_overlay():
         print("Toggling Overlay")
         machine_vision_overlay.toggle_overlay()
 
-    Button(toggle_overlay,x=304, y=85, width=40, height=40,text="MV", parent=camera_control, text_style=make_button_text_style())
+    Button(toggle_overlay,x=10, y=130, width=117, height=40,text="Toggle MV", parent=camera_control, text_style=make_button_text_style())
 
     def toggle_overlay():
         print("Setting Hot Pixel Map")
@@ -336,7 +359,11 @@ def _build_camera_control(camera_control, machine_vision_overlay, movementSystem
         count = machine_vision_overlay.build_hot_pixel_map(include_soft=True)  
         print(f"Marked {count} hot tiles invalid")
 
-    Button(toggle_overlay,x=349, y=85, width=40, height=40,text="HP", parent=camera_control, text_style=make_button_text_style())
+    Button(toggle_overlay,x=132, y=130, width=212, height=40, text="MV Hot Pixel Filter", parent=camera_control, text_style=make_button_text_style())
+    def print_color():
+        print(movementSystem.machine_vision.get_average_color())
+    
+    Button(print_color,x=349, y=85, width=40, height=40,text="C", parent=camera_control, text_style=make_button_text_style())
     
 
 def _build_automation_control(automation_box, movementSystem):

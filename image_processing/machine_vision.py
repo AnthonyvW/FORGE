@@ -1,6 +1,6 @@
 import time
 from collections import defaultdict
-from typing import Iterable, Set, Tuple, Dict
+from typing import Iterable, Set, Tuple, Dict, Optional, Sequence
 
 import numpy as np
 import pygame
@@ -222,3 +222,157 @@ class MachineVision:
             "newly_marked": after - before,
             "total_invalid": after,
         }
+
+    # --------------- Color Sampler -----------------
+    def get_average_color(
+        self,
+        *,
+        space: str = "BGR",               # "BGR", "RGB", or "HSV"
+        rect: Optional[pygame.Rect | Sequence[int]] = None,
+        as_int: bool = True,
+        y_method: str = "luma601"         # "luma601", "luma709", "relY_linear", "LabLstar"
+    ) -> Optional[Tuple[int | float, int | float, int | float, int | float]]:
+        """
+        Compute the average color of the current camera frame and append Y (luminance-like scalar).
+
+        Args:
+            space:
+                Output color space for the first 3 channels: "BGR", "RGB", or "HSV".
+                Return is a 4-tuple: (B,G,R,Y), (R,G,B,Y), or (H,S,V,Y).
+            rect:
+                Optional ROI to average, accepts pygame.Rect or (x, y, w, h).
+            as_int:
+                If True, quantizes to ints (BGR/RGB/SV in [0,255], H in [0,179]).
+                Y scaling depends on y_method (see below).
+            y_method:
+                - "luma601": Y′ = 0.299R′ + 0.587G′ + 0.114B′ on gamma-encoded 8-bit channels.
+                  as_int=True → [0,255]; as_int=False → float in [0,255].
+                - "luma709": Y′ = 0.2126R′ + 0.7152G′ + 0.0722B′ on gamma-encoded channels.
+                  as_int=True → [0,255]; as_int=False → float in [0,255].
+                - "relY_linear": Undo sRGB gamma, then Y = 0.2126R + 0.7152G + 0.0722B (linear).
+                  as_int=True → scaled to [0,255]; as_int=False → float in [0,1].
+                - "LabLstar": Convert to linear Y then CIELAB L* from Y/Yn (D65, Yn=1).
+                  as_int=True → scaled to [0,255] from [0,100]; as_int=False → float in [0,100].
+
+        Returns:
+            4-tuple in the chosen space with Y appended, or None if no frame / empty ROI.
+        """
+        img_bgr = self.capture_current_frame_bgr()
+        if img_bgr is None:
+            return None
+
+        h, w, _ = img_bgr.shape
+
+        # ----- ROI clamp -----
+        if rect is not None:
+            r = rect if isinstance(rect, pygame.Rect) else pygame.Rect(*rect)
+            x0 = max(0, min(r.x, w))
+            y0 = max(0, min(r.y, h))
+            x1 = max(0, min(r.x + r.w, w))
+            y1 = max(0, min(r.y + r.h, h))
+            if x1 <= x0 or y1 <= y0:
+                return None
+            roi = img_bgr[y0:y1, x0:x1, :]
+        else:
+            roi = img_bgr
+
+        # ---- helpers ----
+        def srgb_to_linear_01(u8: np.ndarray) -> np.ndarray:
+            """u8: uint8/float in 0..255 -> linear 0..1"""
+            u = u8.astype(np.float64) / 255.0
+            return np.where(u <= 0.04045, u / 12.92, ((u + 0.055) / 1.055) ** 2.4)
+
+        def lab_Lstar_from_Y(Y_lin_01: np.ndarray) -> np.ndarray:
+            """Y in 0..1 (relative to Yn=1, D65) -> L* per pixel"""
+            # CIE f(t)
+            eps = (6.0 / 29.0) ** 3  # ~0.008856
+            kappa = (29.0 / 3.0) ** 3 / 116.0  # used in linear segment form
+            t = Y_lin_01
+            # Standard piecewise:
+            f = np.where(t > eps, np.cbrt(t), (t * (1.0 / (3.0 * (6.0 / 29.0) ** 2))) + (4.0 / 29.0))
+            return 116.0 * f - 16.0  # 0..100
+
+        # ---- compute out3 (first three channels) ----
+        space_u = space.upper()
+        if space_u == "RGB":
+            mean_bgr = roi.mean(axis=(0, 1)).astype(np.float64)  # [B,G,R] in 0..255
+            out3 = (mean_bgr[2], mean_bgr[1], mean_bgr[0])      # (R,G,B)
+        elif space_u == "BGR":
+            mean_bgr = roi.mean(axis=(0, 1)).astype(np.float64)  # [B,G,R] in 0..255
+            out3 = (mean_bgr[0], mean_bgr[1], mean_bgr[2])      # (B,G,R)
+        elif space_u == "HSV":
+            try:
+                import cv2
+            except Exception as e:
+                raise RuntimeError(
+                    "HSV output requires OpenCV (cv2). Install opencv-python to use space='HSV'."
+                ) from e
+            roi_hsv = cv2.cvtColor(roi, cv2.COLOR_BGR2HSV)      # H:0..179, S,V:0..255
+            H = roi_hsv[:, :, 0].astype(np.float64)
+            S = roi_hsv[:, :, 1].astype(np.float64)
+            V = roi_hsv[:, :, 2].astype(np.float64)
+            # Circular mean for Hue
+            ang = H * (2.0 * np.pi / 180.0)
+            sin_mean = np.sin(ang).mean()
+            cos_mean = np.cos(ang).mean()
+            mean_ang = np.arctan2(sin_mean, cos_mean)
+            if mean_ang < 0:
+                mean_ang += 2.0 * np.pi
+            H_mean = (mean_ang * 180.0) / (2.0 * np.pi)
+            out3 = (H_mean, float(S.mean()), float(V.mean()))
+        else:
+            raise ValueError("space must be one of: 'BGR', 'RGB', 'HSV'")
+
+        # ---- compute Y according to y_method ----
+        ym = y_method.lower()
+        if ym not in ("luma601", "luma709", "rely_linear", "lablstar"):
+            raise ValueError("y_method must be one of: 'luma601', 'luma709', 'relY_linear', 'LabLstar'")
+
+        if ym in ("luma601", "luma709"):
+            # Use channel means on gamma-encoded values (0..255)
+            # mean_bgr is available if space was BGR/RGB; recompute if space='HSV'
+            if space_u == "HSV":
+                mean_bgr_full = roi.mean(axis=(0, 1)).astype(np.float64)  # [B,G,R]
+            else:
+                mean_bgr_full = mean_bgr  # from above
+            Bm, Gm, Rm = mean_bgr_full[0], mean_bgr_full[1], mean_bgr_full[2]
+            if ym == "luma601":
+                Y_val = 0.114 * Bm + 0.587 * Gm + 0.299 * Rm
+            else:
+                Y_val = 0.0722 * Bm + 0.7152 * Gm + 0.2126 * Rm  # BT.709 luma on gamma-encoded
+            # Scale rules
+            Y_out = int(round(Y_val)) if as_int else float(Y_val)
+
+        elif ym == "rely_linear":
+            # Undo gamma per channel, then weighted sum (BT.709/sRGB primaries)
+            B_lin = srgb_to_linear_01(roi[:, :, 0])
+            G_lin = srgb_to_linear_01(roi[:, :, 1])
+            R_lin = srgb_to_linear_01(roi[:, :, 2])
+            Y_lin_mean = float((0.0722 * B_lin + 0.7152 * G_lin + 0.2126 * R_lin).mean())
+            if as_int:
+                Y_out = int(round(Y_lin_mean * 255.0))  # present in 8-bit scale
+            else:
+                Y_out = Y_lin_mean  # 0..1
+
+        else:  # "LabLstar"
+            # Linear relative Y then L* per pixel, average L*
+            B_lin = srgb_to_linear_01(roi[:, :, 0])
+            G_lin = srgb_to_linear_01(roi[:, :, 1])
+            R_lin = srgb_to_linear_01(roi[:, :, 2])
+            Y_lin = 0.0722 * B_lin + 0.7152 * G_lin + 0.2126 * R_lin  # 0..1
+            Lstar = lab_Lstar_from_Y(Y_lin)
+            Lstar_mean = float(Lstar.mean())  # 0..100
+            if as_int:
+                Y_out = int(round(Lstar_mean * 255.0 / 100.0))  # map 0..100 -> 0..255
+            else:
+                Y_out = Lstar_mean
+
+        # ---- quantize out3 if requested ----
+        if as_int:
+            if space_u == "HSV":
+                out3_q = (int(round(out3[0])), int(round(out3[1])), int(round(out3[2])))
+            else:
+                out3_q = (int(round(out3[0])), int(round(out3[1])), int(round(out3[2])))
+            return (*out3_q, Y_out)
+        else:
+            return (float(out3[0]), float(out3[1]), float(out3[2]), float(Y_out))
