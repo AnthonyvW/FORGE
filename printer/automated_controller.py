@@ -299,76 +299,178 @@ class AutomatedPrinter(BasePrinterController):
     # Autofocus
     def autofocus_descent_macro(self, cmd: command) -> None:
         """
-        Autofocus when starting above the sample and moving down only to find focus.
-        Coarse: 0.20 mm descent steps to Z floor; Refine: 0.04 mm around best.
+        Descent-only autofocus with configurable envelope, step sizes, and scoring.
+        Coarse: fixed downward march from the start position toward Z floor.
+        Refine: fine polish around the best coarse Z.
+
+        Behavior mirrors the 'tunables' style of `autofocus_macro` and `fine_autofocus`.
         """
-        COARSE_STEP_MM = 0.20
+
+        # =========================== TUNABLES (easy to tweak) ===========================
+        # Focus/strategy thresholds
+        FOCUS_PREVIEW_THRESHOLD = 90000.0   # if baseline STILL < this → use PREVIEW during coarse
+        Z_FLOOR_MM              = 0.00      # hard lower bound to protect hardware
+
+        # Step sizes (mm)
+        COARSE_STEP_MM          = 0.20      # coarse, fixed downward step
+        FINE_STEP_MM            = 0.04      # fine polish
+        MAX_OFFSET_MM           = 5.60      # max explore distance downward from start
+
+        # Early-stop behavior (relative to baseline and local peak)
+        DROP_STOP_PEAK          = 2000.0    # stop if drop from local peak exceeds this
+        DROP_STOP_BASE          = 3000.0    # early stop if below baseline by this amount with no better peak
+
+        # Settling (seconds) – only used inside the scoring helpers
+        SETTLE_STILL_S          = 0.4
+        SETTLE_PREVIEW_S        = 0.4
+
+        # Fine search behavior
+        FINE_NO_IMPROVE_LIMIT   = 2         # stop after this many non-improving steps per direction
+        FINE_ALLOW_PREVIEW      = False     # if True, allow PREVIEW fine search when baseline is weak (like fine_autofocus)
+
+        # Messaging
+        LOG_VERBOSE             = True
+        # ==============================================================================
+
+        # ---- derived constants (ticks) ----
+        _AFTPM     = 100
+        _AF_ZFLOOR = int(round(Z_FLOOR_MM * _AFTPM))
         COARSE_STEP = int(round(COARSE_STEP_MM * _AFTPM))
-        MAX_OFFSET_MM = 5.60
-        MAX_OFFSET = int(round(MAX_OFFSET_MM * _AFTPM))
-        DROP_STOP_PEAK = 100
-        DROP_STOP_BASE = 100
+        _AFSTEP     = int(round(FINE_STEP_MM   * _AFTPM))
+        MAX_OFFSET  = int(round(MAX_OFFSET_MM  * _AFTPM))
 
-        self.status(cmd.message or "Autofocus (descent) starting…", cmd.log)
-        if self.pause_point(): return
+        def quantize(zt: int) -> int:
+            # keep multiples of printer min step (0.04 mm = 4 ticks)
+            step = 4
+            return (zt // step) * step
 
-        pos = self.get_position()
-        start = self._af_quantize(int(round(getattr(pos, "z", 1600))))
-        self.status(f"Start @ Z={start / _AFTPM:.2f} mm (descent expected)", cmd.log)
-
-        # Envelope: only allow [start - MAX_OFFSET, start], clamped to floor
+        # Envelope: allow [start - MAX_OFFSET, start], clamped to floor
         def within_env(zt: int) -> bool:
             return (start - MAX_OFFSET) <= zt <= start and zt >= _AF_ZFLOOR
 
+        # ---- scorers (wrapped to match _af_score_at's current call style) ----
+        def score_still_lambda(_z, _c, _b) -> float:
+            self._exec_gcode("M400", wait=True)
+            if SETTLE_STILL_S > 0: time.sleep(SETTLE_STILL_S)
+            self.camera.capture_image()
+            while self.camera.is_taking_image:
+                time.sleep(0.01)
+            img = self.camera.get_last_frame(prefer="still", wait_for_still=False)
+            if img is None or ImageAnalyzer.is_black(img):
+                return float("-inf")
+            try:
+                res = ImageAnalyzer.analyze_focus(img)
+                return float(getattr(res, "focus_score", float("-inf")))
+            except Exception:
+                return float("-inf")
+
+        def score_preview_lambda(_z, _c, _b) -> float:
+            self._exec_gcode("M400", wait=True)
+            if SETTLE_PREVIEW_S > 0: time.sleep(SETTLE_PREVIEW_S)
+            img = self.camera.get_last_frame(prefer="stream", wait_for_still=False)
+            if img is None or ImageAnalyzer.is_black(img):
+                return float("-inf")
+            try:
+                res = ImageAnalyzer.analyze_focus(img)
+                return float(getattr(res, "focus_score", float("-inf")))
+            except Exception:
+                return float("-inf")
+
+        # ---- start ----
+        self.status(cmd.message or "Autofocus (descent) starting…", cmd.log)
+        if self.pause_point(): return
+
+        pos   = self.get_position()
+        start = quantize(int(round(getattr(pos, "z", 1600))))
+        self.status(f"Start @ Z={start / _AFTPM:.2f} mm (descent expected)", cmd.log)
+
         scores: dict[int, float] = {}
 
-        # Baseline
+        # Baseline STILL (reliable for Δbase & scorer choice)
         self._af_move_to_ticks(start)
-        baseline = self._af_capture_and_score()
+        baseline = self._af_score_at(
+            start, scores, within_env,
+            scorer=score_still_lambda
+        )
         scores[start] = baseline
         best_z = start
         best_s = baseline
-        self.status(f"[AF-Descent] Baseline Z={start / _AFTPM:.2f}  score={baseline:.3f}", False)
+        self.status(f"[AF-Descent] Baseline Z={start / _AFTPM:.2f}  score={baseline:.1f}", LOG_VERBOSE)
 
-        # Coarse descent to floor
+        # Choose coarse scorer based on baseline (like autofocus_macro)
+        coarse_scorer = score_preview_lambda if (baseline < FOCUS_PREVIEW_THRESHOLD) else score_still_lambda
+        self.status(f"[AF-Descent] Coarse scorer: "
+                    f"{'PREVIEW' if coarse_scorer is score_preview_lambda else 'STILL'} "
+                    f"(baseline={baseline:.1f} < thresh={FOCUS_PREVIEW_THRESHOLD:.1f})", LOG_VERBOSE)
+
+        # -------- Coarse descent-only march --------
         peak_s = baseline
         peak_z = start
         steps = min(MAX_OFFSET // COARSE_STEP, (start - _AF_ZFLOOR) // COARSE_STEP)
+
         for k in range(1, steps + 1):
             if self.pause_point():
                 self.status("Autofocus paused/stopped.", True); return
 
-            target = self._af_quantize(start - k * COARSE_STEP)
+            target = quantize(start - k * COARSE_STEP)
             if target <= _AF_ZFLOOR:
                 target = _AF_ZFLOOR
 
-            s = self._af_score_at(target, scores, within_env)
+            s = self._af_score_at(target, scores, within_env, scorer=coarse_scorer)
             d_base = s - baseline
-            self.status(f"[AF-Descent] ↓0.20mm  Z={target / _AFTPM:.2f}"
-                            f"{' (FLOOR)' if target == _AF_ZFLOOR else ''}  score={s:.3f}  Δbase={d_base:+.1f}", False)
+            self.status(
+                f"[AF-Descent] ↓{COARSE_STEP_MM:.2f}mm  Z={target / _AFTPM:.2f}"
+                f"{' (FLOOR)' if target == _AF_ZFLOOR else ''}  score={s:.1f}  Δbase={d_base:+.1f}",
+                LOG_VERBOSE
+            )
 
             if s > best_s: best_s, best_z = s, target
             if s > peak_s: peak_s, peak_z = s, target
 
             if best_z == start and (baseline - s) >= DROP_STOP_BASE:
-                self.status(f"[AF-Descent] Early stop (baseline-drop)", True)
+                self.status("[AF-Descent] Early stop (baseline-drop)", LOG_VERBOSE)
                 break
             if (peak_s - s) >= DROP_STOP_PEAK:
-                self.status(f"[AF-Descent] Early stop (peak-drop)", True)
+                self.status("[AF-Descent] Early stop (peak-drop)", LOG_VERBOSE)
                 break
             if target == _AF_ZFLOOR:
                 break
 
-        # Refine around best
-        if self.pause_point(): self.status("Autofocus paused/stopped.", True); return
-        center = best_z
-        local_z, local_s = self._af_refine_around(center, scores, within_env, _AFSTEP, no_improve_limit=2, baseline=baseline)
+        # -------- Fine polish around best --------
+        if self.pause_point():
+            self.status("Autofocus paused/stopped.", True); return
+
+        # Optionally allow preview during fine if baseline is weak (like fine_autofocus)
+        if FINE_ALLOW_PREVIEW and baseline < FOCUS_PREVIEW_THRESHOLD:
+            fine_scorer = score_preview_lambda
+            scorer_name = "PREVIEW"
+        else:
+            fine_scorer = score_still_lambda
+            scorer_name = "STILL"
+
+        self.status(f"[AF-Descent] Fine search using {scorer_name} (step={FINE_STEP_MM:.2f}mm)", LOG_VERBOSE)
+
+        local_z, local_s = self._af_refine_around(
+            center=best_z,
+            cache=scores,
+            bounds_ok=within_env,
+            fine_step_ticks=_AFSTEP,
+            no_improve_limit=FINE_NO_IMPROVE_LIMIT,
+            scorer=fine_scorer,
+            baseline=baseline
+        )
         if local_s > best_s:
             best_z, best_s = local_z, local_s
 
         if self.pause_point(): return
         self._af_move_to_ticks(best_z)
-        self.status(f"Autofocus (descent) complete: Best Z={best_z / _AFTPM:.2f} mm  Score={best_s:.3f}", True)
+        self.status(
+            f"Autofocus (descent) complete: Best Z={best_z / _AFTPM:.2f} mm  "
+            f"Score={best_s:.1f}  Δbase={(best_s - baseline):+.1f}  "
+            f"(coarse={'PREVIEW' if coarse_scorer is score_preview_lambda else 'STILL'}, "
+            f"fine={scorer_name}, step={FINE_STEP_MM:.2f}mm, max_offset={MAX_OFFSET_MM:.2f}mm)",
+            True
+        )
 
     def fine_autofocus(self, cmd: command) -> None:
         """
@@ -766,9 +868,10 @@ class AutomatedPrinter(BasePrinterController):
 
                 run_fine = not (pre_hard < 10 and pre_soft < 15)
                 if run_fine:
+                    time.sleep(0.4)  # wait when skipping fine autofocus
                     self.fine_autofocus(cmd)
                 else:
-                    time.sleep(0.2)  # wait when skipping fine autofocus
+                    time.sleep(0.4)  # wait when skipping fine autofocus
 
                 # Read color
                 r, g, b, ylum = self.machine_vision.get_average_color()
