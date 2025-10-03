@@ -529,12 +529,29 @@ class BasePrinterController:
 
 
     # Convenience methods for movement
-    def move_z_up(self): self.move_axis('z', 1)
-    def move_z_down(self): self.move_axis('z', -1)
-    def move_x_left(self): self.move_axis('x', 1)
-    def move_x_right(self): self.move_axis('x', -1)
-    def move_y_backward(self): self.move_axis('y', 1)
-    def move_y_forward(self): self.move_axis('y', -1)
+    def move_z_up(self): 
+        self.reset_after_stop()
+        self.move_axis('z', 1)
+
+    def move_z_down(self): 
+        self.reset_after_stop()
+        self.move_axis('z', -1)
+
+    def move_x_left(self): 
+        self.reset_after_stop()
+        self.move_axis('x', 1)
+
+    def move_x_right(self): 
+        self.reset_after_stop()
+        self.move_axis('x', -1)
+
+    def move_y_backward(self): 
+        self.reset_after_stop()
+        self.move_axis('y', 1)
+
+    def move_y_forward(self): 
+        self.reset_after_stop()
+        self.move_axis('y', -1)
 
 
     # Methods for speed
