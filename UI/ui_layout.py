@@ -301,6 +301,8 @@ def _build_sample_box(sample_box, movementSystem, camera, current_sample_index):
     lst = ListFrame(parent=sample_box, x=10, y=75, width=1.0, height=300,
                 width_is_percent=True, height_is_percent=False,
                 row_height=35, count=8, row_builder=build_row)
+    
+    movementSystem.sample_list = lst
 
     return go_to_sample_button, decrement_button, increment_button, sample_label#, pos1_display, pos2_display
 

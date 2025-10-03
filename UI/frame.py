@@ -1,5 +1,7 @@
 import pygame
-from typing import Callable, Optional, Tuple
+from typing import Callable, Optional, Tuple, Type, TypeVar, Iterator, Optional, List, Any
+
+T = TypeVar("T")
 
 def default_frame_background() -> Optional[pygame.Color]:
     return None
@@ -90,6 +92,41 @@ class Frame():
             self.height += dh_percent
         # else: don't modify absolute height
 
+    def iter_descendants(self) -> Iterator["Frame"]:
+        """Depth-first traversal over all descendants (not including self)."""
+        stack: List["Frame"] = list(getattr(self, "children", []))
+        while stack:
+            node = stack.pop()
+            yield node
+            stack.extend(getattr(node, "children", []))
+
+    def find_child_of_type(self, cls: Type[T], *, include_self: bool=False) -> Optional[T]:
+        """Return the first descendant (optionally self) that is an instance of `cls`."""
+        if include_self and isinstance(self, cls):  # type: ignore[arg-type]
+            return self  # type: ignore[return-value]
+        for node in self.iter_descendants():
+            if isinstance(node, cls):
+                return node  # type: ignore[return-value]
+        return None
+
+    def find_children_of_type(self, cls: Type[T], *, include_self: bool=False) -> List[T]:
+        """Return all descendants (optionally self) that are instances of `cls`."""
+        out: List[T] = []
+        if include_self and isinstance(self, cls):  # type: ignore[arg-type]
+            out.append(self)  # type: ignore[arg-type]
+        for node in self.iter_descendants():
+            if isinstance(node, cls):
+                out.append(node)  # type: ignore[arg-type]
+        return out
+
+    def find_first(self, predicate: Callable[[Any], bool], *, include_self: bool=False) -> Optional[Any]:
+        """Generic: return first node for which predicate(node) is True."""
+        if include_self and predicate(self):
+            return self
+        for node in self.iter_descendants():
+            if predicate(node):
+                return node
+        return None
 
     @property
     def absolute_position(self) -> Tuple[int, int]:

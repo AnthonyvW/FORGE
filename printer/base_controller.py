@@ -180,6 +180,7 @@ class BasePrinterController:
 
     def _process_commands(self):
         time.sleep(1)
+        self.home()
         while True:
             if self.paused:
                 time.sleep(0.05)

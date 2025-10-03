@@ -1,11 +1,17 @@
 import time
-from typing import Callable, Optional
+from typing import Callable, Optional, List, Tuple
+import math 
 
 from .models import Position, FocusScore
 from .config import AutomationConfig
 from .base_controller import BasePrinterController
 from image_processing.analyzers import ImageAnalyzer
 from image_processing.machine_vision import MachineVision
+
+from UI.list_frame import ListFrame
+from UI.input.button import Button
+from UI.input.toggle_button import ToggleButton
+from UI.input.text_field import TextField
 
 from forgeConfig import (
     ForgeSettings,
@@ -160,6 +166,34 @@ _AFTPM = 100          # ticks/mm (0.01 mm units)
 _AFSTEP = 4           # 0.04 mm (printer min step)
 _AF_ZFLOOR = 0        # 0.00 mm -> 0 ticks
 
+def get_sample_position(index: int) -> Position:
+    lookup_table = { # Somehow they are just inconsistent enough to be unable to calculate them on the fly.
+        1:  20.04,
+        2:  30.56,
+        3:  41.44,
+        4:  53.28,
+        5:  64.55,
+        6:  75.70,
+        7:  87.24,
+        8:  98.60,
+        9:  110.16,
+        10: 122.00,
+        11: 132.96,
+        12: 144.46,
+        13: 156.04,
+        14: 167.44,
+        15: 179.08,
+        16: 190.72,
+        17: 202.04,
+        18: 213.36,
+        19: 224.88,
+    }
+    return Position(
+        x=int(lookup_table[index] * 100),
+        y=int(200 * 100),
+        z=int(12 * 100)
+    )
+
 class AutomatedPrinter(BasePrinterController):
     """Extended printer controller with automation capabilities"""
     def __init__(self, forgeConfig: ForgeSettings, automation_config: AutomationConfig, camera):
@@ -168,6 +202,10 @@ class AutomatedPrinter(BasePrinterController):
         self.camera = camera
         self.machine_vision = MachineVision(camera, tile_size=48, stride=48, top_percent=0.15, min_score=50.0, soft_min_score=35.0)
         self.is_automated = False
+
+        self.sample_list: ListFrame | None = None
+        self.current_sample_index = 1
+        self.live_plots_enabled: bool = False
 
         # Autofocus
         self.register_handler("AUTOFOCUS_DESCENT", self.autofocus_descent_macro)
@@ -178,6 +216,17 @@ class AutomatedPrinter(BasePrinterController):
         # Automation Routines
         self.register_handler("SCAN_SAMPLE_BOUNDS", self.scan_sample_bounds)
 
+
+    def get_enabled_samples(self) -> List[Tuple[int, str]]:
+        results: List[Tuple[int, str]] = []
+        for i, row in enumerate(self.sample_list):
+            toggle = row.find_child_of_type(ToggleButton)
+            field  = row.find_child_of_type(TextField)
+
+            if toggle and getattr(toggle, "is_on", False):
+                name = (getattr(field, "text", "") or getattr(field, "placeholder", "") or "").strip()
+                results.append((i, name))
+        return results
 
     def status(self, msg: str, log: bool = True) -> None:
         self._handle_status(self.status_cmd(msg), log)
@@ -317,7 +366,7 @@ class AutomatedPrinter(BasePrinterController):
         MAX_OFFSET_MM           = 5.60      # max explore distance downward from start
 
         # Early-stop behavior (relative to baseline and local peak)
-        DROP_STOP_PEAK          = 2000.0    # stop if drop from local peak exceeds this
+        DROP_STOP_PEAK          = 5000.0    # stop if drop from local peak exceeds this
         DROP_STOP_BASE          = 3000.0    # early stop if below baseline by this amount with no better peak
 
         # Settling (seconds) – only used inside the scoring helpers
@@ -515,7 +564,6 @@ class AutomatedPrinter(BasePrinterController):
 
         # Baseline with STILL (for reliable Δbase and scorer decision).
         baseline = self._af_score_at(center, scores, lambda z: within_window(z, center), scorer=lambda _z, _c, _b: self._af_score_still())
-        self.status(f"[AF-Fine] Baseline score={baseline:.1f}  Δbase={0:+.1f}", LOG_VERBOSE)
 
         # Choose scorer for the *search* (preview if baseline is weak and allowed)
         if USE_PREVIEW_IF_BELOW and baseline < FOCUS_PREVIEW_THRESHOLD:
@@ -570,8 +618,8 @@ class AutomatedPrinter(BasePrinterController):
         Z_FLOOR_MM              = 0.00     # hard lower bound to protect hardware
 
         # Step sizes (mm)
-        COARSE_STEP_MM          = 0.40     # coarse alternating outward step
-        REFINE_COARSE_MM        = 0.20     # directionally consistent refine march
+        COARSE_STEP_MM          = 0.20     # coarse alternating outward step
+        REFINE_COARSE_MM        = 0.12     # directionally consistent refine march
         FINE_STEP_MM            = 0.04     # fine polish
         MAX_OFFSET_MM           = 5.60     # max explore distance from start
 
@@ -796,26 +844,30 @@ class AutomatedPrinter(BasePrinterController):
     # Automation
     # --- Handler --------------------------------------------------------------
     def scan_sample_bounds(self, cmd: command) -> None:
-        STEP_MM  = 2.00
+        STEP_MM  = 1.00
         Y_MAX_MM = 224.0
-        Y_MIN_MM = 40.0
 
         def report(msg: str, log: bool = True) -> None:
             self._handle_status(self.status_cmd(msg), log)
 
+        # Folder name to save images into (from command.value, fallback to current index)
+        sample_folder = str(cmd.value).strip() if (cmd and getattr(cmd, "value", "")) else f"sample_{self.current_sample_index}"
+
+
         # --- start plotter process (spawn-safe) ---
         plot_ok    = [False]
         plot_queue = None
-        try:
-            import multiprocessing as mp
-            ctx = mp.get_context("spawn")
-            plot_queue = ctx.Queue()
-            plot_proc  = ctx.Process(target=_scan_bounds_plotter, args=(plot_queue, Y_MIN_MM, Y_MAX_MM), daemon=True)
-            plot_proc.start()
-            plot_ok[0] = True
-            plot_queue.put(("title", "Average Color vs Y (live)"))
-        except Exception as e:
-            report(f"[SCAN_SAMPLE_BOUNDS] Live plot process unavailable: {e}")
+        if self.live_plots_enabled:
+            try:
+                import multiprocessing as mp
+                ctx = mp.get_context("spawn")
+                plot_queue = ctx.Queue()
+                plot_proc  = ctx.Process(target=_scan_bounds_plotter, args=(plot_queue, 0, Y_MAX_MM), daemon=True)
+                plot_proc.start()
+                plot_ok[0] = True
+                plot_queue.put(("title", "Average Color vs Y (live)"))
+            except Exception as e:
+                report(f"[SCAN_SAMPLE_BOUNDS] Live plot process unavailable: {e}")
 
         def send_data(y_now: float, r: float, g: float, b: float, ylum: float, hard_ct: int, soft_ct: int) -> None:
             if plot_ok[0] and plot_queue is not None:
@@ -835,6 +887,7 @@ class AutomatedPrinter(BasePrinterController):
 
         # --- capture start Y ---
         start_y = float(self.position.y) / 100
+        start_z = float(self.position.z) / 100
         start_time = time.time()
 
         report(f"[SCAN_SAMPLE_BOUNDS] Start @ Y={start_y:.3f} mm")
@@ -857,7 +910,8 @@ class AutomatedPrinter(BasePrinterController):
             """
             Measure at current Y:
             - If focus is too weak (hard<10 and soft<15), skip fine_autofocus.
-            - Otherwise run fine_autofocus, then measure.
+            - Otherwise run fine_autofocus, then capture a STILL, compute focus score,
+            and save the image as: "sample_{index}/X{X} Y{Y} Z{Z} F{FOCUS}".
             - Stream color + focus counts to the live plots.
             """
             try:
@@ -866,12 +920,31 @@ class AutomatedPrinter(BasePrinterController):
                 pre_hard = len(pre.get("hard", []))
                 pre_soft = len(pre.get("soft", []))
 
-                run_fine = not (pre_hard < 10 and pre_soft < 15)
+                run_fine = not (pre_hard < 10 and pre_soft < 200)
                 if run_fine:
-                    time.sleep(0.4)  # wait when skipping fine autofocus
+                    # Do the fine AF
                     self.fine_autofocus(cmd)
+
+                    # Immediately capture a STILL, score it, and save it with X/Y/Z/F in the filename.
+                    # _af_score_still() captures a still internally, so we can save that same image.
+                    focus_score = self._af_score_still()
+                    try:
+                        # Build filename from current printer position (in mm, rounded to integers)
+                        pos = self.get_position()
+                        x_mm = int(round(pos.x / 100.0))
+                        y_mm = int(round(pos.y / 100.0))
+                        z_mm = int(round(pos.z / 100.0))
+                        f_int = int(round(focus_score)) if math.isfinite(focus_score) else -1
+                        filename = f"X{x_mm} Y{y_mm} Z{z_mm} F{f_int}"
+
+                        # Save into the sample folder
+                        self.camera.save_image(False, sample_folder, filename)
+                        report(f"[SCAN_SAMPLE_BOUNDS] Saved image: {sample_folder}/{filename}", True)
+                    except Exception as e_save:
+                        report(f"[SCAN_SAMPLE_BOUNDS] Image save failed: {e_save}", True)
                 else:
-                    time.sleep(0.4)  # wait when skipping fine autofocus
+                    # Skip fine AF (settle briefly so measurements are stable)
+                    time.sleep(0.4)
 
                 # Read color
                 r, g, b, ylum = self.machine_vision.get_average_color()
@@ -881,17 +954,19 @@ class AutomatedPrinter(BasePrinterController):
                 hard_tiles = len(all_tiles.get("hard", []))
                 soft_tiles = len(all_tiles.get("soft", []))
 
-                report(f"[SCAN_SAMPLE_BOUNDS] Y={y_now:.3f} "
+                report(
+                    f"[SCAN_SAMPLE_BOUNDS] Y={y_now:.3f} "
                     f"→ Avg(R,G,B,Y)=({r:.1f},{g:.1f},{b:.1f},{ylum:.3f})  "
                     f"Focus: hard={hard_tiles} soft={soft_tiles}  "
-                    f"{'(fine AF skipped)' if not run_fine else ''}")
+                    f"{'(fine AF skipped)' if not run_fine else ''}"
+                )
 
                 # Stream to both graphs
                 send_data(y_now, r, g, b, ylum, hard_tiles, soft_tiles)
                 send_elapsed()
 
             except Exception as e:
-                report(f"[SCAN_SAMPLE_BOUNDS] Y={y_now:.3f} → measurement failed: {e}")
+                report(f"[SCAN_SAMPLE_BOUNDS] Y={y_now:.3f} → measurement failed: {e}", True)
 
         # Make first measurement at start
         refine_and_measure(start_y)
@@ -907,20 +982,37 @@ class AutomatedPrinter(BasePrinterController):
         # 3) Return to start **without drawing a connecting line**
         if abs(y - start_y) > 1e-9:
             send_break()  # prevents the line from connecting the last +Y point to start
-            self._exec_gcode(f"G0 Y{start_y:.3f}")
+            self._exec_gcode(f"G0 Y{start_y:.3f} Z{start_z:.3f}")
             self.pause_point()
             report("[SCAN_SAMPLE_BOUNDS] Running autofocus_macro at start position…")
-            self.autofocus_macro(cmd)  # <-- run the full autofocus here (not descent, not fine)
+            self.autofocus_descent_macro(cmd)
         # Measure at start after autofocus_macro (with skip logic inside refine_and_measure)
         refine_and_measure(start_y)
 
-        # 4) Sweep -Y
+
+        # 4) Sweep -Y until sample end or 0
         y = start_y
-        while y > Y_MIN_MM + 1e-9:
-            y = max(y - STEP_MM, Y_MIN_MM)
+        sample_done = False
+        while y > 0 + 1e-9 and not sample_done:
+            y = max(y - STEP_MM, 0.0)
             self._exec_gcode(f"G0 Y{y:.3f}")
             self.pause_point()
-            refine_and_measure(y)
+
+            # --- measurement + early stop check ---
+            try:
+                pre = self.machine_vision.compute_focused_tiles()
+                pre_hard = len(pre.get("hard", []))
+                pre_soft = len(pre.get("soft", []))
+                r, g, b, ylum = self.machine_vision.get_average_color()
+
+                if pre_hard < 10 and pre_soft < 15 and ylum < 30:
+                    report(f"[SCAN_SAMPLE_BOUNDS] End of sample reached at Y={y:.3f}")
+                    sample_done = True
+                else:
+                    refine_and_measure(y)
+            except Exception as e:
+                report(f"[SCAN_SAMPLE_BOUNDS] Y={y:.3f} → measurement failed: {e}")
+
 
         total_time = time.time() - start_time
         report(f"[SCAN_SAMPLE_BOUNDS] Scan complete. Total time: {total_time:.2f} seconds")
@@ -932,14 +1024,17 @@ class AutomatedPrinter(BasePrinterController):
             except Exception:
                 pass
 
-
-    # --- Convenience starter --------------------------------------------------
-    def start_scan_sample_bounds(self) -> None:
+    def start_scan_sample_bounds(self, folder_name: str | None = None) -> None:
         """
-        Enqueue SCAN_SAMPLE_BOUNDS as a single command (macro-style handler).
+        Enqueue SCAN_SAMPLE_BOUNDS; if folder_name provided, it is used as command.value
+        and thus determines the image save folder inside the handler.
         """
-        self.enqueue_cmd(command(kind="SCAN_SAMPLE_BOUNDS", value=0, message="Scan sample bounds", log=True))
-
+        self.enqueue_cmd(command(
+            kind="SCAN_SAMPLE_BOUNDS",
+            value=(folder_name or ""),
+            message="Scan sample bounds",
+            log=True
+        ))
 
 
     def start_autofocus(self) -> None:
@@ -969,17 +1064,62 @@ class AutomatedPrinter(BasePrinterController):
         ))
 
     def start_automation(self) -> None:
-        """Start the automation process"""
-
+        """Home, then iterate enabled samples and scan each with progress messaging."""
         self.reset_after_stop()
+
+        enabled = self.get_enabled_samples()  # -> List[Tuple[row_index, name]]
+        total = len(enabled)
+
+        if total == 0:
+            self.status("No samples are enabled.", True)
+            return
+
+        steps: list[command] = []
+
+        # 1) Home first
+
+        # 2) For each enabled sample, home  -> move -> scan
+        for k, (row_idx, sample_name) in enumerate(enabled, start=1):
+            one_based = row_idx + 1
+            pos = get_sample_position(one_based)
+
+            # Percent complete (before running this sample)
+            pct = int(round((k - 1) / total * 100.0))
+            scan_msg = f"[{k}/{total} {pct}%] Scanning {sample_name or f'Sample {one_based}'}"
+            
+            # Home to get rid of error that builds up
+            steps.append(self.printer_cmd("G28", message="Homing Printer. . .", log=True))
+
+            # Move to that sample's position
+            steps.append(self.printer_cmd(
+                f"G0 X{pos.x/100:.2f} Y{pos.y/100:.2f} Z{pos.z/100:.2f}",
+                message=f"Moving to sample {one_based} ({sample_name})",
+                log=True
+            ))
+
+            # Run the SCAN_SAMPLE_BOUNDS with the sample's NAME as the value (folder)
+            steps.append(command(
+                kind="SCAN_SAMPLE_BOUNDS",
+                value=(sample_name or f"sample_{one_based}"),
+                message=scan_msg,
+                log=True
+            ))
+
+        # Home the print head to signify that it's complete
+        steps.append(self.printer_cmd("G28", message="Homing Printer. . .", log=True))
+
+        steps.append(self.status_cmd(f"Scanning Complete : {total} Samples Scanned"))
         
-        # Enqueue the macro like any other command
-        self.enqueue_cmd(command(
-            kind="SCAN_SAMPLE_BOUNDS",
-            value="",
-            message= "Scan sample bounds",
+        # 3) Wrap as a single macro so it runs as one logical unit
+        macro = self.macro_cmd(
+            steps,
+            wait_printer=True,
+            message="Automatic sample scans",
             log=True
-        ))
+        )
+
+        # 4) Enqueue the macro
+        self.enqueue_cmd(macro)
 
     def setPosition1(self) -> None:
         self.automation_config.x_start = self.position.x
