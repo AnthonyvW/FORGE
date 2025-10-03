@@ -85,9 +85,7 @@ if __name__ == "__main__":
         dec_btn,
         go_btn,
         speed_display,
-        position_display,
-        position1_display,
-        position2_display
+        position_display
     ) = create_control_panel(root_frame, movementSystem, camera, current_sample_index)
 
     # Verify no duplicate nodes are present
@@ -181,8 +179,8 @@ if __name__ == "__main__":
 
         speed_display.set_text(f"Step Size: {movementSystem.speed / 100:.2f}mm")
         position_display.set_text( f"X: {movementSystem.position.x/100:.2f} Y: {movementSystem.position.y/100:.2f} Z: {movementSystem.position.z/100:.2f}")
-        position1_display.set_text(f"X: {movementSystem.automation_config.x_start/100:.2f} Y: {movementSystem.automation_config.y_start/100:.2f} Z: {movementSystem.automation_config.z_start/100:.2f}")
-        position2_display.set_text(f"X: {movementSystem.automation_config.x_end/100:.2f} Y: {movementSystem.automation_config.y_end/100:.2f} Z: {movementSystem.automation_config.z_end/100:.2f}")
+        #position1_display.set_text(f"X: {movementSystem.automation_config.x_start/100:.2f} Y: {movementSystem.automation_config.y_start/100:.2f} Z: {movementSystem.automation_config.z_start/100:.2f}")
+        #position2_display.set_text(f"X: {movementSystem.automation_config.x_end/100:.2f} Y: {movementSystem.automation_config.y_end/100:.2f} Z: {movementSystem.automation_config.z_end/100:.2f}")
         pygame.display.flip()
             
     # Ensure camera is properly closed

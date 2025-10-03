@@ -30,7 +30,7 @@ class ImageAnalyzer:
     @staticmethod
     def analyze_focus(
         image: np.ndarray,
-        kernel_size: int = 5,
+        kernel_size: int = 7,
         threshold: float = 100
     ) -> FocusAnalysisResult:
         """

@@ -101,8 +101,8 @@ def create_control_panel(
 
     # --- Sample Box ---
     sample_box = Section(parent=control_frame, title="Sample Management", 
-        x=10, y=camera_control.y + camera_control.height + box_spacing, width = RIGHT_PANEL_WIDTH - 20, height = 233+35*5)
-    go_to_sample_button, decrement_button, increment_button, sample_label, pos1_display, pos2_display = _build_sample_box(sample_box, movementSystem, camera, current_sample_index)
+        x=10, y=camera_control.y + camera_control.height + box_spacing, width = RIGHT_PANEL_WIDTH - 20, height = 225+35*5)
+    go_to_sample_button, decrement_button, increment_button, sample_label = _build_sample_box(sample_box, movementSystem, camera, current_sample_index)
   
     # --- Modal ---
 
@@ -112,9 +112,7 @@ def create_control_panel(
         decrement_button,
         go_to_sample_button,
         speed_display,
-        position_display,
-        pos1_display,
-        pos2_display
+        position_display
     )
 
 def _build_right_control_panel(root_frame)-> Frame:
@@ -218,6 +216,7 @@ def _build_sample_box(sample_box, movementSystem, camera, current_sample_index):
         x=330, y=10, width=40, height=button_height, text="+", text_style=make_button_text_style())
 
     # 2nd Row
+    """
     Button(movementSystem.setPosition1, 10 , 60, 150, button_height, "Set Position 1", parent=sample_box, text_style=make_button_text_style())
 
     pos1_display = Text(
@@ -236,7 +235,7 @@ def _build_sample_box(sample_box, movementSystem, camera, current_sample_index):
         x=170, y=125,
         style=make_display_text_style()
     )
-
+    """
     # 4th Row
     """
     on_overrides = ToggledColors(
@@ -299,11 +298,11 @@ def _build_sample_box(sample_box, movementSystem, camera, current_sample_index):
 
         TextField(parent=parent, x=140, y=0, width=220, height=30, placeholder=f"sample {i+1}", border_color=pygame.Color("#b3b4b6"), text_color=pygame.Color("#5a5a5a"), on_text_change=camera.set_capture_name)
         
-    lst = ListFrame(parent=sample_box, x=10, y=160, width=1.0, height=300,
+    lst = ListFrame(parent=sample_box, x=10, y=75, width=1.0, height=300,
                 width_is_percent=True, height_is_percent=False,
-                row_height=35, count=6, row_builder=build_row)
+                row_height=35, count=8, row_builder=build_row)
 
-    return go_to_sample_button, decrement_button, increment_button, sample_label, pos1_display, pos2_display
+    return go_to_sample_button, decrement_button, increment_button, sample_label#, pos1_display, pos2_display
 
 
 def _build_camera_control(camera_control, machine_vision_overlay, movementSystem: AutomatedPrinter, camera, camera_settings_modal):
@@ -363,7 +362,7 @@ def _build_camera_control(camera_control, machine_vision_overlay, movementSystem
     def print_color():
         print(movementSystem.machine_vision.get_average_color())
     
-    Button(print_color,x=349, y=85, width=40, height=40,text="C", parent=camera_control, text_style=make_button_text_style())
+    #Button(print_color,x=349, y=85, width=40, height=40,text="C", parent=camera_control, text_style=make_button_text_style())
     
 
 def _build_automation_control(automation_box, movementSystem):
