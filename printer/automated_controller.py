@@ -1,4 +1,6 @@
 import time
+from typing import Callable, Optional
+
 from .models import Position, FocusScore
 from .config import AutomationConfig
 from .base_controller import BasePrinterController
@@ -154,6 +156,10 @@ def _scan_bounds_plotter(proc_queue, y_min: float, y_max: float):
         pass
 
 
+_AFTPM = 100          # ticks/mm (0.01 mm units)
+_AFSTEP = 4           # 0.04 mm (printer min step)
+_AF_ZFLOOR = 0        # 0.00 mm -> 0 ticks
+
 class AutomatedPrinter(BasePrinterController):
     """Extended printer controller with automation capabilities"""
     def __init__(self, forgeConfig: ForgeSettings, automation_config: AutomationConfig, camera):
@@ -167,615 +173,361 @@ class AutomatedPrinter(BasePrinterController):
         self.register_handler("AUTOFOCUS_DESCENT", self.autofocus_descent_macro)
         self.register_handler("AUTOFOCUS", self.autofocus_macro)
         self.register_handler("FINE_AUTOFOCUS", self.fine_autofocus)
+
         
         # Automation Routines
         self.register_handler("SCAN_SAMPLE_BOUNDS", self.scan_sample_bounds)
 
 
+    def _af_status(self, msg: str, log: bool = True) -> None:
+        self._handle_status(self.status_cmd(msg), log)
+
+    def _af_quantize(self, z_ticks: int) -> int:
+        return int(round(z_ticks / _AFSTEP) * _AFSTEP)
+
+    def _af_move_to_ticks(self, z_ticks: int) -> None:
+        z_ticks = max(z_ticks, _AF_ZFLOOR)
+        z_mm = z_ticks / _AFTPM
+        self._exec_gcode(f"G0 Z{z_mm:.2f}", wait=True)
+
+    def _af_capture_and_score(self) -> float:
+        # Synchronize motion, settle, take still, score focus
+        self._exec_gcode("M400", wait=True)
+        time.sleep(0.1)  # vibration settle
+        self.camera.capture_image()
+        while self.camera.is_taking_image:
+            time.sleep(0.01)
+        img = self.camera.get_last_frame(prefer="still", wait_for_still=False)
+        if img is None:
+            return float("-inf")
+        try:
+            if ImageAnalyzer.is_black(img):
+                return float("-inf")
+            res = ImageAnalyzer.analyze_focus(img)
+            return float(getattr(res, "focus_score", float("-inf")))
+        except Exception:
+            return float("-inf")
+
+    def _af_score_at(self, zt: int, cache: dict[int, float], bounds_ok: Optional[Callable[[int], bool]] = None) -> float:
+        """Quantize → bounds → cache → move → score."""
+        zt = self._af_quantize(zt)
+        if zt < _AF_ZFLOOR:
+            return float("-inf")
+        if bounds_ok and not bounds_ok(zt):
+            return float("-inf")
+        if zt in cache:
+            return cache[zt]
+        self._af_move_to_ticks(zt)
+        s = self._af_capture_and_score()
+        cache[zt] = s
+        return s
+
+    def _af_climb_fine(self, start: int, step_ticks: int, cache: dict[int, float],
+                    bounds_ok: Optional[Callable[[int], bool]] = None, no_improve_limit: int = 2) -> tuple[int, float]:
+        """
+        0.04 mm hill-climb in +/- direction until 'no_improve_limit' consecutive
+        non-improving steps or bounds violated. Returns (best_z, best_score).
+        """
+        zt = start
+        best_z = start
+        best_s = cache.get(start, self._af_score_at(start, cache, bounds_ok))
+        no_imp = 0
+        while True:
+            nxt = self._af_quantize(zt + step_ticks)
+            if nxt < _AF_ZFLOOR or (bounds_ok and not bounds_ok(nxt)):
+                break
+            s = self._af_score_at(nxt, cache, bounds_ok)
+            self._af_status(
+                f"[AF-Fine] 0.04mm step {'up' if step_ticks>0 else 'down'}: "
+                f"Z={nxt / _AFTPM:.2f}  score={s:.3f}", False
+            )
+            if s > best_s + 1e-6:
+                best_z, best_s = nxt, s
+                zt = nxt
+                no_imp = 0
+            else:
+                no_imp += 1
+                zt = nxt
+                if no_imp >= no_improve_limit:
+                    break
+        return best_z, best_s
+
+    def _af_refine_around(self, center: int, cache: dict[int, float],
+                        bounds_ok: Optional[Callable[[int], bool]] = None,
+                        fine_step_ticks: int = _AFSTEP,
+                        no_improve_limit: int = 2) -> tuple[int, float]:
+        """
+        Fine search both sides around 'center' using 0.04 mm steps.
+        """
+        up_z,   up_s   = self._af_climb_fine(center,  fine_step_ticks, cache, bounds_ok, no_improve_limit)
+        down_z, down_s = self._af_climb_fine(center, -fine_step_ticks, cache, bounds_ok, no_improve_limit)
+        return (up_z, up_s) if up_s >= down_s else (down_z, down_s)
+
     # Autofocus
     def autofocus_descent_macro(self, cmd: command) -> None:
         """
-        Autofocus (known descent): start above the sample and move *down only* to find focus.
-        Strategy:
-        - Coarse descent in 0.20 mm steps *until Z floor (0.00 mm)*.
-        - Fine polish in 0.04 mm steps around the coarse peak (both directions, clamped).
-        Units are ticks (0.01 mm). Printer min step = 4 ticks (0.04 mm).
+        Autofocus when starting above the sample and moving down only to find focus.
+        Coarse: 0.20 mm descent steps to Z floor; Refine: 0.04 mm around best.
         """
+        COARSE_STEP_MM = 0.20
+        COARSE_STEP = int(round(COARSE_STEP_MM * _AFTPM))
+        MAX_OFFSET_MM = 5.60
+        MAX_OFFSET = int(round(MAX_OFFSET_MM * _AFTPM))
+        DROP_STOP_PEAK = 100
+        DROP_STOP_BASE = 100
 
-        # ---------------------- constants ---------------------------------------
-        Z_MIN_MM     = 0.00
-        TICKS_PER_MM = 100                 # 0.01 mm
-        STEP_TICKS   = 4                   # 0.04 mm
-        MAX_OFFSET_MM     = 5.60
-        MAX_OFFSET_TICKS  = int(round(MAX_OFFSET_MM * TICKS_PER_MM))  # 560
-        Z_MIN_TICKS  = int(round(Z_MIN_MM * TICKS_PER_MM))  # -> 0
-
-        # Coarse descent
-        COARSE_STEP_MM    = 0.20
-        COARSE_STEP_TICKS = int(round(COARSE_STEP_MM * TICKS_PER_MM))  # 20
-
-        # Optional early-stop guards (kept as-is unless you want them disabled)
-        DROP_STOP_PEAK_THRESHOLD = 100   # stop if we fall ≥ this from the best-so-far while descending
-        DROP_STOP_BASE_THRESHOLD = 100   # if baseline is best and we drop far below it, stop
-
-        # Refine pass
-        REFINE_FINE_STEP_TICKS   = STEP_TICKS    # 0.04 mm
-        REFINE_NO_IMPROVE_LIMIT  = 2
-
-        # ---------------------- helpers -----------------------------------------
-        def status(msg: str, log: bool = True) -> None:
-            self._handle_status(self.status_cmd(msg), log)
-
-        def quantize_ticks(z_ticks: int) -> int:
-            return int(round(z_ticks / STEP_TICKS) * STEP_TICKS)
-
-        def move_to_ticks(z_ticks: int) -> None:
-            z_ticks = max(z_ticks, Z_MIN_TICKS)  # clamp to floor
-            z_mm = z_ticks / TICKS_PER_MM
-            self._exec_gcode(f"G0 Z{z_mm:.2f}", wait=True)
-
-        def capture_and_score() -> float:
-            self._exec_gcode("M400", wait=True)
-            time.sleep(0.1)  # vibration settle
-            self.camera.capture_image()
-            while self.camera.is_taking_image:
-                time.sleep(0.01)
-            image = self.camera.get_last_frame(prefer="still", wait_for_still=False)
-            if image is None:
-                return float("-inf")
-            try:
-                if ImageAnalyzer.is_black(image):
-                    return float("-inf")
-                res = ImageAnalyzer.analyze_focus(image)
-                return float(getattr(res, "focus_score", float("-inf")))
-            except Exception:
-                return float("-inf")
-
-        # envelope: only allow start down to start - MAX_OFFSET (bounded by Z_MIN)
-        def within_envelope(zt: int) -> bool:
-            return (start_ticks - MAX_OFFSET_TICKS) <= zt <= start_ticks and zt >= Z_MIN_TICKS
-
-        # Score cache to avoid re-imaging the same Z
-        scores = {}  # z_ticks -> score
-        def score_at(zt: int) -> float:
-            zt = quantize_ticks(zt)
-            if zt < Z_MIN_TICKS or not within_envelope(zt):
-                return float("-inf")
-            if zt in scores:
-                return scores[zt]
-            move_to_ticks(zt)
-            s = capture_and_score()
-            scores[zt] = s
-            return s
-
-        # ---------------------- start / baseline --------------------------------
-        status(cmd.message or "Autofocus (descent) starting…", cmd.log)
-
-        if self.pause_point():
-            return
+        self._af_status(cmd.message or "Autofocus (descent) starting…", cmd.log)
+        if self.pause_point(): return
 
         pos = self.get_position()
-        start_ticks = quantize_ticks(int(round(getattr(pos, "z", 1600))))  # default 16.00 mm
-        status(f"Start @ Z={start_ticks / TICKS_PER_MM:.2f} mm (descent expected)", cmd.log)
+        start = self._af_quantize(int(round(getattr(pos, "z", 1600))))
+        self._af_status(f"Start @ Z={start / _AFTPM:.2f} mm (descent expected)", cmd.log)
 
-        move_to_ticks(start_ticks)
-        baseline = capture_and_score()
-        scores[start_ticks] = baseline
-        best_ticks = start_ticks
-        best_score = baseline
-        status(f"[AF-Descent] Baseline Z={start_ticks / TICKS_PER_MM:.2f}  score={baseline:.3f}", False)
+        # Envelope: only allow [start - MAX_OFFSET, start], clamped to floor
+        def within_env(zt: int) -> bool:
+            return (start - MAX_OFFSET) <= zt <= start and zt >= _AF_ZFLOOR
 
-        # ---------------------- COARSE: down-only until floor --------------------
-        if self.pause_point():
-            status("Autofocus paused/stopped.", True); return
+        scores: dict[int, float] = {}
 
-        max_k_down = min(MAX_OFFSET_TICKS // COARSE_STEP_TICKS,
-                        (start_ticks - Z_MIN_TICKS) // COARSE_STEP_TICKS)
+        # Baseline
+        self._af_move_to_ticks(start)
+        baseline = self._af_capture_and_score()
+        scores[start] = baseline
+        best_z = start
+        best_s = baseline
+        self._af_status(f"[AF-Descent] Baseline Z={start / _AFTPM:.2f}  score={baseline:.3f}", False)
 
-        peak_score = baseline
-        peak_ticks = start_ticks
-
-        for k in range(1, max_k_down + 1):
+        # Coarse descent to floor
+        peak_s = baseline
+        peak_z = start
+        steps = min(MAX_OFFSET // COARSE_STEP, (start - _AF_ZFLOOR) // COARSE_STEP)
+        for k in range(1, steps + 1):
             if self.pause_point():
-                status("Autofocus paused/stopped.", True); return
+                self._af_status("Autofocus paused/stopped.", True); return
 
-            target = quantize_ticks(start_ticks - k * COARSE_STEP_TICKS)
+            target = self._af_quantize(start - k * COARSE_STEP)
+            if target <= _AF_ZFLOOR:
+                target = _AF_ZFLOOR
 
-            # If the next step reaches or crosses the floor, take a final measurement at the floor then stop.
-            if target <= Z_MIN_TICKS:
-                target = Z_MIN_TICKS
-                s = score_at(target)
-                delta_base = s - baseline
-                status(f"[AF-Descent] ↓0.20mm  Z={target / TICKS_PER_MM:.2f} (FLOOR)  score={s:.3f}  Δbase={delta_base:+.1f}", True)
-                if s > best_score:
-                    best_score, best_ticks = s, target
-                if s > peak_score:
-                    peak_score, peak_ticks = s, target
+            s = self._af_score_at(target, scores, within_env)
+            d_base = s - baseline
+            self._af_status(f"[AF-Descent] ↓0.20mm  Z={target / _AFTPM:.2f}"
+                            f"{' (FLOOR)' if target == _AF_ZFLOOR else ''}  score={s:.3f}  Δbase={d_base:+.1f}", False)
+
+            if s > best_s: best_s, best_z = s, target
+            if s > peak_s: peak_s, peak_z = s, target
+
+            if best_z == start and (baseline - s) >= DROP_STOP_BASE:
+                self._af_status(f"[AF-Descent] Early stop (baseline-drop)", True)
+                break
+            if (peak_s - s) >= DROP_STOP_PEAK:
+                self._af_status(f"[AF-Descent] Early stop (peak-drop)", True)
+                break
+            if target == _AF_ZFLOOR:
                 break
 
-            s = score_at(target)
-            delta_base = s - baseline
-            status(f"[AF-Descent] ↓0.20mm  Z={target / TICKS_PER_MM:.2f}  score={s:.3f}  Δbase={delta_base:+.1f}", False)
+        # Refine around best
+        if self.pause_point(): self._af_status("Autofocus paused/stopped.", True); return
+        center = best_z
+        local_z, local_s = self._af_refine_around(center, scores, within_env, _AFSTEP, no_improve_limit=2)
+        if local_s > best_s:
+            best_z, best_s = local_z, local_s
 
-            # Track best/peak
-            if s > best_score:
-                best_score, best_ticks = s, target
-            if s > peak_score:
-                peak_score, peak_ticks = s, target
-
-            # Optional guards (leave enabled/disable as you prefer)
-            if best_ticks == start_ticks:
-                base_drop = baseline - s
-                if base_drop >= DROP_STOP_BASE_THRESHOLD:
-                    status(f"[AF-Descent] Early stop (baseline-drop): {base_drop:.1f} below baseline "
-                        f"({baseline:.1f} → {s:.1f})", True)
-                    break
-
-            peak_drop = peak_score - s
-            if peak_drop >= DROP_STOP_PEAK_THRESHOLD:
-                status(f"[AF-Descent] Early stop (peak-drop): {peak_drop:.1f} from peak "
-                    f"({peak_score:.1f} → {s:.1f})", True)
-                break
-
-        # Use the best coarse point as center for fine search
-        center = best_ticks
-
-        # ---------------------- REFINE: fine polish around peak ------------------
-        if self.pause_point():
-            status("Autofocus paused/stopped.", True); return
-
-        def climb_one_side(start: int, step_ticks: int) -> tuple[int, float]:
-            """
-            Move from start in +/-step_ticks increments until score worsens N times.
-            Clamped to Z_MIN and descent envelope (allows small 'up' around peak).
-            """
-            zt = start
-            best_local_z = start
-            best_local_s = scores.get(start, score_at(start))
-            no_imp = 0
-            while True:
-                if self.pause_point():
-                    status("Autofocus paused/stopped.", True); return best_local_z, best_local_s
-                nxt = quantize_ticks(zt + step_ticks)
-                if nxt < Z_MIN_TICKS:
-                    status("[AF-Descent] Z floor hit; stopping in this direction.", False)
-                    break
-                # allow slight 'up' from center if still ≤ start and within global envelope
-                if not within_envelope(min(nxt, start)):
-                    break
-                s = score_at(nxt)
-                status(f"[AF-Descent] 0.04mm {'up' if step_ticks>0 else 'down'}: Z={nxt / TICKS_PER_MM:.2f}  score={s:.3f}", False)
-                if s > best_local_s + 1e-6:
-                    best_local_z, best_local_s = nxt, s
-                    zt = nxt
-                    no_imp = 0
-                else:
-                    no_imp += 1
-                    zt = nxt
-                    if no_imp >= REFINE_NO_IMPROVE_LIMIT:
-                        break
-            return best_local_z, best_local_s
-
-        # Explore finely both sides around center
-        up_z, up_s     = climb_one_side(center,  REFINE_FINE_STEP_TICKS)
-        down_z, down_s = climb_one_side(center, -REFINE_FINE_STEP_TICKS)
-
-        local_best_z, local_best_s = (up_z, up_s) if up_s >= down_s else (down_z, down_s)
-        if local_best_s > best_score:
-            best_ticks, best_score = local_best_z, local_best_s
-
-        # ---------------------- finalize ----------------------------------------
-        if self.pause_point():
-            return
-        move_to_ticks(best_ticks)
-        status(f"Autofocus (descent) complete: Best Z={best_ticks / TICKS_PER_MM:.2f} mm  Score={best_score:.3f}", True)
+        if self.pause_point(): return
+        self._af_move_to_ticks(best_z)
+        self._af_status(f"Autofocus (descent) complete: Best Z={best_z / _AFTPM:.2f} mm  Score={best_s:.3f}", True)
 
     def fine_autofocus(self, cmd: command) -> None:
         """
-        Fine autofocus around current Z only (±0.16 mm) at 0.04 mm steps.
-        Designed for quick re-focus when drift is small and starting point is near-best.
+        Fine autofocus around current Z (±0.16 mm) at 0.04 mm steps.
         """
+        RANGE_MM = 0.16
+        RANGE_TICKS = int(round(RANGE_MM * _AFTPM))  # ±16 ticks
+        NO_IMPROVE_LIMIT = 1
 
-        # ---- constants ----
-        TICKS_PER_MM = 100     # 0.01 mm units
-        STEP_TICKS   = 4       # 0.04 mm (printer min step)
-        RANGE_MM     = 0.16
-        RANGE_TICKS  = int(round(RANGE_MM * TICKS_PER_MM))    # 16 ticks
-        MAX_STEPS    = RANGE_TICKS // STEP_TICKS              # 4 steps per side
-        NO_IMPROVE_LIMIT = 1   # stop after this many non-improving steps per side
-
-        # ---- helpers ----
-        def status(msg: str, log: bool = True) -> None:
-            self._handle_status(self.status_cmd(msg), log)
-
-        def quantize_ticks(z_ticks: int) -> int:
-            return int(round(z_ticks / STEP_TICKS) * STEP_TICKS)
-
-        def within_window(zt: int, center: int) -> bool:
-            return center - RANGE_TICKS <= zt <= center + RANGE_TICKS
-
-        def move_to_ticks(z_ticks: int) -> None:
-            z_mm = z_ticks / TICKS_PER_MM
-            self._exec_gcode(f"G0 Z{z_mm:.2f}", wait=True)
-
-        def capture_and_score() -> float:
-            self._exec_gcode("M400", wait=True)
-            time.sleep(0.1)  # vibration settle
-            self.camera.capture_image()
-            while self.camera.is_taking_image:
-                time.sleep(0.01)
-            image = self.camera.get_last_frame(prefer="still", wait_for_still=False)
-            if image is None:
-                return float("-inf")
-            try:
-                if ImageAnalyzer.is_black(image):
-                    return float("-inf")
-                res = ImageAnalyzer.analyze_focus(image)
-                return float(getattr(res, "focus_score", float("-inf")))
-            except Exception:
-                return float("-inf")
-
-        scores = {}  # cache: z_ticks -> score
-        def score_at(zt: int) -> float:
-            zt = quantize_ticks(zt)
-            if zt in scores:
-                return scores[zt]
-            move_to_ticks(zt)
-            s = capture_and_score()
-            scores[zt] = s
-            return s
-
-        # ---- start: current Z as center ----
-        status(cmd.message or "Fine autofocus…", cmd.log)
+        self._af_status(cmd.message or "Fine autofocus…", cmd.log)
 
         pos = self.get_position()
-        center = quantize_ticks(int(round(getattr(pos, "z", 1600))))  # fallback 16.00 mm
-        status(f"[AF-Fine] Center Z={center / TICKS_PER_MM:.2f} mm", False)
+        center = self._af_quantize(int(round(getattr(pos, "z", 1600))))  # fallback 16.00 mm
+        self._af_status(f"[AF-Fine] Center Z={center / _AFTPM:.2f} mm", False)
 
-        # Score center (baseline)
-        best_z = center
-        baseline_s = score_at(center)
-        best_s = baseline_s
-        status(f"[AF-Fine] Baseline score={baseline_s:.3f}  Δbase={0:+.1f}", False)
+        # Window bounds: stay within center ± RANGE
+        def within_window(zt: int) -> bool:
+            return center - RANGE_TICKS <= zt <= center + RANGE_TICKS
 
-        # ---- climb one side helper ----
-        def climb_one_side(start: int, step_sign: int) -> tuple[int, float]:
-            """Hill-climb from start in ±0.04 mm steps up to MAX_STEPS within window."""
-            zt = start
-            best_local_z = start
-            best_local_s = scores[zt]
-            no_improve = 0
-            for _ in range(MAX_STEPS):
-                if self.pause_point():
-                    status("Fine autofocus paused/stopped.", True)
-                    return best_local_z, best_local_s
+        scores: dict[int, float] = {}
+        baseline = self._af_score_at(center, scores, within_window)
+        self._af_status(f"[AF-Fine] Baseline score={baseline:.3f}  Δbase={0:+.1f}", False)
 
-                nxt = quantize_ticks(zt + step_sign * STEP_TICKS)
-                if not within_window(nxt, center):
-                    break
+        best_z, best_s = self._af_refine_around(
+            center=center,
+            cache=scores,
+            bounds_ok=within_window,
+            fine_step_ticks=_AFSTEP,
+            no_improve_limit=NO_IMPROVE_LIMIT
+        )
 
-                s = score_at(nxt)
-                d = s - baseline_s
-                status(
-                    f"[AF-Fine] step {'+' if step_sign>0 else '-'}0.04: "
-                    f"Z={nxt / TICKS_PER_MM:.2f}  score={s:.3f}  Δbase={d:+.1f}",
-                    False
-                )
-
-                if s > best_local_s + 1e-6:
-                    best_local_z, best_local_s = nxt, s
-                    zt = nxt
-                    no_improve = 0
-                else:
-                    no_improve += 1
-                    zt = nxt
-                    if no_improve > NO_IMPROVE_LIMIT:
-                        break
-            return best_local_z, best_local_s
-
-        # ---- search both sides (down and up) ----
-        down_z, down_s = climb_one_side(center, -1)
-        up_z,   up_s   = climb_one_side(center,  1)
-
-        if up_s >= down_s:
-            best_z, best_s = up_z, up_s
-        else:
-            best_z, best_s = down_z, down_s
-
-        # ---- finalize ----
-        if self.pause_point():
+        if self.pause_point():  # graceful stop
             return
-        move_to_ticks(best_z)
-        status(
-            f"[AF-Fine] Best Z={best_z / TICKS_PER_MM:.2f} mm  "
-            f"Score={best_s:.3f}  Δbase={(best_s - baseline_s):.1f}",
+
+        self._af_move_to_ticks(best_z)
+        self._af_status(
+            f"[AF-Fine] Best Z={best_z / _AFTPM:.2f} mm  "
+            f"Score={best_s:.3f}  Δbase={(best_s - baseline):.1f}",
             True
         )
 
     def autofocus_macro(self, cmd: command) -> None:
         """
-        Autofocus with adaptive coarse→refine:
-        - Coarse (0.40 mm): alternate outward; once a side hits ≥ +50 vs baseline, skip the other side and continue only on the biased side.
-        - Refine: 0.20 mm hill-climb until improvement stalls, then 0.04 mm hill-climb to peak.
-        Units are ticks (0.01 mm). Printer min step = 4 ticks (0.04 mm).
+        General autofocus: Coarse 0.40 mm alternating outward with biasing,
+        then 0.20 mm refine march, then 0.04 mm fine polish around peak.
         """
+        COARSE_STEP_MM = 0.40
+        COARSE_STEP = int(round(COARSE_STEP_MM * _AFTPM))    # 40
+        REFINE_COARSE_MM = 0.20
+        REFINE_COARSE = int(round(REFINE_COARSE_MM * _AFTPM))  # 20
+        MAX_OFFSET_MM = 5.60
+        MAX_OFFSET = int(round(MAX_OFFSET_MM * _AFTPM))
+        IMPROVE_THRESH = 50
+        DROP_STOP_PEAK = 100
+        DROP_STOP_BASE = 100
 
-        # ---------------------- constants ---------------------------------------
-        Z_MIN_MM    = 0.00
-        TICKS_PER_MM = 100               # 0.01 mm
-        STEP_TICKS   = 4                 # 0.04 mm
-        MAX_OFFSET_MM     = 5.60
-        MAX_OFFSET_TICKS  = int(round(MAX_OFFSET_MM * TICKS_PER_MM))  # 560
-        Z_MIN_TICKS = int(round(Z_MIN_MM * TICKS_PER_MM))  # -> 0
-
-        # Coarse pass
-        COARSE_STEP_MM    = 0.40
-        COARSE_STEP_TICKS = int(round(COARSE_STEP_MM * TICKS_PER_MM)) # 40
-        IMPROVEMENT_THRESHOLD = 50       # bias trigger
-        DROP_STOP_PEAK_THRESHOLD = 100    # early-stop if drop ≥ this from the biased-side peak
-        DROP_STOP_BASE_THRESHOLD = 100    # early-stop if drop ≥ this below baseline when baseline is still best
-
-        # Refine pass (adaptive)
-        REFINE_COARSE_STEP_MM    = 0.20
-        REFINE_COARSE_STEP_TICKS = int(round(REFINE_COARSE_STEP_MM * TICKS_PER_MM))  # 20
-        REFINE_FINE_STEP_TICKS   = STEP_TICKS  # 0.04 mm
-        REFINE_NO_IMPROVE_LIMIT  = 2           # stop after N non-improving steps per fine side
-
-        # ---------------------- helpers -----------------------------------------
-        def status(msg: str, log: bool = True) -> None:
-            self._handle_status(self.status_cmd(msg), log)
-
-        def quantize_ticks(z_ticks: int) -> int:
-            return int(round(z_ticks / STEP_TICKS) * STEP_TICKS)
-
-        def move_to_ticks(z_ticks: int) -> None:
-            z_ticks = max(z_ticks, Z_MIN_TICKS)  # clamp to floor
-            z_mm = z_ticks / TICKS_PER_MM
-            self._exec_gcode(f"G0 Z{z_mm:.2f}", wait=True)
-
-        def capture_and_score() -> float:
-            self._exec_gcode("M400", wait=True)
-            time.sleep(0.1)  # vibration settle
-            self.camera.capture_image()
-            while self.camera.is_taking_image:
-                time.sleep(0.01)
-            image = self.camera.get_last_frame(prefer="still", wait_for_still=False)
-            if image is None:
-                return float("-inf")
-            try:
-                if ImageAnalyzer.is_black(image):
-                    return float("-inf")
-                res = ImageAnalyzer.analyze_focus(image)
-                return float(res.focus_score)
-            except Exception:
-                return float("-inf")
-
-        def within_envelope(zt: int) -> bool:
-            # existing start±MAX_OFFSET bounds…
-            return (start_ticks - MAX_OFFSET_TICKS) <= zt <= (start_ticks + MAX_OFFSET_TICKS) and zt >= Z_MIN_TICKS
-
-
-        # Score cache to avoid re-imaging same Z
-        scores = {}  # z_ticks -> score
-        def score_at(zt: int) -> float:
-            zt = quantize_ticks(zt)
-            if zt < Z_MIN_TICKS or not within_envelope(zt):
-                return float("-inf")
-            if zt in scores:
-                return scores[zt]
-            move_to_ticks(zt)
-            s = capture_and_score()
-            scores[zt] = s
-            return s
-
-        # ---------------------- start / baseline --------------------------------
-        status(cmd.message or "Autofocus starting…", cmd.log)
-
-        if self.pause_point():
-            return
+        self._af_status(cmd.message or "Autofocus starting…", cmd.log)
+        if self.pause_point(): return
 
         pos = self.get_position()
-        start_ticks = quantize_ticks(int(round(getattr(pos, "z", 1600))))  # default 16.00 mm
-        status(f"Start @ Z={start_ticks / TICKS_PER_MM:.2f} mm", cmd.log)
+        start = self._af_quantize(int(round(getattr(pos, "z", 1600))))
+        self._af_status(f"Start @ Z={start / _AFTPM:.2f} mm", cmd.log)
 
-        move_to_ticks(start_ticks)
-        baseline = capture_and_score()
-        scores[start_ticks] = baseline
-        best_ticks = start_ticks
-        best_score = baseline
-        status(f"[AF] Baseline Z={start_ticks / TICKS_PER_MM:.2f}  score={baseline:.3f}", False)
+        # Envelope: [start - MAX_OFFSET, start + MAX_OFFSET], floor clamped
+        def within_env(zt: int) -> bool:
+            return (start - MAX_OFFSET) <= zt <= (start + MAX_OFFSET) and zt >= _AF_ZFLOOR
 
-        # ---------------------- COARSE: alternating, then biased ----------------
-        k_right = 1
-        k_left  = 1
-        max_k   = MAX_OFFSET_TICKS // COARSE_STEP_TICKS  # 14 steps per side (±5.6mm on 0.40mm grid)
-        left_max_k_safe  = min(max_k, (start_ticks - Z_MIN_TICKS) // COARSE_STEP_TICKS)
-        right_max_k_safe = max_k  # no known Z_MAX; keep your existing envelope for the + side
-        bias_side = None               # 'right' or 'left'
+        scores: dict[int, float] = {}
+
+        # Baseline
+        self._af_move_to_ticks(start)
+        baseline = self._af_capture_and_score()
+        scores[start] = baseline
+        best_z = start
+        best_s = baseline
+        self._af_status(f"[AF] Baseline Z={start / _AFTPM:.2f}  score={baseline:.3f}", False)
+
+        # Coarse alternating with bias
+        k_right = 1; k_left = 1
+        max_k = MAX_OFFSET // COARSE_STEP
+        left_max_safe  = min(max_k, (start - _AF_ZFLOOR) // COARSE_STEP)
+        right_max_safe = max_k  # no known Z max bound other than envelope
+        bias_side = None   # 'right' or 'left'
         last_side = None
-        peak_score_on_bias = baseline  # running peak after bias is set
-        early_drop_armed = False       # becomes True once bias is set
-        peak_score_on_bias = baseline   # running peak on the biased side once bias is set
-        
-        # Alternate until bias triggers; after that, probe only on bias side
+        peak_on_bias = baseline
+
         while True:
             if self.pause_point():
-                status("Autofocus paused/stopped.", True); return
+                self._af_status("Autofocus paused/stopped.", True); return
 
-            right_has = k_right <= right_max_k_safe
-            left_has  = k_left  <= left_max_k_safe
+            right_has = k_right <= right_max_safe
+            left_has  = k_left  <= left_max_safe
             if not right_has and not left_has:
                 break
 
-            # pick side (alternate until bias; once biased, only probe that side)
+            # pick side
             if bias_side:
                 side = bias_side if ((bias_side == 'right' and right_has) or (bias_side == 'left' and left_has)) \
                     else ('right' if right_has else 'left')
             else:
-                if last_side == 'left' and right_has:
-                    side = 'right'
-                elif last_side == 'right' and left_has:
-                    side = 'left'
-                elif right_has:
-                    side = 'right'
-                elif left_has:
-                    side = 'left'
-                else:
-                    break
+                if last_side == 'left' and right_has:   side = 'right'
+                elif last_side == 'right' and left_has: side = 'left'
+                elif right_has:                          side = 'right'
+                else:                                    side = 'left'
 
-            # target Z for this coarse step
-            if side == 'right':
-                target = quantize_ticks(start_ticks + k_right * COARSE_STEP_TICKS)
-            else:
-                target = quantize_ticks(start_ticks - k_left * COARSE_STEP_TICKS)
-                if target < Z_MIN_TICKS:
-                    status("[AF-Coarse] Reached Z floor (0.00 mm); stopping left exploration.", True)
-                    # Exhaust the left side so we won't pick it again
-                    k_left = left_max_k_safe + 1
-                    last_side = side
-                    continue
+            target = (start + k_right * COARSE_STEP) if side == 'right' else (start - k_left * COARSE_STEP)
+            target = self._af_quantize(target)
 
-            # take a measurement
-            s = score_at(target)
-            if s > best_score:
-                best_score, best_ticks = s, target
+            if side == 'left' and target < _AF_ZFLOOR:
+                self._af_status("[AF-Coarse] Reached Z floor; stopping left exploration.", True)
+                k_left = left_max_safe + 1
+                last_side = side
+                continue
+
+            s = self._af_score_at(target, scores, within_env)
+            if s > best_s: best_s, best_z = s, target
 
             improv = s - baseline
-            status(f"[AF-Coarse] side={side:<5} Z={target / TICKS_PER_MM:.2f}  score={s:.3f}  Δbase={improv:+.1f}", False)
+            self._af_status(f"[AF-Coarse] side={side:<5} Z={target / _AFTPM:.2f}  score={s:.3f}  Δbase={improv:+.1f}", False)
 
-            # 1) Early-stop on baseline drop: if we started already in focus,
-            #    Δbase will plunge; if baseline is still the best-so-far, stop now.
-            if best_ticks == start_ticks:
-                base_drop = baseline - s  # positive when current is worse than baseline
-                if base_drop >= DROP_STOP_BASE_THRESHOLD:
-                    status(f"[AF-Coarse] Early stop (baseline-drop): score fell {base_drop:.1f} below baseline "
-                        f"({baseline:.1f} → {s:.1f})", True)
+            # early-stop if baseline is still best and we plunged
+            if best_z == start and (baseline - s) >= DROP_STOP_BASE:
+                self._af_status("[AF-Coarse] Early stop (baseline-drop)", True)
+                break
+
+            # set bias when improvement threshold crossed
+            if not bias_side and improv >= IMPROVE_THRESH:
+                bias_side = side
+                peak_on_bias = s
+                self._af_status(f"[AF-Coarse] Bias → {bias_side.upper()} (≥+{IMPROVE_THRESH})", True)
+
+            # early-stop on peak drop on bias side
+            if bias_side and side == bias_side:
+                if s > peak_on_bias:
+                    peak_on_bias = s
+                elif (peak_on_bias - s) >= DROP_STOP_PEAK:
+                    self._af_status("[AF-Coarse] Early stop (peak-drop)", True)
                     break
 
-            # 2) Usual bias logic (unchanged)
-            if not bias_side and improv >= IMPROVEMENT_THRESHOLD:
-                bias_side = side
-                peak_score_on_bias = s
-                status(f"[AF-Coarse] Bias → {bias_side.upper()} (≥+{IMPROVEMENT_THRESHOLD})", True)
-
-            # 3) Early-stop on peak drop (only on biased side)
-            if bias_side and side == bias_side:
-                if s > peak_score_on_bias:
-                    peak_score_on_bias = s
-                else:
-                    peak_drop = peak_score_on_bias - s
-                    if peak_drop >= DROP_STOP_PEAK_THRESHOLD:
-                        status(f"[AF-Coarse] Early stop (peak-drop): score fell {peak_drop:.1f} from peak "
-                            f"({peak_score_on_bias:.1f} → {s:.1f})", True)
-                        break
-
             # advance counters
-            if side == 'right':
-                k_right += 1
-            else:
-                k_left += 1
+            if side == 'right': k_right += 1
+            else:               k_left  += 1
             last_side = side
 
-            # if biased and that side is exhausted, end coarse
+            # if biased and side exhausted, end coarse
             if bias_side and ((bias_side == 'right' and not (k_right <= max_k)) or
                             (bias_side == 'left'  and not (k_left  <= max_k))):
                 break
 
-        # ---------------------- REFINE: adaptive hill-climb ---------------------
+        # Refine (0.20 mm marching in best direction), then fine polish
         if self.pause_point():
-            status("Autofocus paused/stopped.", True); return
+            self._af_status("Autofocus paused/stopped.", True); return
 
-        # 1) Decide initial direction: compare ±0.20 mm around the best coarse Z
-        def try_dir_step(center: int, delta_ticks: int) -> tuple[str, int, float]:
-            """Return (dir, zt, score) for a candidate step; dir in {'up','down'}."""
-            if delta_ticks == 0:
-                return ('none', center, scores.get(center, float('-inf')))
-            up_zt = quantize_ticks(center + delta_ticks)
-            down_zt = quantize_ticks(center - delta_ticks)
-            up_s   = score_at(up_zt)
-            down_s = score_at(down_zt)
-            return ('up', up_zt, up_s) if up_s >= down_s else ('down', down_zt, down_s)
+        # pick better of ±0.20 around best coarse
+        up_zt   = self._af_quantize(best_z + REFINE_COARSE)
+        down_zt = self._af_quantize(best_z - REFINE_COARSE)
+        up_s    = self._af_score_at(up_zt, scores, within_env)
+        down_s  = self._af_score_at(down_zt, scores, within_env)
+        dir1, z1, s1 = (('up', up_zt, up_s) if up_s >= down_s else ('down', down_zt, down_s))
+        self._af_status(f"[AF-Refine] Probe 0.20mm {dir1}: Z={z1 / _AFTPM:.2f}  score={s1:.3f}", False)
+        if s1 > best_s: best_s, best_z = s1, z1
 
-        # choose coarse refine direction
-        dir1, z1, s1 = try_dir_step(best_ticks, REFINE_COARSE_STEP_TICKS)
-        status(f"[AF-Refine] Probe 0.20mm {dir1}: Z={z1 / TICKS_PER_MM:.2f}  score={s1:.3f}", False)
-        if s1 > best_score:
-            best_score, best_ticks = s1, z1
-
-        # 2) March in 0.20 mm steps while improving
-        current_ticks = z1
-        prev_score = s1
+        # march in 0.20 until not improving
+        current, prev = z1, s1
         while True:
             if self.pause_point():
-                status("Autofocus paused/stopped.", True); return
-            step = REFINE_COARSE_STEP_TICKS if dir1 == 'up' else -REFINE_COARSE_STEP_TICKS
-            nxt = quantize_ticks(current_ticks + step)
-            if nxt < Z_MIN_TICKS:
-                status("[AF-Refine] Z floor hit; stopping in this direction.", False)
+                self._af_status("Autofocus paused/stopped.", True); return
+            step = REFINE_COARSE if dir1 == 'up' else -REFINE_COARSE
+            nxt = self._af_quantize(current + step)
+            if nxt < _AF_ZFLOOR or not within_env(nxt):
                 break
-            if not within_envelope(nxt):
-                break
-            s = score_at(nxt)
-            status(f"[AF-Refine] 0.20mm step {dir1}: Z={nxt / TICKS_PER_MM:.2f}  score={s:.3f}", False)
-            if s > best_score:
-                best_score, best_ticks = s, nxt
-            if s + 1e-6 >= prev_score:  # still improving or equal
-                current_ticks, prev_score = nxt, s
-                continue
+            s = self._af_score_at(nxt, scores, within_env)
+            self._af_status(f"[AF-Refine] 0.20mm step {dir1}: Z={nxt / _AFTPM:.2f}  score={s:.3f}", False)
+            if s > best_s: best_s, best_z = s, nxt
+            if s + 1e-6 >= prev:
+                current, prev = nxt, s
             else:
-                # improvement stalled; prepare to fine search around previous point
                 break
 
-        # 3) Fine hill-climb at 0.04 mm around the best-so-far
-        center = best_ticks
-        def climb_one_side(start: int, step_ticks: int) -> tuple[int, float]:
-            """Move from start in +step_ticks increments until score worsens N times."""
-            zt = start
-            best_local_z = start
-            best_local_s = scores.get(start, score_at(start))
-            no_improve = 0
-            while True:
-                if self.pause_point():
-                    status("Autofocus paused/stopped.", True); return best_local_z, best_local_s
-                nxt = quantize_ticks(zt + step_ticks)
-                if nxt < Z_MIN_TICKS:
-                    status("[AF-Refine] Z floor hit; stopping in this direction.", False)
-                    break
-                if not within_envelope(nxt):
-                    break
-                s = score_at(nxt)
-                status(f"[AF-Refine] 0.04mm step {'up' if step_ticks>0 else 'down'}: Z={nxt / TICKS_PER_MM:.2f}  score={s:.3f}", False)
-                if s > best_local_s + 1e-6:
-                    best_local_z, best_local_s = nxt, s
-                    zt = nxt
-                    no_improve = 0
-                else:
-                    no_improve += 1
-                    zt = nxt
-                    if no_improve >= REFINE_NO_IMPROVE_LIMIT:
-                        break
-            return best_local_z, best_local_s
+        # fine hill-climb around best
+        center = best_z
+        local_z, local_s = self._af_refine_around(center, scores, within_env, _AFSTEP, no_improve_limit=2)
+        if local_s > best_s:
+            best_z, best_s = local_z, local_s
 
-        # Explore both sides finely from the center; keep the best
-        up_z, up_s     = climb_one_side(center,  REFINE_FINE_STEP_TICKS)
-        down_z, down_s = climb_one_side(center, -REFINE_FINE_STEP_TICKS)
-        if up_s >= down_s:
-            center, local_best_s = up_z, up_s
-        else:
-            center, local_best_s = down_z, down_s
-
-        if local_best_s > best_score:
-            best_score, best_ticks = local_best_s, center
-
-        # ---------------------- finalize ----------------------------------------
-        if self.pause_point():
-            return
-        move_to_ticks(best_ticks)
-        status(f"Autofocus complete: Best Z={best_ticks / TICKS_PER_MM:.2f} mm  Score={best_score:.3f}", True)
+        if self.pause_point(): return
+        self._af_move_to_ticks(best_z)
+        self._af_status(f"Autofocus complete: Best Z={best_z / _AFTPM:.2f} mm  Score={best_s:.3f}", True)
 
 
     # Automation
-    # --- 1) Handler --------------------------------------------------------------
+    # --- Handler --------------------------------------------------------------
     def scan_sample_bounds(self, cmd: command) -> None:
         STEP_MM  = 2.00
         Y_MAX_MM = 224.0
@@ -913,7 +665,7 @@ class AutomatedPrinter(BasePrinterController):
                 pass
 
 
-    # --- 3) Convenience starter --------------------------------------------------
+    # --- Convenience starter --------------------------------------------------
     def start_scan_sample_bounds(self) -> None:
         """
         Enqueue SCAN_SAMPLE_BOUNDS as a single command (macro-style handler).
