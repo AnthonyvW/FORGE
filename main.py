@@ -120,21 +120,20 @@ if __name__ == "__main__":
 
             elif event.type == pygame.MOUSEWHEEL:
                 mx, my = pos
-                root_frame.broadcast_mouse_wheel(mx, my, dx=event.x, dy=event.y)
                 root_frame.process_mouse_wheel(mx, my, dx=event.x, dy=event.y)
             elif event.type == pygame.MOUSEBUTTONUP:
-                root_frame.process_mouse_release(*pos, button="left")
+                if event.button in (1, 2, 3):
+                    root_frame.process_mouse_release(*pos, button="left")
             elif event.type == pygame.MOUSEBUTTONDOWN:
-                root_frame.broadcast_mouse_press(*pos, button="left")
-                root_frame.process_mouse_press(*pos, button="left")
+                if event.button in (1, 2, 3):  # left, middle, right only
+                    root_frame.broadcast_mouse_press(*pos, button="left")
+                    root_frame.process_mouse_press(*pos, button="left")
             elif event.type == pygame.KEYDOWN:
                 root_frame.broadcast_key_event(event)
                 if event.key == pygame.K_ESCAPE:
                     running = False
             elif event.type == pygame.KEYUP:
                 root_frame.broadcast_key_event(event)
-                background_color = pygame.Color(255, 0, 0)
-                screen.fill(background_color)
 
         root_frame.process_mouse_move(*pos)
 

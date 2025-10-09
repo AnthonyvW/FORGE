@@ -137,6 +137,7 @@ class ScrollFrame(Frame):
         track_color=pygame.Color("#d7d7d7"),
         thumb_color=pygame.Color("#9a9a9a"),
         thumb_min_px=24,
+        bottom_padding = 10,
         z_index=0,
     ):
         # Prevent overridden add_child from running before content exists
@@ -149,6 +150,7 @@ class ScrollFrame(Frame):
         self.scroll_y = 0
         self.scroll_speed = scroll_speed
         self.scrollbar_width = scrollbar_width
+        self.bottom_padding = bottom_padding
 
         # Content container (everything the user adds goes here)
         self.content = Frame(
@@ -214,17 +216,13 @@ class ScrollFrame(Frame):
             if bottom_rel > max_bottom_rel:
                 max_bottom_rel = bottom_rel
 
-        return max(max_bottom_rel, self._viewport_height())
+        return max(max_bottom_rel + self.bottom_padding, self._viewport_height())
 
     # --- scroll core ---
     def _set_scroll(self, value: int | float):
         max_scroll = max(0, self._content_height() - self._viewport_height())
         self.scroll_y = max(0, min(int(value), max_scroll))
         self.content.y = -self.scroll_y
-
-    def on_wheel(self, delta_y: int):
-        """(Hook this up later from your event loop.)"""
-        self._set_scroll(self.scroll_y - delta_y * self.scroll_speed)
 
     # --- input routing: run layout first so geometry is up-to-date ---
     def process_mouse_press(self, px, py, button):
@@ -249,7 +247,14 @@ class ScrollFrame(Frame):
         super().process_mouse_release(px, py, button)
 
     def on_wheel(self, dx: int, dy: int, px: int, py: int) -> None:
-        # positive dy = wheel up in pygame; adjust to taste
+        # Keep layout fresh for correct hit-tests
+        self._layout()
+
+        # Only react if the mouse is over the visible viewport or the scrollbar track
+        if not (self._viewport_rect().collidepoint(px, py) or self.scrollbar._track_rect().collidepoint(px, py)):
+            return
+
+        # Pygame: positive dy == wheel up
         self._set_scroll(self.scroll_y - dy * self.scroll_speed)
 
     # --- drawing ---

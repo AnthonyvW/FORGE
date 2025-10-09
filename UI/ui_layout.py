@@ -92,7 +92,7 @@ def create_control_panel(
     _build_automation_control(automation_box, movementSystem)
 
     # --- Camera Settings Modal ---
-    camera_settings_modal = Modal(parent=root_frame, title="Camera Settings", overlay=False, width=308, height=1038)
+    camera_settings_modal = Modal(parent=root_frame, title="Camera Settings", overlay=False, width=308, height=680)
     build_camera_settings_modal(camera_settings_modal, camera)
 
     # --- Camera Settings ---

@@ -299,26 +299,16 @@ class Frame():
             if self.contains_point(px, py):
                 self.on_click(button)
     
-    def process_mouse_wheel(self, px: int, py: int, *, dx: int = 0, dy: int = 0) -> None:
-        """Route wheel to the topmost child under the pointer; fall back to self."""
-        if self.is_effectively_hidden:
-            return
-
-        # Find top-most child under the cursor (front-to-back, matching your other handlers).
-        top_hit = None
-        for child in (self.children):
-            if child.mouse_passthrough:
-                continue
+    def process_mouse_wheel(self, px: int, py: int, *, dx: int, dy: int) -> bool:
+        # Route to topmost eligible child under the cursor first
+        for child in reversed(self.children):  # assume later children are drawn on top
             if child.contains_point(px, py):
-                top_hit = child
-                break
+                if child.process_mouse_wheel(px, py, dx=dx, dy=dy):
+                    return True
 
-        if top_hit is not None:
-            top_hit.process_mouse_wheel(px, py, dx=dx, dy=dy)
-        else:
-            # Only deliver to self if the pointer is inside this frame
-            if self.contains_point(px, py):
-                self.on_wheel(dx, dy, px, py)
+        # If no child handled it, let THIS frame handle it (if it wants)
+        return bool(self.on_wheel(dx, dy, px, py))
+
 
     def broadcast_mouse_wheel(self, px: int, py: int, *, dx: int = 0, dy: int = 0) -> None:
         """Give every widget a chance to react to wheel (e.g., global zoom, tooltips)."""
@@ -376,7 +366,7 @@ class Frame():
 
     def on_wheel(self, dx: int, dy: int, px: int, py: int) -> None:
         """Override in widgets that want wheel input. (dx/dy match pygame.MOUSEWHEEL)"""
-        pass
+        return False
 
     def on_hover(self):
         pass
