@@ -8,8 +8,6 @@
 
 FORGE is an open-source, gigapixel-scale imaging system designed to scan tree core samples with high precision. Built upon a modified off-the-shelf 3D printer, it automates the imaging of multiple samples, producing ultra-high-resolution images suitable for dendrochronology and related research. 
 
-Note: automatically imaging multiple cores is currently being worked on. Right now, it only images 1 core at a time, but has GUI elements to easily switch between cores.
-
 <table>
   <tr>
     <td width="19%">
@@ -166,22 +164,6 @@ FORGE is designed to run on 3D printers using **Marlin firmware**, which support
 | Creality CR-10S Pro v2  | Marlin   | 300 × 300 × 400   | Fully tested; camera mount file not available          |
 | Anycubic Kobra Max      | Marlin   | 400 × 400 × 450   | Fully tested; camera mount file not available. Note that this is for the V1 version and not the new V3 version.          |
 ---
-
-## Request a New Camera Mount
-
-If your 3D printer model isn't listed above and you'd like to see a compatible camera mount designed,  
-please [open a GitHub issue](https://github.com/AnthonyvW/FORGE/issues/new?template=mount-request.md) with the following details:
-
-- Printer make and model  
-- Firmware version (Marlin recommended)  
-- Link to official technical specs or mechanical drawings (if available)  
-- Bed size and carriage dimensions  
-- Photos and measurements of the **print head carriage (with the print head removed)**
-
-> 📷 Having good reference images or CAD models significantly improves the chance of a usable mount being developed!
->
-> Note : I cannot test if the mount fits myself without the printer, so you must have a 3D printer yourself, preferably one that's not being used for this.
---- 
 
 ### ⚠️ Incompatible or Unverified Setups
 
