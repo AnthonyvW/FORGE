@@ -245,7 +245,7 @@ class ScrollFrame(Frame):
         self.content.x = 0
         self.content.y = -self.scroll_y
         self.content.width = viewport_w
-        self.content.height = viewport_h
+        self.content.height = max(viewport_h, self._content_height())
 
     # --- scroll core ---
     def _set_scroll(self, value: int | float):
