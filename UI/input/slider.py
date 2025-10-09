@@ -77,13 +77,13 @@ class Slider(Frame):
 
             # White background & border, keep text black
             btn_colors = ButtonColors(
-                background=pygame.Color("#ffffff"),  
-                hover_background=pygame.Color("#ffffff"),  
-                disabled_background=pygame.Color("#ffffff"),
+                background=pygame.Color("#f5f5f5"),  
+                hover_background=pygame.Color("#f5f5f5"),  
+                disabled_background=pygame.Color("#f5f5f5"),
 
-                foreground=pygame.Color("#FFFFFF"),          
-                hover_foreground=pygame.Color("#ffffff"),    
-                disabled_foreground=pygame.Color("#ffffff")
+                foreground=pygame.Color("#f5f5f5"),          
+                hover_foreground=pygame.Color("#f5f5f5"),    
+                disabled_foreground=pygame.Color("#f5f5f5")
             )
 
             self.left_button = Button(

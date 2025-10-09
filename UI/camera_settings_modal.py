@@ -557,19 +557,6 @@ def build_camera_settings_modal(modal, camera) -> None:
     add_level_range_high_setting(scroll_area, camera, settings, y=layout.next_y())
     add_white_balance_gain_setting(scroll_area, camera, settings, y=layout.next_y())
 
-    def _refresh_modal_ui():
-        try:
-            # If your Modal has a helper, use that; otherwise do a simple rebuild:
-            modal.remove_all_children()      # or: modal.clear_children()
-        except Exception:
-            # Fallback: wipe children list if the class exposes it.
-            try:
-                modal.children = []
-            except Exception:
-                pass
-        # Rebuild from current camera.settings:
-        build_camera_settings_modal(modal, camera)
-
     add_save_load_reset_section(
         modal, camera,
         y=modal.height-80

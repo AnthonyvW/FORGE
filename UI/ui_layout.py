@@ -15,6 +15,7 @@ from UI.modal import Modal
 from UI.camera_view import CameraView
 from UI.focus_overlay import FocusOverlay
 from UI.list_frame import ListFrame
+from UI.flex_frame import FlexFrame
 
 from UI.input.text_field import TextField
 from UI.input.button import Button, ButtonShape
@@ -81,14 +82,25 @@ def create_control_panel(
     )
     machine_vision_overlay = FocusOverlay(camera_view, movementSystem.machine_vision)
 
+
     # --- Control Box ---
-    control_box = Section(parent=control_frame, title="Control", collapsible=False,
-        x=10, y=60, width=RIGHT_PANEL_WIDTH - 20, height=250)
+    control_box = Section(
+        parent=control_frame,
+        title="Control",
+        collapsible=True,
+        x=0, y=0, width=1.0, height=250,
+        width_is_percent=True
+    )
     speed_display, position_display = _build_movement_controls(control_box, movementSystem)
 
     # --- Automation Box ---
-    automation_box = Section(parent=control_frame, title= "Automation", collapsible=False, 
-        x=10, y=control_box.y + control_box.height + box_spacing, width = RIGHT_PANEL_WIDTH - 20, height = 90)
+    automation_box = Section(
+        parent=control_frame,
+        title="Automation",
+        collapsible=True,
+        x=0, y=0, width=1.0, height=90,
+        width_is_percent=True
+    )
     _build_automation_control(automation_box, movementSystem)
 
     # --- Camera Settings Modal ---
@@ -96,16 +108,26 @@ def create_control_panel(
     build_camera_settings_modal(camera_settings_modal, camera)
 
     # --- Camera Settings ---
-    camera_control = Section(parent=control_frame, title="Camera Control", collapsible=False, 
-        x=10,y=automation_box.y + automation_box.height + box_spacing, width = RIGHT_PANEL_WIDTH - 20, height = 213)
+    camera_control = Section(
+        parent=control_frame,
+        title="Camera Control",
+        collapsible=True,
+        x=0, y=0, width=1.0, height=213,
+        width_is_percent=True
+    )
     _build_camera_control(camera_control, machine_vision_overlay, movementSystem, camera, camera_settings_modal)
 
     # --- Sample Box ---
-    sample_box = Section(parent=control_frame, title="Sample Management", 
-        x=10, y=camera_control.y + camera_control.height + box_spacing, width = RIGHT_PANEL_WIDTH - 20, height = 225+35*5)
-    go_to_sample_button, decrement_button, increment_button, sample_label = _build_sample_box(sample_box, movementSystem, camera, current_sample_index)
-  
-    # --- Modal ---
+    sample_box = Section(
+        parent=control_frame,
+        title="Sample Management",
+        collapsible=True,
+        x=0, y=0, width=1.0, height=220 + 35*5,
+        width_is_percent=True
+    )
+    go_to_sample_button, decrement_button, increment_button, sample_label = _build_sample_box(
+        sample_box, movementSystem, camera, current_sample_index
+    )
 
     return (
         sample_label,
@@ -116,20 +138,20 @@ def create_control_panel(
         position_display
     )
 
-def _build_right_control_panel(root_frame)-> Frame:
-    # --- Control Panel Container ---
+def _build_right_control_panel(root_frame) -> Frame:
+    # --- Control Panel Container (plain Frame) ---
     control_frame = Frame(
         parent=root_frame,
         x=0, y=0,
         width=RIGHT_PANEL_WIDTH,
-        height=1.0,  # percent height to fill root
+        height=1.0,              # fill vertical space of root
         height_is_percent=True,
         x_align='right',
         y_align='top',
         background_color=pygame.Color("#b3b4b6")
     )
 
-    # --- Title Bar ---
+    # --- Title Bar (not part of flex) ---
     title_bar = Frame(
         parent=control_frame,
         x=0, y=0,
@@ -139,7 +161,6 @@ def _build_right_control_panel(root_frame)-> Frame:
         background_color=pygame.Color("#909398")
     )
 
-    # --- Title Text ---
     title_text = Text(
         parent=title_bar,
         text="FORGE",
@@ -154,8 +175,23 @@ def _build_right_control_panel(root_frame)-> Frame:
         )
     )
 
-    return control_frame
+    # --- Content Column (this is the flex container) ---
+    content_column = FlexFrame(
+        parent=control_frame,
+        x=0,
+        y=50,
+        width=RIGHT_PANEL_WIDTH,
+        height=1.0,
+        height_is_percent=True,
+        padding=(10, 10, 10, 10),
+        gap=10,
+        fill_child_width=True,
+        align_horizontal="left",
+        auto_height_to_content=False
+    )
 
+    # Return both so caller can attach sections to content_column
+    return content_column
 
 def _build_movement_controls(control_box, movementSystem)-> Frame:
     
@@ -240,7 +276,7 @@ def _build_sample_box(sample_box, movementSystem, camera, current_sample_index):
     # 4th Row
     def build_row(i: int, parent: Frame) -> None:
         on_overrides = ToggledColors(
-            background=pygame.Color("#7ed957"),        # green-ish when ON
+            background=pygame.Color("#7ed957"),
             hover_background=pygame.Color("#6bc24b"),
             foreground=pygame.Color("#2f6f2a"),
             hover_foreground=pygame.Color("#2f6f2a"),
@@ -269,7 +305,7 @@ def _build_sample_box(sample_box, movementSystem, camera, current_sample_index):
 
         TextField(parent=parent, x=150, y=0, width=180, height=30, placeholder=f"sample {i+1}", border_color=pygame.Color("#b3b4b6"), text_color=pygame.Color("#5a5a5a"), on_text_change=camera.set_capture_name)
         
-    scroll_area = ScrollFrame(parent=sample_box, x=10, y= 60, width=RIGHT_PANEL_WIDTH - 40, height=300)
+    scroll_area = ScrollFrame(parent=sample_box, x=10, y= 60, width=RIGHT_PANEL_WIDTH - 40, height=295)
 
     lst = ListFrame(parent=scroll_area, x=10, y=10, width=1.0, height=700,
                 width_is_percent=True,
