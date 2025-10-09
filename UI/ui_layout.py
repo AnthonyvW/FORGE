@@ -122,8 +122,8 @@ def create_control_panel(
         parent=control_frame,
         title="Sample Management",
         collapsible=True,
-        x=0, y=0, width=1.0, height=220 + 35*5,
-        width_is_percent=True
+        x=0, y=0, width=1.0, fill_remaining_height=True,
+        width_is_percent=True, padding=(0,0,10,0)
     )
     go_to_sample_button, decrement_button, increment_button, sample_label = _build_sample_box(
         sample_box, movementSystem, camera, current_sample_index
@@ -179,15 +179,18 @@ def _build_right_control_panel(root_frame) -> Frame:
     content_column = FlexFrame(
         parent=control_frame,
         x=0,
-        y=50,
+        y=50,                        # start 50px down
         width=RIGHT_PANEL_WIDTH,
-        height=1.0,
-        height_is_percent=True,
+        height=0,                    # ignored when fill_remaining_height=True
+        height_is_percent=False,
         padding=(10, 10, 10, 10),
         gap=10,
         fill_child_width=True,
         align_horizontal="left",
-        auto_height_to_content=False
+
+        # key bits:
+        fill_remaining_height=True,  # <-- stretch to parent's bottom
+        auto_height_to_content=False # <-- avoid fighting with fill-to-bottom
     )
 
     # Return both so caller can attach sections to content_column
@@ -305,7 +308,7 @@ def _build_sample_box(sample_box, movementSystem, camera, current_sample_index):
 
         TextField(parent=parent, x=150, y=0, width=180, height=30, placeholder=f"sample {i+1}", border_color=pygame.Color("#b3b4b6"), text_color=pygame.Color("#5a5a5a"), on_text_change=camera.set_capture_name)
         
-    scroll_area = ScrollFrame(parent=sample_box, x=10, y= 60, width=RIGHT_PANEL_WIDTH - 40, height=295)
+    scroll_area = ScrollFrame(parent=sample_box, x=10, y= 60, width=RIGHT_PANEL_WIDTH - 40, height=295, fill_remaining_height=True)
 
     lst = ListFrame(parent=scroll_area, x=10, y=10, width=1.0, height=700,
                 width_is_percent=True,

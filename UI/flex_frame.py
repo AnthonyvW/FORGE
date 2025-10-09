@@ -35,9 +35,9 @@ class FlexFrame(Frame):
             x_is_percent=x_is_percent, y_is_percent=y_is_percent,
             width_is_percent=width_is_percent, height_is_percent=height_is_percent,
             z_index=z_index, background_color=background_color,
+            padding=padding,
             **kwargs
         )
-        self.padding = padding
         self.gap = gap
         self.fill_child_width = fill_child_width
         self.align_horizontal = align_horizontal
@@ -51,57 +51,49 @@ class FlexFrame(Frame):
 
     # --- Core layout: compute child positions/sizes in absolute container space
     def _layout(self) -> None:
-        abs_x, abs_y, abs_w, abs_h = self.get_absolute_geometry()
-        pad_l, pad_t, pad_r, pad_b = self.padding
 
-        inner_x = abs_x + pad_l
-        inner_y = abs_y + pad_t
-        inner_w = max(0, abs_w - pad_l - pad_r)
-        # inner_h kept if you later want % height to respect bottom padding:
-        inner_h = max(0, abs_h - pad_t - pad_b)
-
-        y_cursor = inner_y
+        y_cursor = 0  # content-local pixels (0 is top of content box)
         visible_children = [ch for ch in self.children if not ch.is_effectively_hidden]
 
         for i, child in enumerate(visible_children):
-            # --- Width handling: respect right padding even for % widths
+            # --- Fill width if requested: since base Frame uses the content box,
+            #     percent widths are now relative to content width. So 1.0 == fill.
             if self.fill_child_width:
-                if child.width_is_percent:
-                    # interpret percent as a fraction of *inner_w*
-                    # (child.width is assumed to be 0.0..1.0 when width_is_percent)
-                    child.width = int(child.width * inner_w)
-                else:
-                    child.width = inner_w
-                child.width_is_percent = False  # lock to pixels inside padded box
+                child.width_is_percent = True
+                child.width = 1.0
+            # else: leave child's width props as-is
 
-            # Compute child's abs size after width adjustment
-            _, _, ch_w, ch_h = child.get_absolute_geometry()
-
-            # Horizontal alignment inside padded inner area
+            # Horizontal alignment inside content box
             if self.align_horizontal == "left":
-                child_x = inner_x
+                child.x_align = "left"
             elif self.align_horizontal == "center":
-                child_x = inner_x + (inner_w - ch_w) // 2
+                child.x_align = "center"
             elif self.align_horizontal == "right":
-                child_x = inner_x + (inner_w - ch_w)
+                child.x_align = "right"
             else:
-                child_x = inner_x
+                child.x_align = "left"
 
-            # Position in parent-local coords
-            child.x_is_percent = False
+            # Position vertically (content-local); base Frame will offset by content origin
             child.y_is_percent = False
-            child.x = child_x - abs_x
-            child.y = y_cursor - abs_y
+            child.y = y_cursor
+
+            # For left/center/right we want x as an offset from alignment anchor
+            child.x_is_percent = False
+            child.x = 0  # use alignment only
+
+            # After setting width/position hints, read child's computed height
+            # (this uses current width/height props relative to content box)
+            _, _, ch_w, ch_h = child.get_absolute_geometry()
 
             # Advance cursor
             y_cursor += ch_h
             if i != len(visible_children) - 1:
                 y_cursor += self.gap
 
-        # Do NOT apply bottom padding to total height unless you want auto-size
+        # Auto-size this FlexFrame’s OUTER height to fit children + padding
         if self.auto_height_to_content and not self.height_is_percent:
-            content_h = (y_cursor - inner_y) + pad_b
-            self.height = max(0, content_h)
+            pt, pr, pb, pl = self.padding  # base Frame’s padding (top,right,bottom,left)
+            self.height = max(0, y_cursor + pt + pb)
 
         self._layout_dirty = False
 

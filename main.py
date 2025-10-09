@@ -141,9 +141,12 @@ if __name__ == "__main__":
         screen.fill([60, 60, 60])
 
         def draw_debug_outline(surface, frame):
+            cx, cy, cw, ch = frame.get_content_geometry()
+            pygame.draw.rect(surface, pygame.Color(0, 255, 0), (cx, cy, cw, ch), 2)
+
             x, y, w, h = frame.get_absolute_geometry()
             color = frame.debug_outline_color
-            pygame.draw.rect(surface, color, pygame.Rect(x, y, w, h), 2)
+            pygame.draw.rect(surface, color, pygame.Rect(x, y, w, h), 1)
 
             for child in frame.children:
                 draw_debug_outline(surface, child)

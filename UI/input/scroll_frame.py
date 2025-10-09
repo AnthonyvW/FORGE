@@ -139,12 +139,14 @@ class ScrollFrame(Frame):
         thumb_min_px=24,
         bottom_padding = 10,
         z_index=0,
+        **kwargs
     ):
         # Prevent overridden add_child from running before content exists
         self._initializing = True
         super().__init__(
             parent=parent, x=x, y=y, width=width, height=height,
-            background_color=background_color, z_index=z_index
+            background_color=background_color, z_index=z_index,
+            **kwargs
         )
 
         self.scroll_y = 0
@@ -185,23 +187,30 @@ class ScrollFrame(Frame):
     # --- geometry + layout ---
     def _viewport_rect(self) -> pygame.Rect:
         x, y, w, h = self.get_absolute_geometry()
-        return pygame.Rect(x, y, max(0, w - self.scrollbar_width), h)
+        # If scrollbar is hidden, content gets full width
+        width = w if getattr(self.scrollbar, "is_hidden", False) else max(0, w - self.scrollbar_width)
+        return pygame.Rect(x, y, width, h)
 
     def _viewport_height(self) -> int:
         return self.get_absolute_geometry()[3]
 
     def _layout(self):
-        """Ensure content matches viewport width and logical scroll position."""
+        """Two-pass layout so resizes clamp scroll and scrollbar hides/shows instantly."""
         abs_x, abs_y, abs_w, abs_h = self.get_absolute_geometry()
-        viewport_w = max(0, abs_w - self.scrollbar_width)
 
-        # Content occupies only viewport area (not under the scrollbar)
-        self.content.width_is_percent = False
-        self.content.height_is_percent = False
-        self.content.x = 0
-        self.content.width = viewport_w
-        self.content.height = abs_h
-        self.content.y = -self.scroll_y  # logical scroll
+        # 1) Assume no scrollbar first
+        self.scrollbar.is_hidden = True
+        self._apply_content_geometry(abs_w, abs_h)
+
+        # 2) Check if we actually need scrolling
+        need_scroll = self._content_height() > abs_h
+        if need_scroll:
+            # With scrollbar shown, viewport gets narrower
+            self.scrollbar.is_hidden = False
+            self._apply_content_geometry(max(0, abs_w - self.scrollbar_width), abs_h)
+
+        # 3) Clamp scroll after any size change
+        self._clamp_scroll()
 
     def _content_height(self) -> int:
         """Total vertical extent of content children relative to content's top."""
@@ -217,6 +226,26 @@ class ScrollFrame(Frame):
                 max_bottom_rel = bottom_rel
 
         return max(max_bottom_rel + self.bottom_padding, self._viewport_height())
+
+
+    def _max_scroll(self) -> int:
+        return max(0, self._content_height() - self._viewport_height())
+
+    def _clamp_scroll(self) -> None:
+        """Keep scroll_y valid after size changes (e.g., window expand)."""
+        max_scroll = self._max_scroll()
+        new_y = min(max(self.scroll_y, 0), max_scroll)
+        if new_y != self.scroll_y:
+            self.scroll_y = new_y
+            self.content.y = -self.scroll_y
+
+    def _apply_content_geometry(self, viewport_w: int, viewport_h: int) -> None:
+        self.content.width_is_percent = False
+        self.content.height_is_percent = False
+        self.content.x = 0
+        self.content.y = -self.scroll_y
+        self.content.width = viewport_w
+        self.content.height = viewport_h
 
     # --- scroll core ---
     def _set_scroll(self, value: int | float):
@@ -265,15 +294,13 @@ class ScrollFrame(Frame):
         self._layout()
         abs_x, abs_y, abs_w, abs_h = self.get_absolute_geometry()
 
-        # Background
         if self.background_color:
             pygame.draw.rect(surface, self.background_color, (abs_x, abs_y, abs_w, abs_h))
 
-        # Clip and draw content
         old_clip = surface.get_clip()
         surface.set_clip(self._viewport_rect())
         self.content.draw(surface)
         surface.set_clip(old_clip)
 
-        # Draw scrollbar (child)
-        self.scrollbar.draw(surface)
+        if not self.scrollbar.is_hidden:
+            self.scrollbar.draw(surface)

@@ -107,7 +107,7 @@ def create_numeric_setting(
     )
 
     text_field = TextField(
-        parent=modal, x=x + 208, y=y + 28, width=80, height=32,
+        parent=modal, x=x + 208, y=y + 28, width=65, height=32,
         placeholder=str(cur), allowed_pattern=NUMERIC_PATTERN,
         border_color=pygame.Color("#b3b4b6"), text_color=pygame.Color("#5a5a5a"),
     )
