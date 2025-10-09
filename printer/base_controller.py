@@ -101,6 +101,7 @@ class BasePrinterController:
     def __init__(self, forgeConfig: ForgeSettings):
         self.config = PrinterSettings()
         PrinterSettingsManager.scope_dir(self.CONFIG_SUBDIR)
+        self.config = PrinterSettingsManager.load_defaults("")
         self.position = Position(0, 0, 0) # Current position
         self.speed = self.config.step_size  # Current Speed
         self.paused = False
@@ -125,11 +126,11 @@ class BasePrinterController:
 
 
         # Initialize serial connection
-        self._initialize_printer(forgeConfig)
+        #self._initialize_printer(forgeConfig)
         
         # Start command processing thread
-        self._processing_thread = threading.Thread(target=self._process_commands, daemon=True)
-        self._processing_thread.start()
+        #self._processing_thread = threading.Thread(target=self._process_commands, daemon=True)
+        #self._processing_thread.start()
 
     def _initialize_printer(self, forgeConfig):
         """Initialize printer serial connection"""

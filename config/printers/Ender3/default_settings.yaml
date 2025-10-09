@@ -4,4 +4,4 @@ baud_rate: 115200
 max_x: 23500  # Maximum X dimension in steps
 max_y: 22500  # Maximum Y dimension in steps
 max_z: 6000   # Maximum Z dimension in steps
-step_size: 4  # minimum distance that can be moved in 0.01mm
+step_size: 4  # minimum distance that can be moved in 1 step
