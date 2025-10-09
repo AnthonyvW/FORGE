@@ -19,6 +19,7 @@ from UI.list_frame import ListFrame
 from UI.input.text_field import TextField
 from UI.input.button import Button, ButtonShape
 from UI.input.toggle_button import ToggleButton, ToggledColors
+from UI.input.scroll_frame import ScrollFrame
 from UI.styles import (
     make_button_text_style,
     make_display_text_style,
@@ -296,11 +297,13 @@ def _build_sample_box(sample_box, movementSystem, camera, current_sample_index):
             style=make_button_text_style()
         )
 
-        TextField(parent=parent, x=140, y=0, width=220, height=30, placeholder=f"sample {i+1}", border_color=pygame.Color("#b3b4b6"), text_color=pygame.Color("#5a5a5a"), on_text_change=camera.set_capture_name)
+        TextField(parent=parent, x=150, y=0, width=180, height=30, placeholder=f"sample {i+1}", border_color=pygame.Color("#b3b4b6"), text_color=pygame.Color("#5a5a5a"), on_text_change=camera.set_capture_name)
         
-    lst = ListFrame(parent=sample_box, x=10, y=75, width=1.0, height=300,
-                width_is_percent=True, height_is_percent=False,
-                row_height=35, count=8, row_builder=build_row)
+    scroll_area = ScrollFrame(parent=sample_box, x=10, y= 60, width=RIGHT_PANEL_WIDTH - 40, height=300)
+
+    lst = ListFrame(parent=scroll_area, x=10, y=10, width=1.0, height=700,
+                width_is_percent=True,
+                row_height=35, count=20, row_builder=build_row)
     
     movementSystem.sample_list = lst
 

@@ -168,9 +168,9 @@ _AF_ZFLOOR = 0        # 0.00 mm -> 0 ticks
 
 def get_sample_position(index: int) -> Position:
     lookup_table = { # Somehow they are just inconsistent enough to be unable to calculate them on the fly.
-        1:  20.04,
-        2:  30.56,
-        3:  41.44,
+        1:  22.12,
+        2:  33.47,
+        3:  44.44,
         4:  53.28,
         5:  64.55,
         6:  75.70,
@@ -187,11 +187,12 @@ def get_sample_position(index: int) -> Position:
         17: 202.04,
         18: 213.36,
         19: 224.88,
+        20: 224.88,
     }
     return Position(
         x=int(lookup_table[index] * 100),
         y=int(200 * 100),
-        z=int(12 * 100)
+        z=int(29 * 100)
     )
 
 class AutomatedPrinter(BasePrinterController):
