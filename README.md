@@ -11,13 +11,13 @@ FORGE is an open-source, gigapixel-scale imaging system designed to scan tree co
 <table>
   <tr>
     <td width="19%">
-      <a href="https://github.com/user-attachments/assets/acc4b7ab-5bc3-4d7d-95b1-6783f011dd43">
-        <img src="https://github.com/user-attachments/assets/acc4b7ab-5bc3-4d7d-95b1-6783f011dd43" width="100%" alt="Stitched sample">
+      <a href="media/Dust.jpg">
+        <img src="media/Dust.jpg" width="100%" alt="Stitched sample">
       </a>
     </td>
     <td width="50%">
-      <a href="https://github.com/user-attachments/assets/9577cd37-8981-4b23-8025-3b61a1911fa0">
-        <img src="https://github.com/user-attachments/assets/9577cd37-8981-4b23-8025-3b61a1911fa0" width="100%" alt="GUI">
+      <a href="media/GUI.png">
+        <img src="media/GUI.png" width="100%" alt="GUI">
       </a>
     </td>
   </tr>
