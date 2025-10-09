@@ -35,6 +35,7 @@ class Frame():
 
         self.is_hovered = False
         self.is_pressed = False 
+        self.mouse_passthrough = False
         self.hidden_reasons: set[str] = set()
 
         # Automatically add parent if its passed as an argument
@@ -209,7 +210,7 @@ class Frame():
             return False
         # First check children, then self
         for child in (self.children):
-            if getattr(child, "mouse_passthrough", False):
+            if child.mouse_passthrough:
                 continue
             if child.contains_point(px, py):
                 child.handle_click(px, py)
@@ -222,7 +223,7 @@ class Frame():
             return
 
         for child in (self.children):
-            if getattr(child, "mouse_passthrough", False):
+            if child.mouse_passthrough:
                 continue
             if child.contains_point(px, py):
                 child.handle_hover(px, py)
@@ -245,7 +246,7 @@ class Frame():
         # First propagate to children front-to-back
         top_hit = None
         for child in (self.children):
-            if getattr(child, "mouse_passthrough", False):
+            if child.mouse_passthrough:
                 continue
             if child.contains_point(px, py):
                 top_hit = child
@@ -271,7 +272,7 @@ class Frame():
             return
 
         for child in self.children:
-            if getattr(child, "mouse_passthrough", False):
+            if child.mouse_passthrough:
                 continue
             if child.contains_point(px, py):
                 child.process_mouse_press(px, py, button)
@@ -286,7 +287,7 @@ class Frame():
             return
 
         for child in self.children:
-            if getattr(child, "mouse_passthrough", False):
+            if child.mouse_passthrough:
                 continue
             if child.contains_point(px, py):
                 child.process_mouse_release(px, py, button)
@@ -298,6 +299,35 @@ class Frame():
             if self.contains_point(px, py):
                 self.on_click(button)
     
+    def process_mouse_wheel(self, px: int, py: int, *, dx: int = 0, dy: int = 0) -> None:
+        """Route wheel to the topmost child under the pointer; fall back to self."""
+        if self.is_effectively_hidden:
+            return
+
+        # Find top-most child under the cursor (front-to-back, matching your other handlers).
+        top_hit = None
+        for child in (self.children):
+            if child.mouse_passthrough:
+                continue
+            if child.contains_point(px, py):
+                top_hit = child
+                break
+
+        if top_hit is not None:
+            top_hit.process_mouse_wheel(px, py, dx=dx, dy=dy)
+        else:
+            # Only deliver to self if the pointer is inside this frame
+            if self.contains_point(px, py):
+                self.on_wheel(dx, dy, px, py)
+
+    def broadcast_mouse_wheel(self, px: int, py: int, *, dx: int = 0, dy: int = 0) -> None:
+        """Give every widget a chance to react to wheel (e.g., global zoom, tooltips)."""
+        if self.is_effectively_hidden:
+            return
+        for child in self.children:
+            child.broadcast_mouse_wheel(px, py, dx=dx, dy=dy)
+        self.on_wheel(dx, dy, px, py)
+
     # ---- visibility core ----
     def add_hidden_reason(self, reason: str):
         if reason not in self.hidden_reasons:
@@ -342,6 +372,10 @@ class Frame():
         pass
 
     def on_mouse_release(self, button):
+        pass
+
+    def on_wheel(self, dx: int, dy: int, px: int, py: int) -> None:
+        """Override in widgets that want wheel input. (dx/dy match pygame.MOUSEWHEEL)"""
         pass
 
     def on_hover(self):

@@ -248,6 +248,10 @@ class ScrollFrame(Frame):
             return
         super().process_mouse_release(px, py, button)
 
+    def on_wheel(self, dx: int, dy: int, px: int, py: int) -> None:
+        # positive dy = wheel up in pygame; adjust to taste
+        self._set_scroll(self.scroll_y - dy * self.scroll_speed)
+
     # --- drawing ---
     def draw(self, surface: pygame.Surface) -> None:
         if self.is_effectively_hidden:

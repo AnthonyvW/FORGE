@@ -238,36 +238,6 @@ def _build_sample_box(sample_box, movementSystem, camera, current_sample_index):
     )
     """
     # 4th Row
-    """
-    on_overrides = ToggledColors(
-        background=pygame.Color("#7ed957"),        # green-ish when ON
-        hover_background=pygame.Color("#6bc24b"),
-        foreground=pygame.Color("#2f6f2a"),
-        hover_foreground=pygame.Color("#2f6f2a"),
-    )
-
-    def on_state_changed(state: bool, btn: ToggleButton):
-        # Fires only when the ON/OFF value changes.
-        btn.set_text("X" if state else "")
-
-    toggle = ToggleButton(
-        parent=sample_box,
-        x=10, y=160, width=30, height=30,
-        text="",             # label is independent of state; change it in on_change if you want
-        toggled=False,
-        on_change=on_state_changed,
-        toggled_colors=on_overrides,
-        text_style=make_button_text_style()
-    )
-
-    Text(
-        text=f"Sample 1:",
-        parent=sample_box,
-        x=50, y=165,
-        style=make_button_text_style()
-    )
-    TextField(parent=sample_box, x=150, y=160, width=220, height=30, placeholder="sample", border_color=pygame.Color("#b3b4b6"), text_color=pygame.Color("#5a5a5a"), on_text_change=camera.set_capture_name)
-    """
     def build_row(i: int, parent: Frame) -> None:
         on_overrides = ToggledColors(
             background=pygame.Color("#7ed957"),        # green-ish when ON

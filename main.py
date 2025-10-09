@@ -117,6 +117,11 @@ if __name__ == "__main__":
                 root_frame.height = new_height
 
                 print(width, height)
+
+            elif event.type == pygame.MOUSEWHEEL:
+                mx, my = pos
+                root_frame.broadcast_mouse_wheel(mx, my, dx=event.x, dy=event.y)
+                root_frame.process_mouse_wheel(mx, my, dx=event.x, dy=event.y)
             elif event.type == pygame.MOUSEBUTTONUP:
                 root_frame.process_mouse_release(*pos, button="left")
             elif event.type == pygame.MOUSEBUTTONDOWN:
@@ -144,10 +149,10 @@ if __name__ == "__main__":
             for child in frame.children:
                 draw_debug_outline(surface, child)
 
-        #draw_debug_outline(screen, root_frame)
-        
         # Draw GUI
         root_frame.draw(screen)
+
+        #draw_debug_outline(screen, root_frame)
 
         speed_display.set_text(f"Step Size: {movementSystem.speed / 100:.2f}mm")
         position_display.set_text( f"X: {movementSystem.position.x/100:.2f} Y: {movementSystem.position.y/100:.2f} Z: {movementSystem.position.z/100:.2f}")
