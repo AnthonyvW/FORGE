@@ -3,7 +3,6 @@ from typing import Callable, Optional, List, Tuple
 import math 
 
 from .models import Position, FocusScore
-from .config import AutomationConfig
 from .base_controller import BasePrinterController
 from image_processing.analyzers import ImageAnalyzer
 from image_processing.machine_vision import MachineVision
@@ -166,40 +165,12 @@ _AFTPM = 100          # ticks/mm (0.01 mm units)
 _AFSTEP = 4           # 0.04 mm (printer min step)
 _AF_ZFLOOR = 0        # 0.00 mm -> 0 ticks
 
-def get_sample_position(index: int) -> Position:
-    lookup_table = { # Somehow they are just inconsistent enough to be unable to calculate them on the fly.
-        1:  22.12,
-        2:  33.47,
-        3:  44.44,
-        4:  53.28,
-        5:  64.55,
-        6:  75.70,
-        7:  87.24,
-        8:  98.60,
-        9:  110.16,
-        10: 122.00,
-        11: 132.96,
-        12: 144.46,
-        13: 156.04,
-        14: 167.44,
-        15: 179.08,
-        16: 190.72,
-        17: 202.04,
-        18: 213.36,
-        19: 224.88,
-        20: 224.88,
-    }
-    return Position(
-        x=int(lookup_table[index] * 100),
-        y=int(200 * 100),
-        z=int(29 * 100)
-    )
-
 class AutomatedPrinter(BasePrinterController):
     """Extended printer controller with automation capabilities"""
-    def __init__(self, forgeConfig: ForgeSettings, automation_config: AutomationConfig, camera):
+    def __init__(self, forgeConfig: ForgeSettings, camera):
         super().__init__(forgeConfig)
-        self.automation_config = automation_config
+        
+        # Initialize printer configurations
         self.camera = camera
         self.machine_vision = MachineVision(camera, tile_size=48, stride=48, top_percent=0.15, min_score=50.0, soft_min_score=35.0)
         self.is_automated = False
@@ -217,6 +188,31 @@ class AutomatedPrinter(BasePrinterController):
         # Automation Routines
         self.register_handler("SCAN_SAMPLE_BOUNDS", self.scan_sample_bounds)
 
+
+    def get_sample_position(self, index: int) -> Position:
+        """
+        Strictly load a sample (x,y,z) from the PRINTER config.
+        Units in YAML are millimeters; we store 0.01 mm internally.
+        Raises KeyError if the slot or any coordinate is missing.
+        """
+
+        entry = self.config.sample_positions[index]
+        try:
+            x_mm = float(entry["x"])
+            y_mm = float(entry["y"])
+            z_mm = float(entry["z"])
+        except KeyError as e:
+            missing = str(e).strip("'")
+            raise KeyError(f"sample_positions[{index}] missing '{missing}'") from None
+
+        return Position(
+            x=int(x_mm * 100),
+            y=int(y_mm * 100),
+            z=int(z_mm * 100),
+        )
+    
+    def get_num_slots(self)-> int:
+        return len(self.config.sample_positions)
 
     def get_enabled_samples(self) -> List[Tuple[int, str]]:
         results: List[Tuple[int, str]] = []
@@ -1082,7 +1078,7 @@ class AutomatedPrinter(BasePrinterController):
         # 2) For each enabled sample, home  -> move -> scan
         for k, (row_idx, sample_name) in enumerate(enabled, start=1):
             one_based = row_idx + 1
-            pos = get_sample_position(one_based)
+            pos = self.get_sample_position(one_based)
 
             # Percent complete (before running this sample)
             pct = int(round((k - 1) / total * 100.0))
@@ -1122,6 +1118,7 @@ class AutomatedPrinter(BasePrinterController):
         # 4) Enqueue the macro
         self.enqueue_cmd(macro)
 
+    '''
     def setPosition1(self) -> None:
         self.automation_config.x_start = self.position.x
         self.automation_config.y_start = self.position.y
@@ -1131,7 +1128,7 @@ class AutomatedPrinter(BasePrinterController):
         self.automation_config.x_end = self.position.x
         self.automation_config.y_end = self.position.y
         self.automation_config.z_end = self.position.z
-
+    '''
     def _get_range(self, start: int, end: int, step: int) -> range:
         """Get appropriate range based on start and end positions"""
         if start < end:

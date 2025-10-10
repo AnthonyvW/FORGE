@@ -1,6 +1,6 @@
 from __future__ import annotations
 
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 
 from generic_config import ConfigManager, DEFAULT_FILENAME, ACTIVE_FILENAME
 
@@ -13,6 +13,7 @@ class PrinterSettings():
         max_y: int = 23500  # Maximum Y dimension in steps
         max_z: int = 6000   # Maximum Z dimension in steps
         step_size: int = 4  # minimum distance that can be moved in 0.01mm
+        sample_positions: dict[int, dict[str, float]] = field(default_factory=dict)
     
 
 def make_printer_settings_manager(

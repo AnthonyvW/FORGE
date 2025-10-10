@@ -312,7 +312,7 @@ def _build_sample_box(sample_box, movementSystem, camera, current_sample_index):
 
     lst = ListFrame(parent=scroll_area, x=10, y=10, width=1.0, height=700,
                 width_is_percent=True,
-                row_height=35, count=20, row_builder=build_row)
+                row_height=35, count=movementSystem.get_num_slots(), row_builder=build_row)
     
     movementSystem.sample_list = lst
 

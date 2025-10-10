@@ -101,7 +101,8 @@ class BasePrinterController:
     def __init__(self, forgeConfig: ForgeSettings):
         self.config = PrinterSettings()
         PrinterSettingsManager.scope_dir(self.CONFIG_SUBDIR)
-        self.config = PrinterSettingsManager.load_defaults("")
+        self.config = PrinterSettingsManager.load(self.CONFIG_SUBDIR)
+
         self.position = Position(0, 0, 0) # Current position
         self.speed = self.config.step_size  # Current Speed
         self.paused = False

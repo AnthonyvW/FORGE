@@ -4,27 +4,22 @@ from typing import List
 import multiprocessing as mp
 
 from camera.amscope import AmscopeCamera
-from printer.automated_controller import AutomatedPrinter, Position, get_sample_position
-from printer.config import AutomationConfig
+from printer.automated_controller import AutomatedPrinter, Position
 
 from forgeConfig import (
     ForgeSettings,
     ForgeSettingsManager
 )
 
-from UI.text import Text, TextStyle
 from UI.frame import Frame
 from UI.ui_layout import create_control_panel, RIGHT_PANEL_WIDTH
-
-from UI.input.text_field import TextField
-from UI.input.button import Button, ButtonShape
 
 if __name__ == "__main__":
     mp.freeze_support()   
     mp.set_start_method("spawn", force=True)
 
     config = ForgeSettings()
-    config = ForgeSettingsManager.load_defaults("")
+    config = ForgeSettingsManager.load("")
 
     pygame.init()
     pygame.display.set_caption("FORGE")
@@ -41,11 +36,9 @@ if __name__ == "__main__":
     # Initialize camera with the refactored class
     camera = AmscopeCamera()
 
-    # Initialize printer configurations
-    automation_config = AutomationConfig()  # Using default values
 
     # Initialize the automated printer with configurations
-    movementSystem = AutomatedPrinter(config, automation_config, camera)
+    movementSystem = AutomatedPrinter(config, camera)
 
     time.sleep(1.5)
 
@@ -75,12 +68,12 @@ if __name__ == "__main__":
 
 
     def go_to_sample():
-        pos = get_sample_position(current_sample_index)
+        pos = movementSystem.get_sample_position(current_sample_index)
         movementSystem.move_to_position(pos)
 
     def increment_sample():
         global current_sample_index
-        if current_sample_index < 20:
+        if current_sample_index < movementSystem.get_num_slots():
             current_sample_index += 1
             sample_label.set_text(f"Sample {current_sample_index}")
 
