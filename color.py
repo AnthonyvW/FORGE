@@ -250,13 +250,13 @@ def plot_focus_comparison(image_path1, image_path2):
 # Example usage
 if __name__ == "__main__":
     # Replace with your image paths
-    image_path = "C:\\Users\\Anthony van Weel\\Desktop\\treeOutput\\"
-    plot_focus_comparison(image_path + "test173PX11000Y15700Z4380.png", image_path + "test175PX11000Y15300Z4380.png")#"C:\\Users\\Anthony van Weel\\Downloads\\tree-core_0000(1).png")
+    image_path = "./output/color/"
+    plot_focus_comparison(image_path + "test173PX11000Y15700Z4380.png", image_path + "test175PX11000Y15300Z4380.png")
 
 
 
     # # Example usage:
-    # path = "C:\\Users\\Anthony van Weel\\Desktop\\treeOutput\\"
+    # path = "./output/color/"
     # stats = analyze_color_distribution(path + 'test1PX10000Y10500Z4380.png')
     # print(stats)
     # stats = analyze_color_distribution(path + 'test55PX10200Y12900Z4380.png')
