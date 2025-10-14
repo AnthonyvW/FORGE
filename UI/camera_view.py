@@ -1,7 +1,11 @@
-import pygame
 from typing import Optional
+
+import pygame
+import numpy as np
+
 from UI.frame import Frame
 from UI.text import Text, TextStyle
+
 
 class CameraView(Frame):
     """
@@ -46,6 +50,7 @@ class CameraView(Frame):
         # track last applied size to avoid redundant resizes
         self._last_draw_w = None
         self._last_draw_h = None
+        self._last_frame_rect = None  # (dx, dy, fw, fh)
 
         super().__init__(
             parent=parent,
@@ -79,6 +84,13 @@ class CameraView(Frame):
         ih = max(0, abs_h - self.top_margin_px - self.bottom_margin_px)
         return ix, iy, iw, ih
 
+    def get_frame_rect(self):
+        """
+        Returns (x, y, w, h) of the currently drawn camera frame within the surface,
+        accounting for letterboxing. May be None if nothing drawn yet.
+        """
+        return self._last_frame_rect
+
     def get_absolute_geometry(self):
         # Expose the *inner* rect as the geometry of this view
         return self._compute_inner_rect()
@@ -88,27 +100,43 @@ class CameraView(Frame):
             return
 
         ix, iy, iw, ih = self._compute_inner_rect()
-
-        # Optional background fill behind letterboxed image
         if self.background_color:
             pygame.draw.rect(surface, self.background_color, (ix, iy, iw, ih))
 
-        # If our draw size changed, notify the camera so its scaler is updated
-        if iw != self._last_draw_w or ih != self._last_draw_h:
-            self._last_draw_w, self._last_draw_h = iw, ih
-            if iw > 0 and ih > 0:
-                self.camera.resize(iw, ih)
+        # --- fetch NumPy frame (prefer still, fallback to last live stream) ---
+        arr = self.camera.get_last_frame(prefer="latest", wait_for_still=False)
 
-        # Get the scaled frame and letterbox it inside (ix, iy, iw, ih)
-        frame = self.camera.get_frame()
-        fw, fh = frame.get_size() if frame else (0, 0)
+        if arr is None or iw <= 0 or ih <= 0:
+            self._last_frame_rect = (ix, iy, 0, 0)
+            # (Optionally draw a subtle "no signal" background here)
+            for child in reversed(self.children):
+                child.draw(surface)
+            return
 
-        # Center the frame (already scaled in camera.get_frame())
-        dx = ix + (iw - fw) // 2
-        dy = iy + (ih - fh) // 2
-        if frame and iw > 0 and ih > 0:
-            surface.blit(frame, (dx, dy))
+        # Ensure contiguous uint8 RGB
+        if arr.dtype != np.uint8:
+            arr = np.clip(arr, 0, 255).astype(np.uint8)
+        if arr.ndim == 2:
+            arr = np.stack([arr]*3, axis=-1)
+        h, w, c = arr.shape
+        assert c in (3, 4)
 
-        # Draw overlays/children on top
+        # --- fit to (iw, ih) with letterboxing ---
+        scale = min(iw / w, ih / h)
+        tw, th = max(1, int(round(w * scale))), max(1, int(round(h * scale)))
+
+        # Convert NumPy → Surface then scale
+        # Use frombuffer on a contiguous copy to avoid strides issues
+        buf = arr[:, :, :3].copy(order="C").tobytes()  # RGB only for pygame
+        frame_surf = pygame.image.frombuffer(buf, (w, h), "RGB")
+        if (tw, th) != (w, h):
+            frame_surf = pygame.transform.smoothscale(frame_surf, (tw, th))
+
+        dx = ix + (iw - tw) // 2
+        dy = iy + (ih - th) // 2
+        self._last_frame_rect = (dx, dy, tw, th)
+        surface.blit(frame_surf, (dx, dy))
+
+        # Draw overlays/children
         for child in reversed(self.children):
             child.draw(surface)

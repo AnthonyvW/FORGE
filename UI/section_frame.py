@@ -19,17 +19,22 @@ class Section(Frame):
         header_bg=pygame.Color("#dbdbdb"),
         title_style: TextStyle | None = None,
         title_align: str = "left",
-        collapsible: bool = False
+        collapsible: bool = False,
+        **kwargs
     ):
         self._initializing = True
         self.collapsible = collapsible
         self.collapsed = False
 
+        body_padding = kwargs.pop("padding", (0, 0, 0, 0))
+
         super().__init__(
             parent=parent, x=x, y=y, width=width, height=height,
             x_is_percent=x_is_percent, y_is_percent=y_is_percent,
             width_is_percent=width_is_percent, height_is_percent=height_is_percent,
-            z_index=z_index, background_color=background_color
+            z_index=z_index, background_color=background_color,
+            padding=(0, 0, 0, 0),
+            **kwargs
         )
 
         # Save original (expanded) height config so we can restore it
@@ -97,7 +102,8 @@ class Section(Frame):
             width_is_percent=True,
             height=max(0, height - header_height) if not height_is_percent else 0,
             height_is_percent=not height_is_percent,
-            z_index=z_index
+            z_index=z_index,
+            padding=body_padding
         )
 
         self._initializing = False
@@ -112,23 +118,26 @@ class Section(Frame):
             self.toggle_btn.set_text("+" if self.collapsed else "-")
 
         if self.collapsed:
-            # Save current height config before collapsing
+            # Save current size/fill config
             self._saved_height = self.height
             self._saved_height_is_percent = self.height_is_percent
+            self._saved_fill_remaining_height = getattr(self, "_saved_fill_remaining_height", self.fill_remaining_height)
 
-            # Clamp Section height to header only
+            # Clamp Section to header-only and stop filling parent
+            self.fill_remaining_height = False
             self.height_is_percent = False
             self.height = self.header.height
 
-            # Hide only the body subtree due to collapse (don’t touch USER state)
+            # Hide only the body subtree
             self._for_each_in_body(lambda f: f.add_hidden_reason("COLLAPSED"))
 
         else:
-            # Restore original height config
+            # Restore original size/fill config
             self.height_is_percent = self._saved_height_is_percent
             self.height = self._saved_height
+            self.fill_remaining_height = getattr(self, "_saved_fill_remaining_height", self.fill_remaining_height)
 
-            # Unhide only the collapse reason
+            # Unhide the body subtree
             self._for_each_in_body(lambda f: f.remove_hidden_reason("COLLAPSED"))
 
     def toggle_collapse(self):
@@ -150,8 +159,15 @@ class Section(Frame):
         self.header.add_child(child)
 
     def get_content_geometry(self):
-        sec_x, sec_y, sec_w, sec_h = self.get_absolute_geometry()
-        return sec_x, sec_y + self.header.height, sec_w, max(0, sec_h - self.header.height)
+        # Use the section's outer rect (no header offset). Padding lives on body now.
+        abs_x, abs_y, abs_w, abs_h = Frame.get_absolute_geometry(self)
+        # Section keeps zero padding; body owns padding. If you ever want chrome padding, set it here.
+        pad_top, pad_right, pad_bottom, pad_left = self.padding
+        inner_x = abs_x + pad_left
+        inner_y = abs_y + pad_top
+        inner_w = max(0, abs_w - pad_left - pad_right)
+        inner_h = max(0, abs_h - pad_top - pad_bottom)
+        return inner_x, inner_y, inner_w, inner_h
 
     def _layout(self):
         _, _, sec_w, sec_h = self.get_absolute_geometry()

@@ -86,7 +86,9 @@ class Modal(Section):
                  background_color: pygame.Color = pygame.Color("#ffffff"),
                  title_style: TextStyle | None = None,
                  overlay: bool = True,
-                 scrim_alpha: int = 160):
+                 scrim_alpha: int = 160,
+                 **kwargs
+                 ):
         super().__init__(
             parent=(parent if not overlay else _Scrim(parent=parent, z_index=z_index - 1, alpha=scrim_alpha)),
             title=title,
@@ -97,7 +99,8 @@ class Modal(Section):
             title_style=title_style,
             z_index=z_index,
             x=0.5, y=0.5,
-            x_is_percent=True, y_is_percent=True
+            x_is_percent=True, y_is_percent=True,
+            **kwargs
         )
 
         self.x_align = "center"

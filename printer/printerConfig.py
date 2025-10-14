@@ -1,18 +1,19 @@
 from __future__ import annotations
 
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 
 from generic_config import ConfigManager, DEFAULT_FILENAME, ACTIVE_FILENAME
 
 @dataclass
 class PrinterSettings():
-        FIRMWARE_NAME: string = "Marlin"
-        MACHINE_TYPE: string = "Ender-3"
+        FIRMWARE_NAME: str = "Marlin"
+        MACHINE_TYPE: str = "Ender-3"
         baud_rate: int = 115200
         max_x: int = 23500  # Maximum X dimension in steps
-        max_y: int = 22000  # Maximum Y dimension in steps
+        max_y: int = 23500  # Maximum Y dimension in steps
         max_z: int = 6000   # Maximum Z dimension in steps
         step_size: int = 4  # minimum distance that can be moved in 0.01mm
+        sample_positions: dict[int, dict[str, float]] = field(default_factory=dict)
     
 
 def make_printer_settings_manager(

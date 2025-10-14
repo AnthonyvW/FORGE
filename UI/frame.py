@@ -1,5 +1,7 @@
 import pygame
-from typing import Callable, Optional, Tuple
+from typing import Callable, Optional, Tuple, Type, TypeVar, Iterator, Optional, List, Any
+
+T = TypeVar("T")
 
 def default_frame_background() -> Optional[pygame.Color]:
     return None
@@ -10,7 +12,9 @@ class Frame():
         x_is_percent=False, y_is_percent=False,
         width_is_percent=False, height_is_percent=False,
         z_index=0, x_align: str = 'left', y_align: str = 'top', 
-        background_color: Optional[pygame.Color] = None
+        background_color: Optional[pygame.Color] = None,
+        fill_remaining_height: bool = False,
+        padding: Tuple[int, int, int, int] = (0, 0, 0, 0),
     ):
         self.parent = parent
         self.children = []
@@ -26,6 +30,8 @@ class Frame():
         self.y_is_percent = y_is_percent
         self.width_is_percent = width_is_percent
         self.height_is_percent = height_is_percent
+        self.fill_remaining_height = fill_remaining_height
+        self.padding = padding
 
         self.z_index = z_index
         self.x_align = x_align
@@ -33,6 +39,7 @@ class Frame():
 
         self.is_hovered = False
         self.is_pressed = False 
+        self.mouse_passthrough = False
         self.hidden_reasons: set[str] = set()
 
         # Automatically add parent if its passed as an argument
@@ -52,8 +59,7 @@ class Frame():
         self._apply_offset(x_offset, y_offset)
 
         for child in self.children:
-            # Get parent's size in pixels for percent-based calculations
-            _, _, parent_width, parent_height = self.get_absolute_geometry()
+            _, _, parent_width, parent_height = self.get_content_geometry()
             percent_dx = x_offset / parent_width if parent_width else 0
             percent_dy = y_offset / parent_height if parent_height else 0
             child._apply_offset(x_offset, y_offset, percent_dx, percent_dy)
@@ -75,7 +81,7 @@ class Frame():
         self._apply_size_change(width_offset, height_offset)
 
         for child in self.children:
-            _, _, parent_width, parent_height = self.get_absolute_geometry()
+            _, _, parent_width, parent_height = self.get_content_geometry()
             percent_dw = width_offset / parent_width if parent_width else 0
             percent_dh = height_offset / parent_height if parent_height else 0
             child._apply_size_change(width_offset, height_offset, percent_dw, percent_dh)
@@ -86,10 +92,47 @@ class Frame():
             self.width += dw_percent
         # else: don't modify absolute width
 
-        if self.height_is_percent:
-            self.height += dh_percent
-        # else: don't modify absolute height
+        # If we're filling the remaining height, ignore direct height resizes
+        if not self.fill_remaining_height:
+            if self.height_is_percent:
+                self.height += dh_percent
+            # else: don't modify absolute height
 
+    def iter_descendants(self) -> Iterator["Frame"]:
+        """Depth-first traversal over all descendants (not including self)."""
+        stack: List["Frame"] = list(getattr(self, "children", []))
+        while stack:
+            node = stack.pop()
+            yield node
+            stack.extend(getattr(node, "children", []))
+
+    def find_child_of_type(self, cls: Type[T], *, include_self: bool=False) -> Optional[T]:
+        """Return the first descendant (optionally self) that is an instance of `cls`."""
+        if include_self and isinstance(self, cls):  # type: ignore[arg-type]
+            return self  # type: ignore[return-value]
+        for node in self.iter_descendants():
+            if isinstance(node, cls):
+                return node  # type: ignore[return-value]
+        return None
+
+    def find_children_of_type(self, cls: Type[T], *, include_self: bool=False) -> List[T]:
+        """Return all descendants (optionally self) that are instances of `cls`."""
+        out: List[T] = []
+        if include_self and isinstance(self, cls):  # type: ignore[arg-type]
+            out.append(self)  # type: ignore[arg-type]
+        for node in self.iter_descendants():
+            if isinstance(node, cls):
+                out.append(node)  # type: ignore[arg-type]
+        return out
+
+    def find_first(self, predicate: Callable[[Any], bool], *, include_self: bool=False) -> Optional[Any]:
+        """Generic: return first node for which predicate(node) is True."""
+        if include_self and predicate(self):
+            return self
+        for node in self.iter_descendants():
+            if predicate(node):
+                return node
+        return None
 
     @property
     def absolute_position(self) -> Tuple[int, int]:
@@ -104,50 +147,61 @@ class Frame():
     def get_absolute_geometry(self):
         """Returns absolute screen coordinates"""
         if self.parent:
-            parent_x, parent_y, parent_width, parent_height = self.parent.get_absolute_geometry()
+            parent_x, parent_y, parent_width, parent_height = self.parent.get_content_geometry()
         else:
             parent_x, parent_y = 0, 0
             parent_width, parent_height = pygame.display.get_surface().get_size()
 
-        # Get absolute position given alignment
+        # Raw (pre-alignment) values
         raw_x = self.x * parent_width if self.x_is_percent else self.x
         raw_y = self.y * parent_height if self.y_is_percent else self.y
 
         abs_width = self.width * parent_width if self.width_is_percent else self.width
-        abs_height = self.height * parent_height if self.height_is_percent else self.height
 
-        # Apply horizontal alignment
+        if self.fill_remaining_height:
+            # Pin to top and stretch to parent's bottom
+            abs_y = parent_y + raw_y
+            abs_height = max(0, (parent_y + parent_height) - abs_y)
+        else:
+            # Normal vertical alignment path (uses declared height)
+            abs_height = self.height * parent_height if self.height_is_percent else self.height
+
+            if self.y_align == 'top':
+                abs_y = parent_y + raw_y
+            elif self.y_align == 'center':
+                if self.y_is_percent:
+                    abs_y = parent_y + raw_y - (abs_height // 2)
+                else:
+                    abs_y = parent_y + (parent_height // 2) + raw_y - (abs_height // 2)
+            elif self.y_align == 'bottom':
+                abs_y = parent_y + parent_height - raw_y - abs_height
+            else:
+                raise ValueError(f"Invalid y_align: {self.y_align}")
+
+        # Horizontal alignment (unchanged)
         if self.x_align == 'left':
             abs_x = parent_x + raw_x
         elif self.x_align == 'center':
             if self.x_is_percent:
-                # x is a position in parent coords (e.g., 0.5 * width)
                 abs_x = parent_x + raw_x - (abs_width // 2)
             else:
-                # x is a pixel offset from the parent's center
                 abs_x = parent_x + (parent_width // 2) + raw_x - (abs_width // 2)
         elif self.x_align == 'right':
             abs_x = parent_x + parent_width - raw_x - abs_width
         else:
             raise ValueError(f"Invalid x_align: {self.x_align}")
 
-        # Apply vertical alignment
-        if self.y_align == 'top':
-            abs_y = parent_y + raw_y
-        elif self.y_align == 'center':
-            if self.y_is_percent:
-                abs_y = parent_y + raw_y - (abs_height // 2)
-            else:
-                abs_y = parent_y + (parent_height // 2) + raw_y - (abs_height // 2)
-        elif self.y_align == 'bottom':
-            abs_y = parent_y + parent_height - raw_y - abs_height
-        else:
-            raise ValueError(f"Invalid y_align: {self.y_align}")
-
-        abs_width = self.width * parent_width if self.width_is_percent else self.width
-        abs_height = self.height * parent_height if self.height_is_percent else self.height
-
         return abs_x, abs_y, abs_width, abs_height
+
+    def get_content_geometry(self) -> Tuple[int, int, int, int]:
+        """Inner (padded) rectangle children should layout inside."""
+        abs_x, abs_y, abs_w, abs_h = self.get_absolute_geometry()
+        pad_top, pad_right, pad_bottom, pad_left = self.padding
+        inner_x = abs_x + pad_left
+        inner_y = abs_y + pad_top
+        inner_w = max(0, abs_w - pad_left - pad_right)
+        inner_h = max(0, abs_h - pad_top - pad_bottom)
+        return inner_x, inner_y, inner_w, inner_h
 
     def add_child(self, child):
         child.parent = self
@@ -172,7 +226,7 @@ class Frame():
             return False
         # First check children, then self
         for child in (self.children):
-            if getattr(child, "mouse_passthrough", False):
+            if child.mouse_passthrough:
                 continue
             if child.contains_point(px, py):
                 child.handle_click(px, py)
@@ -185,7 +239,7 @@ class Frame():
             return
 
         for child in (self.children):
-            if getattr(child, "mouse_passthrough", False):
+            if child.mouse_passthrough:
                 continue
             if child.contains_point(px, py):
                 child.handle_hover(px, py)
@@ -208,7 +262,7 @@ class Frame():
         # First propagate to children front-to-back
         top_hit = None
         for child in (self.children):
-            if getattr(child, "mouse_passthrough", False):
+            if child.mouse_passthrough:
                 continue
             if child.contains_point(px, py):
                 top_hit = child
@@ -234,7 +288,7 @@ class Frame():
             return
 
         for child in self.children:
-            if getattr(child, "mouse_passthrough", False):
+            if child.mouse_passthrough:
                 continue
             if child.contains_point(px, py):
                 child.process_mouse_press(px, py, button)
@@ -249,7 +303,7 @@ class Frame():
             return
 
         for child in self.children:
-            if getattr(child, "mouse_passthrough", False):
+            if child.mouse_passthrough:
                 continue
             if child.contains_point(px, py):
                 child.process_mouse_release(px, py, button)
@@ -261,6 +315,25 @@ class Frame():
             if self.contains_point(px, py):
                 self.on_click(button)
     
+    def process_mouse_wheel(self, px: int, py: int, *, dx: int, dy: int) -> bool:
+        # Route to topmost eligible child under the cursor first
+        for child in reversed(self.children):  # assume later children are drawn on top
+            if child.contains_point(px, py):
+                if child.process_mouse_wheel(px, py, dx=dx, dy=dy):
+                    return True
+
+        # If no child handled it, let THIS frame handle it (if it wants)
+        return bool(self.on_wheel(dx, dy, px, py))
+
+
+    def broadcast_mouse_wheel(self, px: int, py: int, *, dx: int = 0, dy: int = 0) -> None:
+        """Give every widget a chance to react to wheel (e.g., global zoom, tooltips)."""
+        if self.is_effectively_hidden:
+            return
+        for child in self.children:
+            child.broadcast_mouse_wheel(px, py, dx=dx, dy=dy)
+        self.on_wheel(dx, dy, px, py)
+
     # ---- visibility core ----
     def add_hidden_reason(self, reason: str):
         if reason not in self.hidden_reasons:
@@ -306,6 +379,10 @@ class Frame():
 
     def on_mouse_release(self, button):
         pass
+
+    def on_wheel(self, dx: int, dy: int, px: int, py: int) -> None:
+        """Override in widgets that want wheel input. (dx/dy match pygame.MOUSEWHEEL)"""
+        return False
 
     def on_hover(self):
         pass

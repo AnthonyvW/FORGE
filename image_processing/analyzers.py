@@ -1,7 +1,7 @@
 import numpy as np
 import cv2
 from dataclasses import dataclass
-from typing import List, Tuple, Dict
+from typing import List, Tuple, Dict, Optional
 
 @dataclass
 class FocusAnalysisResult:
@@ -30,7 +30,7 @@ class ImageAnalyzer:
     @staticmethod
     def analyze_focus(
         image: np.ndarray,
-        kernel_size: int = 5,
+        kernel_size: int = 7,
         threshold: float = 100
     ) -> FocusAnalysisResult:
         """
@@ -81,3 +81,84 @@ class ImageAnalyzer:
             quadrant_scores=quadrant_scores,
             best_quadrant=best_quadrant
         )
+    
+
+@dataclass
+class FocusTile:
+    x: int
+    y: int
+    w: int
+    h: int
+    score: float
+    band: str = "hard"  # "hard" or "soft"
+
+def find_focused_areas(
+    image: np.ndarray,
+    tile_size: int = 48,
+    stride: int = 48,
+    laplacian_ksize: int = 3,
+    blur_ksize: int = 3,
+    top_percent: float = 0.15,
+    min_score: Optional[float] = None,       # absolute threshold (hard)
+    soft_min_score: Optional[float] = None,  # soft band lower bound
+) -> List[FocusTile]:
+    """
+    Return rectangles where the image is relatively 'in focus' using a Laplacian-based score.
+
+    Selection priority:
+      1) If min_score (and optionally soft_min_score) provided:
+         - 'hard' band: score >= min_score
+         - 'soft' band: soft_min_score <= score < min_score (if soft_min_score is not None)
+      2) Else: keep top `top_percent` by score (band='hard').
+
+    Notes:
+      - If soft_min_score > min_score, it will be clamped down to min_score.
+    """
+    if image is None or image.size == 0:
+        return []
+
+    # grayscale + denoise
+    gray = image if image.ndim == 2 else cv2.cvtColor(image, cv2.COLOR_BGR2GRAY)
+    if blur_ksize and blur_ksize > 0:
+        gray = cv2.GaussianBlur(gray, (blur_ksize, blur_ksize), 0)
+
+    H, W = gray.shape[:2]
+    tiles: List[FocusTile] = []
+    for y in range(0, max(1, H - tile_size + 1), max(1, stride)):
+        for x in range(0, max(1, W - tile_size + 1), max(1, stride)):
+            roi = gray[y:y + tile_size, x:x + tile_size]
+            lap = cv2.Laplacian(roi, cv2.CV_64F, ksize=laplacian_ksize)
+            abs_lap = np.abs(lap)
+            variance = float(np.var(abs_lap))
+            pct90 = float(np.percentile(abs_lap, 90))
+            score = 0.5 * (variance + pct90)
+            tiles.append(FocusTile(x=x, y=y, w=tile_size, h=tile_size, score=score))
+
+    if not tiles:
+        return []
+
+    # --- Selection logic ---
+    if min_score is not None:
+        # clamp soft_min_score if provided
+        if soft_min_score is not None and soft_min_score > min_score:
+            soft_min_score = min_score
+
+        selected: List[FocusTile] = []
+        for t in tiles:
+            if t.score >= min_score:
+                t.band = "hard"
+                selected.append(t)
+            elif soft_min_score is not None and t.score >= soft_min_score:
+                t.band = "soft"
+                selected.append(t)
+
+        # Sort so highest scores draw last (on top)
+        selected.sort(key=lambda t: t.score, reverse=True)
+        return selected
+
+    # Fallback: top-percent mode
+    tiles.sort(key=lambda t: t.score, reverse=True)
+    keep = max(1, int(round(len(tiles) * top_percent)))
+    for i in range(keep):
+        tiles[i].band = "hard"
+    return tiles[:keep]

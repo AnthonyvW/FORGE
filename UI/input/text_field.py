@@ -389,6 +389,9 @@ class TextField(Frame):
         # Clip text to inner rect
         clip_rect = pygame.Rect(abs_x + 2, abs_y + 2, max(0, abs_w - 4), max(0, abs_h - 4))
         prev_clip = surface.get_clip()
+        if prev_clip:  # prev_clip can be a Rect or None
+            clip_rect = clip_rect.clip(prev_clip)
+
         surface.set_clip(clip_rect)
 
         # Calculate horizontal scroll if text exceeds field width

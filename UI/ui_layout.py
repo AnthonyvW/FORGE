@@ -1,15 +1,26 @@
 from dataclasses import dataclass
 from typing import List, Tuple
+import os
+import sys
+import subprocess
 
 import pygame
+
+from printer.automated_controller import AutomatedPrinter
+
 from UI.text import Text, TextStyle
 from UI.frame import Frame
 from UI.section_frame import Section
 from UI.modal import Modal
 from UI.camera_view import CameraView
+from UI.focus_overlay import FocusOverlay
+from UI.list_frame import ListFrame
+from UI.flex_frame import FlexFrame
 
 from UI.input.text_field import TextField
 from UI.input.button import Button, ButtonShape
+from UI.input.toggle_button import ToggleButton, ToggledColors
+from UI.input.scroll_frame import ScrollFrame
 from UI.styles import (
     make_button_text_style,
     make_display_text_style,
@@ -44,7 +55,7 @@ def make_button(fn, x, y, w, h, text, shape=ButtonShape.RECTANGLE, z_index = 0, 
 
 def create_control_panel(
     root_frame: Frame,
-    movementSystem,
+    movementSystem: AutomatedPrinter,
     camera,
     current_sample_index: int
 ) -> Tuple[Frame, Text, Button, Button, Button, Text, Text]:
@@ -69,32 +80,54 @@ def create_control_panel(
         background_color=pygame.Color("black"),
         right_margin_px=RIGHT_PANEL_WIDTH # reserve space for the control panel
     )
+    machine_vision_overlay = FocusOverlay(camera_view, movementSystem.machine_vision)
+
 
     # --- Control Box ---
-    control_box = Section(parent=control_frame, title="Control", collapsible=False,
-        x=10, y=60, width=RIGHT_PANEL_WIDTH - 20, height=250)
+    control_box = Section(
+        parent=control_frame,
+        title="Control",
+        collapsible=True,
+        x=0, y=0, width=1.0, height=250,
+        width_is_percent=True
+    )
     speed_display, position_display = _build_movement_controls(control_box, movementSystem)
 
     # --- Automation Box ---
-    automation_box = Section(parent=control_frame, title= "Automation", collapsible=False, 
-        x=10, y=control_box.y + control_box.height + box_spacing, width = RIGHT_PANEL_WIDTH - 20, height = 90)
+    automation_box = Section(
+        parent=control_frame,
+        title="Automation",
+        collapsible=True,
+        x=0, y=0, width=1.0, height=90,
+        width_is_percent=True
+    )
     _build_automation_control(automation_box, movementSystem)
 
     # --- Camera Settings Modal ---
-    camera_settings_modal = Modal(parent=root_frame, title="Camera Settings", overlay=False, width=308, height=1038)
+    camera_settings_modal = Modal(parent=root_frame, title="Camera Settings", overlay=False, width=308, height=680)
     build_camera_settings_modal(camera_settings_modal, camera)
 
     # --- Camera Settings ---
-    camera_control = Section(parent=control_frame, title="Camera Control", collapsible=False, 
-        x=10,y=automation_box.y + automation_box.height + box_spacing, width = RIGHT_PANEL_WIDTH - 20, height = 123)
-    _build_camera_control(camera_control, movementSystem, camera, camera_settings_modal)
+    camera_control = Section(
+        parent=control_frame,
+        title="Camera Control",
+        collapsible=True,
+        x=0, y=0, width=1.0, height=213,
+        width_is_percent=True
+    )
+    _build_camera_control(camera_control, machine_vision_overlay, movementSystem, camera, camera_settings_modal)
 
     # --- Sample Box ---
-    sample_box = Section(parent=control_frame, title="Sample Management", 
-        x=10, y=camera_control.y + camera_control.height + box_spacing, width = RIGHT_PANEL_WIDTH - 20, height = 233)
-    go_to_sample_button, decrement_button, increment_button, sample_label, pos1_display, pos2_display = _build_sample_box(sample_box, movementSystem, camera, current_sample_index)
-  
-    # --- Modal ---
+    sample_box = Section(
+        parent=control_frame,
+        title="Sample Management",
+        collapsible=True,
+        x=0, y=0, width=1.0, fill_remaining_height=True,
+        width_is_percent=True, padding=(0,0,10,0)
+    )
+    go_to_sample_button, decrement_button, increment_button, sample_label = _build_sample_box(
+        sample_box, movementSystem, camera, current_sample_index
+    )
 
     return (
         sample_label,
@@ -102,25 +135,23 @@ def create_control_panel(
         decrement_button,
         go_to_sample_button,
         speed_display,
-        position_display,
-        pos1_display,
-        pos2_display
+        position_display
     )
 
-def _build_right_control_panel(root_frame)-> Frame:
-    # --- Control Panel Container ---
+def _build_right_control_panel(root_frame) -> Frame:
+    # --- Control Panel Container (plain Frame) ---
     control_frame = Frame(
         parent=root_frame,
         x=0, y=0,
         width=RIGHT_PANEL_WIDTH,
-        height=1.0,  # percent height to fill root
+        height=1.0,              # fill vertical space of root
         height_is_percent=True,
         x_align='right',
         y_align='top',
         background_color=pygame.Color("#b3b4b6")
     )
 
-    # --- Title Bar ---
+    # --- Title Bar (not part of flex) ---
     title_bar = Frame(
         parent=control_frame,
         x=0, y=0,
@@ -130,7 +161,6 @@ def _build_right_control_panel(root_frame)-> Frame:
         background_color=pygame.Color("#909398")
     )
 
-    # --- Title Text ---
     title_text = Text(
         parent=title_bar,
         text="FORGE",
@@ -145,8 +175,26 @@ def _build_right_control_panel(root_frame)-> Frame:
         )
     )
 
-    return control_frame
+    # --- Content Column (this is the flex container) ---
+    content_column = FlexFrame(
+        parent=control_frame,
+        x=0,
+        y=50,                        # start 50px down
+        width=RIGHT_PANEL_WIDTH,
+        height=0,                    # ignored when fill_remaining_height=True
+        height_is_percent=False,
+        padding=(10, 10, 10, 10),
+        gap=10,
+        fill_child_width=True,
+        align_horizontal="left",
 
+        # key bits:
+        fill_remaining_height=True,  # <-- stretch to parent's bottom
+        auto_height_to_content=False # <-- avoid fighting with fill-to-bottom
+    )
+
+    # Return both so caller can attach sections to content_column
+    return content_column
 
 def _build_movement_controls(control_box, movementSystem)-> Frame:
     
@@ -208,6 +256,7 @@ def _build_sample_box(sample_box, movementSystem, camera, current_sample_index):
         x=330, y=10, width=40, height=button_height, text="+", text_style=make_button_text_style())
 
     # 2nd Row
+    """
     Button(movementSystem.setPosition1, 10 , 60, 150, button_height, "Set Position 1", parent=sample_box, text_style=make_button_text_style())
 
     pos1_display = Text(
@@ -226,20 +275,51 @@ def _build_sample_box(sample_box, movementSystem, camera, current_sample_index):
         x=170, y=125,
         style=make_display_text_style()
     )
-
+    """
     # 4th Row
-    Text(
-        text=f"Sample Name :",
-        parent=sample_box,
-        x=10, y=165,
-        style=make_button_text_style()
-    )
-    TextField(parent=sample_box, x=170, y=160, width=200, height=30, placeholder="sample", border_color=pygame.Color("#b3b4b6"), text_color=pygame.Color("#5a5a5a"), on_text_change=camera.set_capture_name)
+    def build_row(i: int, parent: Frame) -> None:
+        on_overrides = ToggledColors(
+            background=pygame.Color("#7ed957"),
+            hover_background=pygame.Color("#6bc24b"),
+            foreground=pygame.Color("#2f6f2a"),
+            hover_foreground=pygame.Color("#2f6f2a"),
+        )
 
-    return go_to_sample_button, decrement_button, increment_button, sample_label, pos1_display, pos2_display
+        def on_state_changed(state: bool, btn: ToggleButton):
+            # Fires only when the ON/OFF value changes.
+            btn.set_text("X" if state else "")
+
+        ToggleButton(
+            parent=parent,
+            x=0, y=0, width=30, height=30,
+            text="",             # label is independent of state; change it in on_change if you want
+            toggled=False,
+            on_change=on_state_changed,
+            toggled_colors=on_overrides,
+            text_style=make_button_text_style()
+        )
+
+        Text(
+            text=f"Sample {i+1}:",
+            parent=parent,
+            x=40, y=5,
+            style=make_button_text_style()
+        )
+
+        TextField(parent=parent, x=150, y=0, width=180, height=30, placeholder=f"sample {i+1}", border_color=pygame.Color("#b3b4b6"), text_color=pygame.Color("#5a5a5a"), on_text_change=camera.set_capture_name)
+        
+    scroll_area = ScrollFrame(parent=sample_box, x=10, y= 60, width=RIGHT_PANEL_WIDTH - 40, height=295, fill_remaining_height=True)
+
+    lst = ListFrame(parent=scroll_area, x=10, y=10, width=1.0, height=700,
+                width_is_percent=True,
+                row_height=35, count=movementSystem.get_num_slots(), row_builder=build_row)
+    
+    movementSystem.sample_list = lst
+
+    return go_to_sample_button, decrement_button, increment_button, sample_label#, pos1_display, pos2_display
 
 
-def _build_camera_control(camera_control, movementSystem, camera, camera_settings_modal):
+def _build_camera_control(camera_control, machine_vision_overlay, movementSystem: AutomatedPrinter, camera, camera_settings_modal):
     camera_control.add_child(make_button(
         lambda pos: camera.capture_image() or camera.save_image(False, filename=pos.to_gcode()),
         10, 10, 117, 40, "Take Photo",
@@ -257,12 +337,53 @@ def _build_camera_control(camera_control, movementSystem, camera, camera_setting
     
     Button(lambda: camera_settings_modal.open(), 254,  10, 117, 40, "Settings", parent=camera_control, text_style=make_button_text_style())
     
+    Button(lambda: movementSystem.start_autofocus(), 10, 85, 117, 40, "Autofocus", parent=camera_control, text_style=make_button_text_style())
+    Button(lambda: movementSystem.start_fine_autofocus(), 132, 85, 167, 40, "Fine Autofocus", parent=camera_control, text_style=make_button_text_style())
+    
+    def open_capture_folder():
+        """Open the capture folder in the system's default file explorer."""
+        # Convert relative paths to absolute
+        folder = os.path.abspath(camera.capture_path)
+
+        if not os.path.isdir(folder):
+            print(f"Path does not exist or is not a folder: {folder}")
+            return
+
+        if sys.platform.startswith("win"):
+            os.startfile(folder)  # type: ignore[attr-defined]
+        elif sys.platform.startswith("darwin"):  # macOS
+            subprocess.run(["open", folder])
+        else:  # Linux and other Unix
+            subprocess.run(["xdg-open", folder])
+
+        print("Opened Image Output Folder")
+
+    Button(open_capture_folder,x=304, y=85, width=40, height=40,text="OF", parent=camera_control, text_style=make_button_text_style())
+
+    def toggle_overlay():
+        print("Toggling Overlay")
+        machine_vision_overlay.toggle_overlay()
+
+    Button(toggle_overlay,x=10, y=130, width=117, height=40,text="Toggle MV", parent=camera_control, text_style=make_button_text_style())
+
+    def toggle_overlay():
+        print("Setting Hot Pixel Map")
+        machine_vision_overlay.clear_hot_pixel_map()
+        count = machine_vision_overlay.build_hot_pixel_map(include_soft=True)  
+        print(f"Marked {count} hot tiles invalid")
+
+    Button(toggle_overlay,x=132, y=130, width=212, height=40, text="MV Hot Pixel Filter", parent=camera_control, text_style=make_button_text_style())
+    def print_color():
+        print(movementSystem.machine_vision.get_average_color())
+    
+    #Button(print_color,x=349, y=85, width=40, height=40,text="C", parent=camera_control, text_style=make_button_text_style())
+    
 
 def _build_automation_control(automation_box, movementSystem):
     
     Button(movementSystem.start_automation, 10,  10, 115, 40, "Start", parent=automation_box, text_style=make_button_text_style())
-    Button(movementSystem.halt,             133, 10, 115, 40, "Stop" , parent=automation_box, text_style=make_button_text_style())
+    Button(movementSystem.stop,             133, 10, 115, 40, "Stop" , parent=automation_box, text_style=make_button_text_style())
     pause = Button(movementSystem.toggle_pause,     255, 10, 115, 40, "Pause", parent=automation_box, text_style=make_button_text_style())
-    pause.add_hidden_reason("SYSTEM")
+    #pause.add_hidden_reason("SYSTEM")
 
 

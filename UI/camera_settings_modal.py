@@ -9,6 +9,8 @@ from UI.input.text_field import TextField
 from UI.input.slider import Slider
 from UI.input.radio import RadioButton, RadioGroup
 from UI.input.button import Button, ButtonColors
+from UI.input.scroll_frame import ScrollFrame
+
 from UI.styles import (
     make_settings_text_style,
     BASE_BUTTON_COLORS,
@@ -105,7 +107,7 @@ def create_numeric_setting(
     )
 
     text_field = TextField(
-        parent=modal, x=x + 208, y=y + 28, width=80, height=32,
+        parent=modal, x=x + 208, y=y + 28, width=65, height=32,
         placeholder=str(cur), allowed_pattern=NUMERIC_PATTERN,
         border_color=pygame.Color("#b3b4b6"), text_color=pygame.Color("#5a5a5a"),
     )
@@ -522,50 +524,40 @@ def build_camera_settings_modal(modal, camera) -> None:
     _ensure_sync_registry(modal)
     modal._settings_syncers.clear()
     settings = camera.settings
+
+    scroll_area = ScrollFrame(parent=modal, x=0, y= 0, width=modal.width, height=600)
     layout = _Layout(offset=60)
+    
 
     # File format
-    add_file_format_section(modal, camera, settings, y=layout.next_y())
+    add_file_format_section(scroll_area, camera, settings, y=layout.next_y())
 
     # Camera temperature
-    add_camera_temperature_setting(modal, camera, settings, y=layout.next_y())
+    add_camera_temperature_setting(scroll_area, camera, settings, y=layout.next_y())
 
     # Auto exposure toggle
-    add_auto_exposure_section(modal, camera, settings, y=layout.next_y())
+    add_auto_exposure_section(scroll_area, camera, settings, y=layout.next_y())
 
     # Core scalar sliders
-    add_exposure_setting(modal, camera, settings, y=layout.next_y())
-    add_tint_setting(modal, camera, settings, y=layout.next_y())
-    add_contrast_setting(modal, camera, settings, y=layout.next_y())
-    add_hue_setting(modal, camera, settings, y=layout.next_y())
-    add_saturation_setting(modal, camera, settings, y=layout.next_y())
-    add_brightness_setting(modal, camera, settings, y=layout.next_y())
-    add_gamma_setting(modal, camera, settings, y=layout.next_y())
-    add_sharpening_setting(modal, camera, settings, y=layout.next_y())
+    add_exposure_setting(scroll_area, camera, settings, y=layout.next_y())
+    add_tint_setting(scroll_area, camera, settings, y=layout.next_y())
+    add_contrast_setting(scroll_area, camera, settings, y=layout.next_y())
+    add_hue_setting(scroll_area, camera, settings, y=layout.next_y())
+    add_saturation_setting(scroll_area, camera, settings, y=layout.next_y())
+    add_brightness_setting(scroll_area, camera, settings, y=layout.next_y())
+    add_gamma_setting(scroll_area, camera, settings, y=layout.next_y())
+    add_sharpening_setting(scroll_area, camera, settings, y=layout.next_y())
 
     # Tone mapping toggles
-    add_linear_tone_mapping_section(modal, camera, settings, y=layout.next_y())
-    add_curved_tone_mapping_section(modal, camera, settings, y=layout.next_y())
+    add_linear_tone_mapping_section(scroll_area, camera, settings, y=layout.next_y())
+    add_curved_tone_mapping_section(scroll_area, camera, settings, y=layout.next_y())
 
     # Level ranges + WB
-    add_level_range_low_setting(modal, camera, settings, y=layout.next_y())
-    add_level_range_high_setting(modal, camera, settings, y=layout.next_y())
-    add_white_balance_gain_setting(modal, camera, settings, y=layout.next_y())
-
-    def _refresh_modal_ui():
-        try:
-            # If your Modal has a helper, use that; otherwise do a simple rebuild:
-            modal.remove_all_children()      # or: modal.clear_children()
-        except Exception:
-            # Fallback: wipe children list if the class exposes it.
-            try:
-                modal.children = []
-            except Exception:
-                pass
-        # Rebuild from current camera.settings:
-        build_camera_settings_modal(modal, camera)
+    add_level_range_low_setting(scroll_area, camera, settings, y=layout.next_y())
+    add_level_range_high_setting(scroll_area, camera, settings, y=layout.next_y())
+    add_white_balance_gain_setting(scroll_area, camera, settings, y=layout.next_y())
 
     add_save_load_reset_section(
         modal, camera,
-        y=layout.next_y()
+        y=modal.height-80
     )
