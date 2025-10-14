@@ -251,7 +251,10 @@ def add_file_format_section(modal, camera, settings, *, y: int, x: int = 8) -> N
     RadioButton(lambda: None, x=x + 56, y=base_y, width=56, height=32, text="jpeg",
                 value="jpeg", group=image_format, parent=modal,
                 colors=BASE_BUTTON_COLORS, selected_colors=SELECTED_RADIO_COLORS, text_style=RADIO_TEXT_STYLE)
-    RadioButton(lambda: None, x=x + 120, y=base_y, width=56, height=32, text="tiff",
+    RadioButton(lambda: None, x=x + 120, y=base_y, width=56, height=32, text="jpg",
+                value="jpg", group=image_format, parent=modal,
+                colors=BASE_BUTTON_COLORS, selected_colors=SELECTED_RADIO_COLORS, text_style=RADIO_TEXT_STYLE)
+    RadioButton(lambda: None, x=x + 184, y=base_y, width=56, height=32, text="tiff",
                 value="tiff", group=image_format, parent=modal,
                 colors=BASE_BUTTON_COLORS, selected_colors=SELECTED_RADIO_COLORS, text_style=RADIO_TEXT_STYLE)
 
