@@ -305,6 +305,18 @@ class BasePrinterController:
         """Get current position as tuple"""
         return self.position
 
+    def get_bed_size(self)-> Position:
+        return Position(self.config.max_x, self.config.max_y, self.config.max_z)
+    
+    def get_max_x(self)-> int:
+        return self.config.max_x // 100
+    
+    def get_max_y(self)-> int:
+        return self.config.max_y // 100
+    
+    def get_max_z(self)-> int:
+        return self.config.max_z // 100
+
     def move_to_position(self, position: Position) -> None:
         """Move to specified position"""
         self.enqueue_printer(f"G0 {position.to_gcode()}", message=f"Moving to {position}", log=False)

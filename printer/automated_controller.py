@@ -935,7 +935,7 @@ class AutomatedPrinter(BasePrinterController):
                         filename = f"X{x_mm} Y{y_mm} Z{z_mm} F{f_int}"
 
                         # Save into the sample folder
-                        self.camera.save_image(False, sample_folder, filename)
+                        self.camera.save_image(sample_folder, filename)
                         report(f"[SCAN_SAMPLE_BOUNDS] Saved image: {sample_folder}/{filename}", True)
                     except Exception as e_save:
                         report(f"[SCAN_SAMPLE_BOUNDS] Image save failed: {e_save}", True)

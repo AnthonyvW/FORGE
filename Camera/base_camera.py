@@ -232,7 +232,7 @@ class BaseCamera(ABC):
             return li
         return li if ti >= ts else ls
 
-    def save_image(self, is_automated: bool, folder: str = "", filename: str = ""):
+    def save_image(self, filename: str, folder: str = ""):
         while self.is_taking_image:
             time.sleep(0.01)
 
@@ -252,11 +252,7 @@ class BaseCamera(ABC):
 
             mode = "RGBA" if arr.shape[2] == 4 else "RGB"
 
-            save_path = Path(self.capture_path)
-            if is_automated:
-                save_path = save_path / self.capture_name
-            if folder:
-                save_path = save_path / folder
+            save_path = Path(self.capture_path) / folder
             save_path.mkdir(parents=True, exist_ok=True)
 
             if filename:
@@ -264,7 +260,8 @@ class BaseCamera(ABC):
             else:
                 x, y, z = getattr(self, "printer_position", (0, 0, 0))
                 final_filename = f"{self.capture_name}{self.capture_index}PX{x}Y{y}Z{z}"
-                self.capture_index += 1
+            
+            self.capture_index += 1
 
             fformat = self.settings.fformat
             full_path = save_path / f"{final_filename}.{fformat}"

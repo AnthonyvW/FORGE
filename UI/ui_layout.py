@@ -321,7 +321,7 @@ def _build_sample_box(sample_box, movementSystem, camera, current_sample_index):
 
 def _build_camera_control(camera_control, machine_vision_overlay, movementSystem: AutomatedPrinter, camera, camera_settings_modal):
     camera_control.add_child(make_button(
-        lambda pos: camera.capture_image() or camera.save_image(False, filename=pos.to_gcode()),
+        lambda pos: camera.capture_image() or camera.save_image(filename=pos.to_gcode()),
         10, 10, 117, 40, "Take Photo",
         args_provider=lambda: (movementSystem.get_position(),)
     ))
