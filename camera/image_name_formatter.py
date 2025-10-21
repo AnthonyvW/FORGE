@@ -3,39 +3,50 @@ import re
 from typing import Optional, Dict, Any, List
 from datetime import datetime
 
+from printer.automated_controller import AutomatedPrinter
+
 class ImageNameFormatter:
     """
     Safe image filename formatter that can work with or without a controller.
 
     Recognized placeholders:
-      {x} {y} {z}  -> positions in millimeters (int)
+      {x} {y} {z}  -> positions in millimeters (float, formatted with decimals)
       {f}          -> focus score (int; -1 if invalid/unavailable)
       {i}          -> index (controller.current_sample_index if controller given,
                        else internal counter self._index)
-      {d[:<strftime>]} -> date from system clock; custom format via {d:%Y%m%d_%H%M%S}
+      {d[:<strftime>]} -> date from system clock; custom via {d:%Y%m%d_%H%M%S}
                           (default is %Y%m%d if no format is provided)
 
     Unknown placeholders are left intact (e.g., {sample}).
-    Optional zero-padding for X/Y/Z to match axis maxima:
+
+    Optional zero-padding for X/Y/Z integer part to match axis maxima:
       - With controller: uses controller.get_max_x/y/z() (already in mm).
       - Without controller: use set_axis_maxes(x=?, y=?, z=?), else width=1.
+
+    Decimal handling:
+      - position_decimals controls number of digits after decimal point.
+      - Leading zero is always included for fractional values (e.g., 0.04, not .04).
     """
 
     _TOKEN_OPEN  = "\uE000"  # for '{{'
     _TOKEN_CLOSE = "\uE001"  # for '}}'
-    _FIELD_RE = re.compile(r"\{([^{}]+)\}")  # captures the content inside {}
+    _FIELD_RE = re.compile(r"\{([^{}]+)\}")
 
     def __init__(
         self,
-        controller: Optional[object] = None,
+        controller: Optional[AutomatedPrinter] = None,
         *,
         pad_positions: bool = False,
+        position_decimals: int = 2,
+        delimiter: str = ".",
         template: Optional[str] = None,
         default_date_format: str = "%Y%m%d",
         start_index: int = 1,
     ):
         self.controller = controller
         self.pad_positions = pad_positions
+        self.position_decimals = max(0, int(position_decimals))
+        self.axis_delimiter = str(delimiter)
         self._template: Optional[str] = template
         self._default_date_format = default_date_format
 
@@ -54,14 +65,9 @@ class ImageNameFormatter:
         return self._template
 
     def set_index(self, value: int) -> None:
-        """Set the internal index used when no controller index is available."""
         self._index = int(value)
 
     def set_axis_maxes(self, *, x: Optional[int] = None, y: Optional[int] = None, z: Optional[int] = None) -> None:
-        """
-        Set axis maxima (integers in mm) for padding when no controller is present.
-        Any arg left as None will keep its previous value.
-        """
         if x is not None: self._axis_max_mm["x"] = int(x)
         if y is not None: self._axis_max_mm["y"] = int(y)
         if z is not None: self._axis_max_mm["z"] = int(z)
@@ -70,40 +76,38 @@ class ImageNameFormatter:
 
     @staticmethod
     def _needed_fields(template: str) -> set:
-        """Return the set of placeholder *keys* that appear in the template (without formats)."""
         needed = set()
         for m in ImageNameFormatter._FIELD_RE.finditer(template):
             raw = m.group(1).strip()
-            key = raw.split(":", 1)[0].strip()  # 'd:%Y%m%d' -> 'd'
+            key = raw.split(":", 1)[0].strip()
             needed.add(key)
         return needed
 
     def _axis_widths(self, needed: set) -> Dict[str, int]:
-        """
-        Compute digit widths for x/y/z. If controller exists, pull from it.
-        Otherwise, use self._axis_max_mm (if set), else width=1.
-        Only compute for axes that are actually needed by the template.
-        """
+        """Compute integer digit widths for x/y/z."""
         widths = {"x": 1, "y": 1, "z": 1}
 
         def digits(n: Optional[int]) -> int:
             if n is None: return 1
             return max(1, len(str(abs(int(n)))))
 
+        def want(axis: str) -> bool:
+            return axis in needed
+
         if self.controller is not None:
-            if "x" in needed:
+            if want("x"):
                 try:    widths["x"] = digits(int(round(float(self.controller.get_max_x()))))
                 except: widths["x"] = 1
-            if "y" in needed:
+            if want("y"):
                 try:    widths["y"] = digits(int(round(float(self.controller.get_max_y()))))
                 except: widths["y"] = 1
-            if "z" in needed:
+            if want("z"):
                 try:    widths["z"] = digits(int(round(float(self.controller.get_max_z()))))
                 except: widths["z"] = 1
         else:
-            if "x" in needed: widths["x"] = digits(self._axis_max_mm["x"])
-            if "y" in needed: widths["y"] = digits(self._axis_max_mm["y"])
-            if "z" in needed: widths["z"] = digits(self._axis_max_mm["z"])
+            if want("x"): widths["x"] = digits(self._axis_max_mm["x"])
+            if want("y"): widths["y"] = digits(self._axis_max_mm["y"])
+            if want("z"): widths["z"] = digits(self._axis_max_mm["z"])
 
         return widths
 
@@ -126,16 +130,16 @@ class ImageNameFormatter:
         values: Dict[str, Any] = {}
 
         # Positions
-        if any(k in needed for k in ("x", "y", "z")):
+        if any(k in needed for k in ("x","y","z")):
             if self.controller is not None:
-                pos = self.controller.get_position()  # ticks (0.01 mm)
-                if "x" in needed: values["x"] = int(round(pos.x / 100.0))
-                if "y" in needed: values["y"] = int(round(pos.y / 100.0))
-                if "z" in needed: values["z"] = int(round(pos.z / 100.0))
+                pos = self.controller.get_position()
+                values["x"] = float(pos.x) / 100.0
+                values["y"] = float(pos.y) / 100.0
+                values["z"] = float(pos.z) / 100.0
             else:
-                if "x" in needed: values["x"] = 0
-                if "y" in needed: values["y"] = 0
-                if "z" in needed: values["z"] = 0
+                values.setdefault("x", 0.0)
+                values.setdefault("y", 0.0)
+                values.setdefault("z", 0.0)
 
         # Focus
         if "f" in needed:
@@ -159,49 +163,61 @@ class ImageNameFormatter:
                     self._index += 1
             values["i"] = i_val
 
-        # NOTE: Date ({d:...}) is rendered per-occurence to allow different formats in one template.
         return values
 
+    def _format_axis_value(self, axis: str, v: float, widths: Dict[str, int]) -> str:
+        """Format axis value with padding, decimals, and custom delimiter instead of '.'."""
+        v_round = round(float(v), self.position_decimals)
+        sign = "-" if v_round < 0 else ""
+        abs_v = abs(v_round)
+
+        # Generate fixed-precision string, then split integer & fraction
+        if self.position_decimals > 0:
+            formatted = f"{abs_v:.{self.position_decimals}f}"
+            int_part, frac_part = formatted.split(".")
+        else:
+            int_part, frac_part = f"{int(abs_v)}", ""
+
+        # Pad integer part if requested
+        if self.pad_positions:
+            w = max(1, widths.get(axis, 1))
+            int_part = f"{int(int_part):0{w}d}"
+
+        # Replace '.' with delimiter for filesystem-safe filenames
+        if self.position_decimals > 0:
+            return f"{sign}{int_part}{self.axis_delimiter}{frac_part}"
+        else:
+            return f"{sign}{int_part}"
+
     def _render(self, template: str, values: Dict[str, Any], widths: Dict[str, int]) -> str:
-        """
-        Selective replacement + optional zero padding; unknowns preserved.
-        Supports:
-          {d}             -> default self._default_date_format
-          {d:<strftime>}  -> custom format, e.g., {d:%Y%m%d_%H%M%S}
-        """
+        """Replace placeholders with formatted values."""
         s = template.replace("{{", self._TOKEN_OPEN).replace("}}", self._TOKEN_CLOSE)
-        recognized = {"x", "y", "z", "f", "i", "d"}
+        recognized = {"x","y","z","f","i","d"}
 
         def _sub(m: re.Match) -> str:
-            raw = m.group(1).strip()             # e.g., 'd:%Y%m%d_%H%M%S' or 'x'
+            raw = m.group(1).strip()
             parts = raw.split(":", 1)
             key = parts[0].strip()
 
             if key not in recognized:
                 return m.group(0)  # keep unknown placeholder
 
-            if key in ("x", "y", "z"):
+            if key in ("x","y","z"):
                 if key not in values:
                     return m.group(0)
-                v = int(values[key])
-                if self.pad_positions:
-                    w = max(1, widths.get(key, 1))
-                    sign = "-" if v < 0 else ""
-                    return f"{sign}{abs(v):0{w}d}"
-                return str(v)
+                return self._format_axis_value(key, float(values[key]), widths)
 
-            if key in ("f", "i"):
+            if key in ("f","i"):
                 if key not in values:
                     return m.group(0)
                 return str(values[key])
 
             if key == "d":
-                # Per-token format: {d:%Y%m%d_%H%M%S}, else default
                 fmt = parts[1] if len(parts) == 2 and parts[1] else self._default_date_format
                 try:
                     return datetime.now().strftime(fmt)
                 except Exception:
-                    # If bad format, leave the token as-is to avoid surprises
+                    # If bad format, leave the token as-is
                     return m.group(0)
 
             return m.group(0)
@@ -209,7 +225,7 @@ class ImageNameFormatter:
         s = self._FIELD_RE.sub(_sub, s)
         return s.replace(self._TOKEN_OPEN, "{").replace(self._TOKEN_CLOSE, "}")
 
-    # ---------------- Single public API ----------------
+    # ---------------- Public API ----------------
 
     def get_formatted_string(
         self,
@@ -248,57 +264,11 @@ class ImageNameFormatter:
         )
         return self._render(tpl, values, widths)
 
-    def validate_template(
-        self,
-        template: str,
-        *,
-        strict: bool = False
-    ) -> Dict[str, Any]:
-        """
-        Validate a filename template and return a structured report.
-
-        Args:
-        template: The template string to validate.
-        strict:   If True, unknown placeholders are treated as errors.
-
-        Returns:
-        {
-            "is_valid": bool,            # overall validity flag
-            "issues": [str],             # human-readable problems found (if any)
-            "brace_balance": {           # basic brace sanity
-            "balanced": bool
-            },
-            "placeholders": {            # what the template uses
-            "recognized": ["x","y",...],
-            "unknown": ["sample", ...]
-            },
-            "requires": {                # what data is needed at render time
-            "needs_positions": bool,   # any of x/y/z appears
-            "needs_focus": bool,       # f appears
-            "needs_index": bool,       # i appears
-            "needs_date": bool         # d appears
-            },
-            "date": {                    # per-token date statuses
-            "tokens": [                # one item per {d} occurrence
-                {"raw": "d:%Y%m%d", "format": "%Y%m%d", "valid": True},
-                ...
-            ],
-            "uses_default_format": bool  # True if any {d} had no explicit format
-            },
-            "padding": {                 # whether XYZ padding can be applied
-            "pad_positions_enabled": bool,
-            "axis_widths": {"x": int, "y": int, "z": int},   # computed widths
-            "will_pad": {"x": bool, "y": bool, "z": bool}    # only true if field is used in template
-            }
-        }
-        """
+    def validate_template(self, template: str, *, strict: bool = False) -> Dict[str, Any]:
+        """Return structured validation report."""
         issues: List[str] = []
 
-        # 1) Brace balance check (respect literal {{ and }})
-        sentinel_open  = self._TOKEN_OPEN
-        sentinel_close = self._TOKEN_CLOSE
-        s = template.replace("{{", sentinel_open).replace("}}", sentinel_close)
-
+        s = template.replace("{{", self._TOKEN_OPEN).replace("}}", self._TOKEN_CLOSE)
         depth = 0
         for i, ch in enumerate(s):
             if ch == "{":
@@ -309,41 +279,32 @@ class ImageNameFormatter:
                     issues.append(f"Unmatched '}}' at position {i}.")
                     break
         if depth != 0:
-            issues.append("Unbalanced braces: number of '{' and '}' does not match.")
+            issues.append("Unbalanced braces detected.")
 
-        # 2) Scan placeholders
-        recognized_keys = {"x", "y", "z", "f", "i", "d"}
+        recognized_keys = {"x","y","z","f","i","d"}
         seen_recognized: List[str] = []
         seen_unknown: List[str] = []
         date_tokens: List[Dict[str, Any]] = []
         uses_default_date = False
-
-        # Track what data will be required to render
-        needs_positions = False
-        needs_focus = False
-        needs_index = False
-        needs_date = False
+        needs_positions = needs_focus = needs_index = needs_date = False
 
         for m in self._FIELD_RE.finditer(template):
-            raw = m.group(1).strip()        # e.g., 'd:%Y%m%d' or 'x' or 'sample'
+            raw = m.group(1).strip()
             parts = raw.split(":", 1)
             key = parts[0].strip()
-            has_format = (len(parts) == 2)
+            has_format = len(parts) == 2
 
             if key not in recognized_keys:
                 if strict:
                     issues.append(f"Unknown placeholder {{{raw}}} at pos {m.start()}.")
-                # record unknown either way
                 if key not in seen_unknown:
                     seen_unknown.append(key)
                 continue
 
-            # collect presence of recognized keys
             if key not in seen_recognized:
                 seen_recognized.append(key)
 
-            # mark requirements
-            if key in ("x", "y", "z"):
+            if key in ("x","y","z"):
                 needs_positions = True
             elif key == "f":
                 needs_focus = True
@@ -352,7 +313,6 @@ class ImageNameFormatter:
             elif key == "d":
                 needs_date = True
 
-            # formatting rules
             if key == "d":
                 if has_format:
                     fmt = parts[1]
@@ -365,57 +325,30 @@ class ImageNameFormatter:
                     date_tokens.append({"raw": raw, "format": fmt, "valid": ok})
                 else:
                     uses_default_date = True
-                    # store with default marker
                     date_tokens.append({"raw": raw, "format": self._default_date_format, "valid": True})
             else:
-                # no formatting allowed on non-date fields
                 if has_format:
-                    issues.append(
-                        f"Formatting is only supported for {{d}}. Found format on {{{raw}}}."
-                    )
+                    issues.append(f"Formatting is only supported for {{d}}. Found on {{{raw}}}.")
 
-        # 3) Padding readiness report (only meaningful for x/y/z)
-        needed_keys = set(self._needed_fields(template))  # keys only (no formats)
+        needed_keys = set(self._needed_fields(template))
         pad_enabled = bool(self.pad_positions)
-        if pad_enabled:
-            widths = self._axis_widths(needed_keys)
-        else:
-            widths = {"x": 0, "y": 0, "z": 0}
+        widths = self._axis_widths(needed_keys) if pad_enabled else {"x": 0, "y": 0, "z": 0}
 
-        will_pad = {
-            "x": pad_enabled and ("x" in needed_keys) and (widths.get("x", 0) > 1),
-            "y": pad_enabled and ("y" in needed_keys) and (widths.get("y", 0) > 1),
-            "z": pad_enabled and ("z" in needed_keys) and (widths.get("z", 0) > 1),
-        }
-
-        # 4) Compile report
         report: Dict[str, Any] = {
             "is_valid": len(issues) == 0,
             "issues": issues,
-            "brace_balance": {"balanced": depth == 0},
-            "placeholders": {
-                "recognized": seen_recognized,
-                "unknown": seen_unknown,
-            },
+            "placeholders": {"recognized": seen_recognized, "unknown": seen_unknown},
             "requires": {
-                "needs_positions": needs_positions,
-                "needs_focus": needs_focus,
-                "needs_index": needs_index,
-                "needs_date": needs_date,
+                "positions": needs_positions,
+                "focus": needs_focus,
+                "index": needs_index,
+                "date": needs_date,
             },
-            "date": {
-                "tokens": date_tokens,
-                "uses_default_format": uses_default_date,
-            },
-            "padding": {
-                "pad_positions_enabled": pad_enabled,
-                "axis_widths": {"x": widths.get("x", 0), "y": widths.get("y", 0), "z": widths.get("z", 0)},
-                "will_pad": will_pad,
-            },
+            "date": {"tokens": date_tokens, "uses_default_format": uses_default_date},
+            "padding": {"enabled": pad_enabled, "widths": widths},
         }
 
         return report
 
-    # Convenience: a tiny wrapper if you prefer a boolean call
     def is_template_valid(self, template: str, *, strict: bool = False) -> bool:
         return self.validate_template(template, strict=strict)["is_valid"]

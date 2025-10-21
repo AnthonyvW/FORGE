@@ -4,7 +4,7 @@ from typing import List
 import multiprocessing as mp
 
 from camera.amscope import AmscopeCamera
-from printer.automated_controller import AutomatedPrinter, Position
+from printer.automated_controller import AutomatedPrinter
 
 from forgeConfig import (
     ForgeSettings,
