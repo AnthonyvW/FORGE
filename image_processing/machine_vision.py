@@ -28,6 +28,10 @@ class MachineVision:
         top_percent: float = 0.15,
         min_score: float | None = None,
         soft_min_score: float | None = None,
+        inset_left_pct: float = 0.0,
+        inset_top_pct: float = 0.0,
+        inset_right_pct: float = 0.0,
+        inset_bottom_pct: float = 0.0,
     ):
         self.camera = camera
 
@@ -40,6 +44,13 @@ class MachineVision:
 
         # Hot-pixel / invalid tiles as grid indices
         self._invalid_maps: Dict[Tuple[int, int], Set[Tuple[int, int]]] = {}
+
+        # Edge distances as percentages of the frame (0.0..1.0)
+        self._edge_left_pct: float = 0.20
+        self._edge_right_pct: float = 0.20
+        self._edge_top_pct: float = 0.10
+        self._edge_bottom_pct: float = 0.10
+
 
     # ---------------- internal helpers ----------------
     def _key_for_shape(self, arr: np.ndarray | None) -> Optional[Tuple[int, int]]:
@@ -58,6 +69,81 @@ class MachineVision:
         return None
 
     # --------------- public properties ---------------
+
+    @staticmethod
+    def _clamp01(v: float) -> float:
+        try:
+            vf = float(v)
+        except Exception:
+            return 0.0
+        if vf < 0.0: return 0.0
+        if vf > 1.0: return 1.0
+        return vf
+
+    # Left
+    @property
+    def edge_left_pct(self) -> float:
+        return self._edge_left_pct
+    @edge_left_pct.setter
+    def edge_left_pct(self, v: float) -> None:
+        self._edge_left_pct = self._clamp01(v)
+
+    # Right
+    @property
+    def edge_right_pct(self) -> float:
+        return self._edge_right_pct
+    @edge_right_pct.setter
+    def edge_right_pct(self, v: float) -> None:
+        self._edge_right_pct = self._clamp01(v)
+
+    # Top
+    @property
+    def edge_top_pct(self) -> float:
+        return self._edge_top_pct
+    @edge_top_pct.setter
+    def edge_top_pct(self, v: float) -> None:
+        self._edge_top_pct = self._clamp01(v)
+
+    # Bottom
+    @property
+    def edge_bottom_pct(self) -> float:
+        return self._edge_bottom_pct
+    @edge_bottom_pct.setter
+    def edge_bottom_pct(self, v: float) -> None:
+        self._edge_bottom_pct = self._clamp01(v)
+
+    def set_edge_margins(
+        self,
+        *,
+        left: float | None = None,
+        right: float | None = None,
+        top: float | None = None,
+        bottom: float | None = None,
+    ) -> None:
+        """Set any subset of edge percentages (0..1)."""
+        if left   is not None: self.edge_left_pct   = left
+        if right  is not None: self.edge_right_pct  = right
+        if top    is not None: self.edge_top_pct    = top
+        if bottom is not None: self.edge_bottom_pct = bottom
+
+    def get_edge_margins(self) -> tuple[float, float, float, float]:
+        """Return (left, right, top, bottom) as 0..1 floats."""
+        return (self._edge_left_pct, self._edge_right_pct, self._edge_top_pct, self._edge_bottom_pct)
+    
+    
+    def get_interior_rect_pixels(self, img_w: int, img_h: int) -> pygame.Rect:
+        """Return the interior (non-edge) rect in RAW pixel coords."""
+        l_pct, r_pct, t_pct, b_pct = self.get_edge_margins()
+        left   = int(round(img_w * max(0.0, min(1.0, l_pct))))
+        right  = int(round(img_w * max(0.0, min(1.0, r_pct))))
+        top    = int(round(img_h * max(0.0, min(1.0, t_pct))))
+        bottom = int(round(img_h * max(0.0, min(1.0, b_pct))))
+        x = left
+        y = top
+        w = max(0, img_w - left - right)
+        h = max(0, img_h - top - bottom)
+        return pygame.Rect(x, y, w, h)
+    
     @property
     def invalid_tiles(self) -> Set[Tuple[int, int]]:
         """
@@ -193,6 +279,7 @@ class MachineVision:
         include_soft: bool = True,
         filter_invalid: bool = True,
         source: str = "latest",
+        restrict_to_interior: bool = True,
     ) -> dict:
         """
         Returns a dict with lists of tiles for the requested source/frame grid.
@@ -211,6 +298,19 @@ class MachineVision:
             min_score=self.min_score,
             soft_min_score=(self.soft_min_score if include_soft else None),
         ) or []
+
+        if restrict_to_interior and img_bgr is not None:
+            h_raw, w_raw = img_bgr.shape[:2]
+            interior = self.get_interior_rect_pixels(w_raw, h_raw)
+
+            def _tile_fully_inside(t) -> bool:
+                x0 = int(t.x); y0 = int(t.y)
+                x1 = int(t.x + t.w); y1 = int(t.y + t.h)
+                # Use 'contains' semantics (no edge bleed into red bands)
+                return (x0 >= interior.left and y0 >= interior.top and
+                        x1 <= interior.right and y1 <= interior.bottom)
+
+            tiles_all = [t for t in tiles_all if _tile_fully_inside(t)]
 
         # Split soft/hard
         soft_tiles, hard_tiles = [], []

@@ -3,8 +3,6 @@ import re
 from typing import Optional, Dict, Any, List
 from datetime import datetime
 
-from printer.automated_controller import AutomatedPrinter
-
 class ImageNameFormatter:
     """
     Safe image filename formatter that can work with or without a controller.
@@ -34,7 +32,7 @@ class ImageNameFormatter:
 
     def __init__(
         self,
-        controller: Optional[AutomatedPrinter] = None,
+        controller: Optional[object] = None,
         *,
         pad_positions: bool = False,
         position_decimals: int = 2,

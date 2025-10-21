@@ -55,6 +55,16 @@ class FocusOverlay(Frame):
         self.invalid_border   = pygame.Color(255, 0, 0, invalid_alpha_border)
         self.invalid_border_w = invalid_border_w
 
+        # Edge margin overlays (translucent red)
+        self.draw_edge_margins = True
+        self.edge_fill = pygame.Color(255, 0, 0, 80)      # translucent red fill
+        self.edge_border = pygame.Color(255, 0, 0, 160)   # slightly less translucent border
+        self.edge_border_w = 1
+        
+        # cache overlay to avoid realloc each frame
+        self._overlay = None
+        self._overlay_size = None
+
     # ---------- convenience pass-throughs for callers ----------
     def toggle_overlay(self) -> None:
         self.visible = not self.visible
@@ -85,10 +95,25 @@ class FocusOverlay(Frame):
     def is_tile_invalid(self, col: int, row: int) -> bool:
         return self.mv.is_tile_invalid(col, row)
 
+
+    def _get_overlay(self, surface_size: tuple[int, int]) -> pygame.Surface:
+        """Return an RGBA overlay the size of the target surface (recreate on resize)."""
+        if self._overlay is None or self._overlay_size != surface_size:
+            self._overlay_size = surface_size
+            self._overlay = pygame.Surface(surface_size, flags=pygame.SRCALPHA)
+        else:
+            # Clear with fully transparent color
+            self._overlay.fill((0, 0, 0, 0))
+        return self._overlay
+
     # ------------------------------- draw -------------------------------
     def draw(self, surface: pygame.Surface) -> None:
         if not self.visible:
             return
+
+        # Build/resize overlay and clear it fully transparent
+        overlay = self._get_overlay(surface.get_size())
+        overlay.fill((0, 0, 0, 0))
 
         fr = self.camera_view.get_frame_rect()
         if not fr:
@@ -111,36 +136,92 @@ class FocusOverlay(Frame):
         soft_tiles = res["soft"]
         hard_tiles = res["hard"]
 
-        def _blit_rect(fill_color, border_color, border_w, rx, ry, rw, rh):
-            if fill_color:
-                rect_surf = pygame.Surface((rw, rh), pygame.SRCALPHA)
-                rect_surf.fill(fill_color)
-                surface.blit(rect_surf, (rx, ry))
-            if border_color and border_w > 0:
-                pygame.draw.rect(surface, border_color, pygame.Rect(rx, ry, rw, rh), width=border_w)
+        # All blits/draws go to overlay (supports alpha)
+        def _blit_rect(fill_color, border_color, border_w, rect):
+            if rect.width <= 0 or rect.height <= 0:
+                return
+            pygame.draw.rect(overlay, fill_color, rect)
+            pygame.draw.rect(overlay, border_color, rect, border_w)
+
+        def rect_from_raw(tile, fx, fy, sx, sy):
+            # Snap both edges (shared boundaries) and derive size from them
+            left   = fx + int(round(tile.x * sx))
+            top    = fy + int(round(tile.y * sy))
+            right  = fx + int(round((tile.x + tile.w) * sx))
+            bottom = fy + int(round((tile.y + tile.h) * sy))
+            w = max(0, right - left)
+            h = max(0, bottom - top)
+            return pygame.Rect(left, top, w, h)
+
+        # --- draw edge margin overlays (percent insets from each edge) ---
+        if self.draw_edge_margins and self.mv is not None:
+            l_pct, r_pct, t_pct, b_pct = self.mv.get_edge_margins()
+
+            # Clamp
+            l_pct = max(0.0, min(1.0, float(l_pct)))
+            r_pct = max(0.0, min(1.0, float(r_pct)))
+            t_pct = max(0.0, min(1.0, float(t_pct)))
+            b_pct = max(0.0, min(1.0, float(b_pct)))
+
+            # Sizes in screen pixels
+            left_w   = int(round(fw * l_pct))
+            right_w  = int(round(fw * r_pct))
+            top_h    = int(round(fh * t_pct))
+            bottom_h = int(round(fh * b_pct))
+
+            # Interior (safe) rect
+            inner_x = fx + left_w
+            inner_y = fy + top_h
+            inner_w = max(0, fw - left_w - right_w)
+            inner_h = max(0, fh - top_h - bottom_h)
+
+            # TOP (owns corners)
+            if top_h > 0:
+                pygame.draw.rect(overlay, self.edge_fill, (fx, fy, fw, top_h), 0)
+
+            # BOTTOM (owns corners)
+            if bottom_h > 0:
+                pygame.draw.rect(overlay, self.edge_fill, (fx, fy + fh - bottom_h, fw, bottom_h), 0)
+
+            # LEFT (trimmed to avoid overlap)
+            usable_h = max(0, fh - top_h - bottom_h)
+            if left_w > 0 and usable_h > 0:
+                pygame.draw.rect(overlay, self.edge_fill, (fx, fy + top_h, left_w, usable_h), 0)
+
+            # RIGHT (trimmed)
+            if right_w > 0 and usable_h > 0:
+                pygame.draw.rect(overlay, self.edge_fill, (fx + fw - right_w, fy + top_h, right_w, usable_h), 0)
+
+            # Single border around the central (non-red) region
+            if inner_w > 0 and inner_h > 0 and self.edge_border_w > 0:
+                pygame.draw.rect(
+                    overlay,
+                    self.edge_border,
+                    pygame.Rect(inner_x, inner_y, inner_w, inner_h),
+                    width=self.edge_border_w
+                )
 
         # Soft tiles
         for t in soft_tiles:
-            rx = fx + int(round(t.x * sx))
-            ry = fy + int(round(t.y * sy))
-            rw = int(round(t.w * sx))
-            rh = int(round(t.h * sy))
-            _blit_rect(self.soft_fill, self.soft_border, self.soft_border_w, rx, ry, rw, rh)
+            r = rect_from_raw(t, fx, fy, sx, sy)
+            _blit_rect(self.soft_fill, self.soft_border, self.soft_border_w, r)
 
-        # Hard tiles
         for t in hard_tiles:
-            rx = fx + int(round(t.x * sx))
-            ry = fy + int(round(t.y * sy))
-            rw = int(round(t.w * sx))
-            rh = int(round(t.h * sy))
-            _blit_rect(self.hard_fill, self.hard_border, self.hard_border_w, rx, ry, rw, rh)
+            r = rect_from_raw(t, fx, fy, sx, sy)
+            _blit_rect(self.hard_fill, self.hard_border, self.hard_border_w, r)
 
         # Invalid (hot) tiles
         if self.draw_invalid and self.mv.invalid_tiles:
+            interior_raw = self.mv.get_interior_rect_pixels(w, h)  # RAW coords
             for (col, row) in self.mv.invalid_tiles:
-                r = self.mv.tile_rect_from_index(col, row)  # RAW rect
-                rx = fx + int(round(r.x * sx))
-                ry = fy + int(round(r.y * sy))
-                rw = int(round(r.w * sx))
-                rh = int(round(r.h * sy))
-                _blit_rect(self.invalid_fill, self.invalid_border, self.invalid_border_w, rx, ry, rw, rh)
+                t = self.mv.tile_rect_from_index(col, row)  # RAW rect
+                # only draw if fully inside the interior
+                if (t.left   >= interior_raw.left and
+                    t.top    >= interior_raw.top  and
+                    t.right  <= interior_raw.right and
+                    t.bottom <= interior_raw.bottom):
+                    r = rect_from_raw(t, fx, fy, sx, sy)
+                    _blit_rect(self.invalid_fill, self.invalid_border, self.invalid_border_w, r)
+
+        # Composite overlay (with alpha) onto the actual screen surface
+        surface.blit(overlay, (0, 0))
