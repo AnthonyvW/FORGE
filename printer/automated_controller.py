@@ -17,6 +17,7 @@ from forgeConfig import (
 )
 
 from .base_controller import command
+from camera.image_name_formatter import ImageNameFormatter
 
 
 def _scan_bounds_plotter(proc_queue, y_min: float, y_max: float):
@@ -174,6 +175,14 @@ class AutomatedPrinter(BasePrinterController):
         self.camera = camera
         self.machine_vision = MachineVision(camera, tile_size=48, stride=48, top_percent=0.15, min_score=50.0, soft_min_score=35.0)
         self.is_automated = False
+        
+        self.image_namer = ImageNameFormatter(
+            controller=self,            # lets formatter query positions and sample index
+            pad_positions=True,        # set True if you want zero-padded integer parts
+            position_decimals=0,
+            delimiter=".",              # replace '.' between integer/fraction if desired
+            template="Y{y} X{x} Z{z} F{f}",
+        )
 
         self.sample_list: ListFrame | None = None
         self.current_sample_index = 1
@@ -926,15 +935,9 @@ class AutomatedPrinter(BasePrinterController):
                     # _af_score_still() captures a still internally, so we can save that same image.
                     focus_score = self._af_score_still()
                     try:
-                        # Build filename from current printer position (in mm, rounded to integers)
-                        pos = self.get_position()
-                        x_mm = int(round(pos.x / 100.0))
-                        y_mm = int(round(pos.y / 100.0))
-                        z_mm = int(round(pos.z / 100.0))
-                        f_int = int(round(focus_score)) if math.isfinite(focus_score) else -1
-                        filename = f"X{x_mm} Y{y_mm} Z{z_mm} F{f_int}"
-
+                        
                         # Save into the sample folder
+                        filename = self.image_formatter.get_formatted_string(focus_score=focus_score)
                         self.camera.save_image(sample_folder, filename)
                         report(f"[SCAN_SAMPLE_BOUNDS] Saved image: {sample_folder}/{filename}", True)
                     except Exception as e_save:
