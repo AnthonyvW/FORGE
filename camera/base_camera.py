@@ -13,6 +13,8 @@ from .camera_settings import (
     DEFAULT_FILENAME
 )
 
+from .image_name_formatter import ImageNameFormatter
+
 
 class BaseCamera(ABC):
     """Abstract base class defining the camera interface."""
@@ -40,11 +42,9 @@ class BaseCamera(ABC):
         self.width = 1280
         self.height = 720
 
-        # Capture path/name/index and optional printer position
+        # Capture path
         self.capture_path = "./output/"
-        self.capture_name = "sample"
-        self.capture_index = 1
-        self.printer_position = (0, 0, 0)
+        self.image_name_formatter = ImageNameFormatter(template="{d:%Y%m%d_%H%M%S}")
 
         # Config roots
         self._scope = self.get_impl_key()
@@ -232,7 +232,11 @@ class BaseCamera(ABC):
             return li
         return li if ti >= ts else ls
 
-    def save_image(self, filename: str, folder: str = ""):
+    def capture_and_save(self, filename: str = "", folder: str = ""):
+        self.capture_image()
+        self.save_image(filename, folder)
+
+    def save_image(self, filename: str = "", folder: str = ""):
         while self.is_taking_image:
             time.sleep(0.01)
 
@@ -258,10 +262,9 @@ class BaseCamera(ABC):
             if filename:
                 final_filename = filename
             else:
-                x, y, z = getattr(self, "printer_position", (0, 0, 0))
-                final_filename = f"{self.capture_name}{self.capture_index}PX{x}Y{y}Z{z}"
-            
-            self.capture_index += 1
+                final_filename = self.image_name_formatter.get_formatted_string(
+                    auto_increment_index=True
+                )
 
             fformat = self.settings.fformat
             full_path = save_path / f"{final_filename}.{fformat}"
@@ -273,10 +276,6 @@ class BaseCamera(ABC):
     def set_capture_path(self, path: str):
         """Set path for saving captured images."""
         self.capture_path = path
-
-    def set_capture_name(self, name: str):
-        """Set capture name prefix used for automated saves."""
-        self.capture_name = name
 
     def select_capture_path(self):
         """Open a folder selection dialog to set the capture path."""

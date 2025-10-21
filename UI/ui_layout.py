@@ -306,7 +306,7 @@ def _build_sample_box(sample_box, movementSystem, camera, current_sample_index):
             style=make_button_text_style()
         )
 
-        TextField(parent=parent, x=150, y=0, width=180, height=30, placeholder=f"sample {i+1}", border_color=pygame.Color("#b3b4b6"), text_color=pygame.Color("#5a5a5a"), on_text_change=camera.set_capture_name)
+        TextField(parent=parent, x=150, y=0, width=180, height=30, placeholder=f"sample {i+1}", border_color=pygame.Color("#b3b4b6"), text_color=pygame.Color("#5a5a5a"))
         
     scroll_area = ScrollFrame(parent=sample_box, x=10, y= 60, width=RIGHT_PANEL_WIDTH - 40, height=295, fill_remaining_height=True)
 
@@ -321,9 +321,8 @@ def _build_sample_box(sample_box, movementSystem, camera, current_sample_index):
 
 def _build_camera_control(camera_control, machine_vision_overlay, movementSystem: AutomatedPrinter, camera, camera_settings_modal):
     camera_control.add_child(make_button(
-        lambda pos: camera.capture_image() or camera.save_image(filename=pos.to_gcode()),
-        10, 10, 117, 40, "Take Photo",
-        args_provider=lambda: (movementSystem.get_position(),)
+        camera.capture_and_save,
+        10, 10, 117, 40, "Take Photo"
     ))
 
     path_label = Text(f"Save Path: {camera.capture_path}", parent=camera_control, 
