@@ -379,7 +379,7 @@ class MachineVision:
         rects = [pygame.Rect(int(t.x), int(t.y), int(t.w), int(t.h)) for t in tiles]
         return rects
 
-    def analyze_focus_current_frame(
+    def analyze_focus(
         self,
         *,
         kernel_size: int = 7,

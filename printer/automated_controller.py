@@ -4,7 +4,6 @@ import math
 
 from .models import Position, FocusScore
 from .base_controller import BasePrinterController
-from image_processing.analyzers import ImageAnalyzer
 from image_processing.machine_vision import MachineVision
 
 from UI.list_frame import ListFrame
@@ -253,11 +252,11 @@ class AutomatedPrinter(BasePrinterController):
         self.camera.capture_image()
         while self.camera.is_taking_image:
             time.sleep(0.01)
-        img = self.camera.get_last_frame(prefer="still", wait_for_still=False)
-        if img is None or ImageAnalyzer.is_black(img):
+        if self.machine_vision.is_black(source="still"):
             return float("-inf")
         try:
-            res = ImageAnalyzer.analyze_focus(img)
+            img = self.camera.get_last_frame(prefer="still", wait_for_still=False)
+            res = self.machine_vision.analyze_focus(img)
             return float(getattr(res, "focus_score", float("-inf")))
         except Exception:
             return float("-inf")
@@ -266,11 +265,11 @@ class AutomatedPrinter(BasePrinterController):
         """Score the live preview/stream (no still capture). Much faster."""
         self._exec_gcode("M400", wait=True)
         time.sleep(0.05)  # tiny settle is enough for stream
-        img = self.camera.get_last_frame(prefer="stream", wait_for_still=False)
-        if img is None or ImageAnalyzer.is_black(img):
+        if self.machine_vision.is_black(source="stream"):
             return float("-inf")
         try:
-            res = ImageAnalyzer.analyze_focus(img)
+            img = self.camera.get_last_frame(prefer="stream", wait_for_still=False)
+            res = self.machine_vision.analyze_focus(img)
             return float(getattr(res, "focus_score", float("-inf")))
         except Exception:
             return float("-inf")
@@ -410,24 +409,24 @@ class AutomatedPrinter(BasePrinterController):
             self.camera.capture_image()
             while self.camera.is_taking_image:
                 time.sleep(0.01)
-            img = self.camera.get_last_frame(prefer="still", wait_for_still=False)
-            if img is None or ImageAnalyzer.is_black(img):
+            if self.machine_vision.is_black(source="still"):
                 return float("-inf")
             try:
-                res = ImageAnalyzer.analyze_focus(img)
-                return float(getattr(res, "focus_score", float("-inf")))
+                img = self.camera.get_last_frame(prefer="still", wait_for_still=False)
+                res = self.machine_vision.analyze_focus(img)
+                return float(res.focus_score)
             except Exception:
                 return float("-inf")
 
         def score_preview_lambda(_z, _c, _b) -> float:
             self._exec_gcode("M400", wait=True)
             if SETTLE_PREVIEW_S > 0: time.sleep(SETTLE_PREVIEW_S)
-            img = self.camera.get_last_frame(prefer="stream", wait_for_still=False)
-            if img is None or ImageAnalyzer.is_black(img):
+            if self.machine_vision.is_black(source="stream"):
                 return float("-inf")
             try:
-                res = ImageAnalyzer.analyze_focus(img)
-                return float(getattr(res, "focus_score", float("-inf")))
+                img = self.camera.get_last_frame(prefer="stream", wait_for_still=False)
+                res = self.machine_vision.analyze_focus(img)
+                return float(res.focus_score)
             except Exception:
                 return float("-inf")
 
@@ -663,19 +662,19 @@ class AutomatedPrinter(BasePrinterController):
             self.camera.capture_image()
             while self.camera.is_taking_image:
                 time.sleep(0.01)
-            img = self.camera.get_last_frame(prefer="still", wait_for_still=False)
-            if img is None or ImageAnalyzer.is_black(img):
+            if self.machine_vision.is_black(source="still"):
                 return float("-inf")
-            res = ImageAnalyzer.analyze_focus(img)
+            img = self.camera.get_last_frame(prefer="still", wait_for_still=False)
+            res = self.machine_vision.analyze_focus(img)
             return float(res.focus_score)
 
         def score_preview() -> float:
             self._exec_gcode("M400", wait=True)
             if SETTLE_PREVIEW_S > 0: time.sleep(SETTLE_PREVIEW_S)
-            img = self.camera.get_last_frame(prefer="stream", wait_for_still=False)
-            if img is None or ImageAnalyzer.is_black(img):
+            if self.machine_vision.is_black(source="stream"):
                 return float("-inf")
-            res = ImageAnalyzer.analyze_focus(img)
+            img = self.camera.get_last_frame(prefer="stream", wait_for_still=False)
+            res = self.machine_vision.analyze_focus(img)
             return float(res.focus_score)
 
         def score_at(zt: int, cache: dict, scorer) -> float:
