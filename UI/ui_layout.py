@@ -104,7 +104,6 @@ def create_control_panel(
     )
     automation_settings_modal = Modal(parent=root_frame, title="Automation Settings", overlay=False, width=500, height=445)
     build_automation_settings_modal(automation_settings_modal, movementSystem)
-    automation_settings_modal.open()
     _build_automation_control(automation_box, movementSystem, machine_vision_overlay, automation_settings_modal)
 
     # --- Camera Settings Modal ---
