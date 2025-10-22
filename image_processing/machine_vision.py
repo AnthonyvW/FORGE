@@ -5,7 +5,7 @@ from typing import Iterable, Set, Tuple, Dict, Optional, Sequence
 import numpy as np
 import pygame
 
-from image_processing.analyzers import find_focused_areas
+from image_processing.analyzers import find_focused_areas, ImageAnalyzer, FocusAnalysisResult
 
 
 class MachineVision:
@@ -46,10 +46,10 @@ class MachineVision:
         self._invalid_maps: Dict[Tuple[int, int], Set[Tuple[int, int]]] = {}
 
         # Edge distances as percentages of the frame (0.0..1.0)
-        self._edge_left_pct: float = 0.20
-        self._edge_right_pct: float = 0.20
-        self._edge_top_pct: float = 0.10
-        self._edge_bottom_pct: float = 0.10
+        self._edge_left_pct: float = inset_left_pct
+        self._edge_right_pct: float = inset_right_pct
+        self._edge_top_pct: float = inset_top_pct
+        self._edge_bottom_pct: float = inset_bottom_pct
 
 
     # ---------------- internal helpers ----------------
@@ -212,6 +212,32 @@ class MachineVision:
         # 3) Ensure contiguous
         return arr if arr.flags.c_contiguous else np.ascontiguousarray(arr)
 
+    def get_interior_cropped_frame(
+        self,
+        *,
+        color: str = "bgr",
+        source: str = "latest",
+        return_rect: bool = False
+    ) -> np.ndarray | tuple[np.ndarray, pygame.Rect] | None:
+        """
+        Return the current frame cropped to the interior (respects edge_*_pct).
+        If return_rect=True, also return the pygame.Rect used for cropping.
+        """
+        img = self.capture_current_frame(color=color, source=source)
+        if img is None:
+            return None
+
+        h_raw, w_raw = img.shape[:2]
+        interior = self.get_interior_rect_pixels(w_raw, h_raw)  # uses edge margins
+        if interior.w <= 0 or interior.h <= 0:
+            return None
+
+        y0, y1 = int(interior.top), int(interior.bottom)
+        x0, x1 = int(interior.left), int(interior.right)
+        cropped = img[y0:y1, x0:x1]  # raw pixels
+
+        return (cropped, interior) if return_rect else cropped
+
     # --------------- tile helpers ---------------
     def tile_index_from_xy(self, x: int, y: int) -> Tuple[int, int]:
         col = max(0, int(x) // self.stride)
@@ -352,6 +378,31 @@ class MachineVision:
 
         rects = [pygame.Rect(int(t.x), int(t.y), int(t.w), int(t.h)) for t in tiles]
         return rects
+
+    def analyze_focus_current_frame(
+        self,
+        *,
+        kernel_size: int = 7,
+        source: str = "latest",
+    ) -> Optional[FocusAnalysisResult]:
+        """
+        Quadrant focus analysis using ImageAnalyzer.analyze_focus on the interior crop.
+        Edge percents come from this MachineVision instance.
+        Returns a FocusAnalysisResult or None if no frame available.
+        """
+        img_bgr = self.capture_current_frame(color="bgr", source=source)
+        if img_bgr is None:
+            return None
+
+        # Hand margins straight through so ImageAnalyzer does the crop internally
+        return ImageAnalyzer.analyze_focus(
+            img_bgr,
+            kernel_size=kernel_size,
+            edge_left_pct=self._edge_left_pct,
+            edge_right_pct=self._edge_right_pct,
+            edge_top_pct=self._edge_top_pct,
+            edge_bottom_pct=self._edge_bottom_pct,
+        )
 
     # --------------- hot-pixel sampler ---------------
     def build_hot_pixel_map(
@@ -594,3 +645,12 @@ class MachineVision:
             return (*out3_q, Y_out)
         else:
             return (float(out3[0]), float(out3[1]), float(out3[2]), float(Y_out))
+        
+    def is_black_current_frame(self, *, threshold: float = 5.0, source: str = "latest") -> bool:
+        """
+        Black-frame check on the *interior-cropped* region.
+        """
+        frame = self.get_interior_cropped_frame(color="bgr", source=source)
+        if frame is None:
+            return True  # treat as black/empty if nothing to analyze
+        return ImageAnalyzer.is_black(frame, threshold=threshold)
