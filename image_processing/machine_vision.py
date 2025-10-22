@@ -32,6 +32,7 @@ class MachineVision:
         inset_top_pct: float = 0.0,
         inset_right_pct: float = 0.10,
         inset_bottom_pct: float = 0.0,
+        scale_factor: float = 1.0,
     ):
         self.camera = camera
 
@@ -41,6 +42,10 @@ class MachineVision:
         self.top_percent = float(top_percent)
         self.min_score = min_score
         self.soft_min_score = soft_min_score
+
+        self._scale_factor: float = float(scale_factor) if scale_factor is not None else 1.0
+        if self._scale_factor <= 0:
+            self._scale_factor = 1.0
 
         # Hot-pixel / invalid tiles as grid indices
         self._invalid_maps: Dict[Tuple[int, int], Set[Tuple[int, int]]] = {}
@@ -69,6 +74,20 @@ class MachineVision:
         return None
 
     # --------------- public properties ---------------
+    @property
+    def scale_factor(self) -> float:
+        return self._scale_factor
+
+    @scale_factor.setter
+    def scale_factor(self, v: float) -> None:
+        try:
+            f = float(v)
+        except Exception:
+            f = 1.0
+        # Recommend <= 1.0 (downscale). Allow >1.0 but clamp to a sane range.
+        if f <= 0:
+            f = 1.0
+        self._scale_factor = f
 
     @staticmethod
     def _clamp01(v: float) -> float:
@@ -323,6 +342,7 @@ class MachineVision:
             top_percent=self.top_percent,
             min_score=self.min_score,
             soft_min_score=(self.soft_min_score if include_soft else None),
+            scale_factor=self._scale_factor,
         ) or []
 
         if restrict_to_interior and img_bgr is not None:
@@ -402,6 +422,7 @@ class MachineVision:
             edge_right_pct=self._edge_right_pct,
             edge_top_pct=self._edge_top_pct,
             edge_bottom_pct=self._edge_bottom_pct,
+            scale_factor=self._scale_factor,
         )
 
     # --------------- hot-pixel sampler ---------------

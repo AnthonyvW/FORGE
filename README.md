@@ -1,4 +1,4 @@
-# FORGE - Fabricated Optical Resource for Gigapixel Exploration
+# Forge - Low Cost Gigapixel Scanner
 
 ![Pre-release in progress](https://img.shields.io/badge/Pre--release-in%20progress-yellow)
 [![Windows](https://custom-icon-badges.demolab.com/badge/Windows-0078D6?logo=windows11&logoColor=white)](#)
@@ -6,7 +6,7 @@
 ![Python](https://img.shields.io/badge/Python-3.12-blue?logo=python&logoColor=white)
 
 
-FORGE is an open-source, gigapixel-scale imaging system designed to scan tree core samples with high precision. Built upon a modified off-the-shelf 3D printer, it automates the imaging of multiple samples, producing ultra-high-resolution images suitable for dendrochronology and related research. 
+Forge is an open-source, gigapixel-scale imaging system designed to scan tree core samples with high precision. Built upon a modified off-the-shelf 3D printer, it automates the imaging of multiple samples, producing ultra-high-resolution images suitable for dendrochronology and related research. 
 
 <table>
   <tr>
@@ -24,7 +24,7 @@ FORGE is an open-source, gigapixel-scale imaging system designed to scan tree co
 </table>
 
 
-> *Above: A stitched image covering a 1.5mm x 3mm area of a tree core sample and one showing FORGE's GUI. The stitched image was taken using a 0.5x lens and a 10x lens with a custom lens mount on FORGE and then focused stacked and stiched together to create the image. Click to view full resolution.*
+> *Above: A stitched image covering a 1.5mm x 3mm area of a tree core sample and one showing Forge's GUI. The stitched image was taken using a 0.5x lens and a 10x lens with a custom lens mount on Forge and then focused stacked and stiched together to create the image. Click to view full resolution.*
 
 ---
 
@@ -47,7 +47,7 @@ FORGE is an open-source, gigapixel-scale imaging system designed to scan tree co
 
 ## Printer Modification
 
-Before using FORGE, your 3D printer must be modified to mount the camera system in place of the print head.
+Before using Forge, your 3D printer must be modified to mount the camera system in place of the print head.
 
 ### Required Printed Parts
 
@@ -126,7 +126,7 @@ Prerequisites\. Ensure you have the latest version of python installed, and you 
 
 ---
 ### ✅ Confirmed Compatible Cameras
-FORGE supports USB cameras through a modular driver architecture.
+Forge supports USB cameras through a modular driver architecture.
 
 | Camera Model            | Notes                       |
 |-------------------------|-----------------------------|
@@ -140,7 +140,7 @@ FORGE supports USB cameras through a modular driver architecture.
 
 ### Adding Support for New Cameras
 
-Users are encouraged to contribute new camera drivers by implementing the FORGE camera interface and submitting them as plugins or pull requests.
+Users are encouraged to contribute new camera drivers by implementing the Forge camera interface and submitting them as plugins or pull requests.
 
 If your camera is not currently supported or you would like to contribute a driver, please open an issue or submit a pull request.
 
@@ -151,10 +151,10 @@ Alternatively, contributions of driver implementations with thorough documentati
 
 ## 3D Printer Compatibility
 
-FORGE is designed to run on 3D printers using **Marlin firmware**, which supports standard G-code over USB serial. Compatibility with other firmware types varies and may require additional configuration or is not currently supported.
+Forge is designed to run on 3D printers using **Marlin firmware**, which supports standard G-code over USB serial. Compatibility with other firmware types varies and may require additional configuration or is not currently supported.
 
 > ⚠️ **Important: Only bed slinger printers are supported.**  
-> FORGE requires the camera to be mounted in place of the print head. This setup depends on the printer moving the **bed (Y-axis)** rather than the toolhead, which is standard in bed slinger designs. CoreXY and other stationary-bed printers are **not currently supported**.
+> Forge requires the camera to be mounted in place of the print head. This setup depends on the printer moving the **bed (Y-axis)** rather than the toolhead, which is standard in bed slinger designs. CoreXY and other stationary-bed printers are **not currently supported**.
 
 ### ✅ Confirmed Compatible Printers
 
@@ -170,10 +170,10 @@ FORGE is designed to run on 3D printers using **Marlin firmware**, which support
 | Printer / Firmware                | Status        | Reason                                                                 |
 |----------------------------------|---------------|------------------------------------------------------------------------|
 | **Klipper-based printers**       | ❓ Unverified  | Serial responses (e.g., `ok`, `M400`) may differ. Needs testing.       |
-| **RepRapFirmware (e.g., Duet)**  | ❌ Incompatible | Different G-code syntax; not supported by FORGE                        |
+| **RepRapFirmware (e.g., Duet)**  | ❌ Incompatible | Different G-code syntax; not supported by Forge                        |
 | **Sailfish Firmware (e.g., FlashForge)** | ❌ Incompatible | Proprietary, non-standard G-code                                       |
 | **Proprietary OEM firmware**     | ❌ Incompatible | Often locked or limited (e.g., XYZprinting); lacks serial G-code input |
-| **Non-G-code motion platforms**  | ❌ Incompatible | FORGE requires G-code over USB for motion control                      |
+| **Non-G-code motion platforms**  | ❌ Incompatible | Forge requires G-code over USB for motion control                      |
 
 > Want to help verify compatibility with other printers, firmware, or cameras?  
 > [Open an issue](https://github.com/AnthonyvW/FORGE/issues) with your setup details and test results!

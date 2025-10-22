@@ -1,6 +1,7 @@
 import time
 from typing import Callable, Optional, List, Tuple
 import math 
+from pathlib import Path
 
 from .models import Position, FocusScore
 from .base_controller import BasePrinterController
@@ -14,9 +15,16 @@ from UI.input.text_field import TextField
 from forgeConfig import (
     ForgeSettings,
 )
+from .automation_config import (
+    AutomationSettings,
+    AutomationSettingsManager,
+    ACTIVE_FILENAME as AUTO_ACTIVE_FILENAME,
+    DEFAULT_FILENAME as AUTO_DEFAULT_FILENAME,
+)
 
 from .base_controller import command
 from camera.image_name_formatter import ImageNameFormatter
+from .automation_config import AutomationSettings, AutomationSettingsManager
 
 
 def _scan_bounds_plotter(proc_queue, y_min: float, y_max: float):
@@ -167,20 +175,37 @@ _AF_ZFLOOR = 0        # 0.00 mm -> 0 ticks
 
 class AutomatedPrinter(BasePrinterController):
     """Extended printer controller with automation capabilities"""
+    AUTOMATION_CONFIG_SUBDIR = ""
     def __init__(self, forgeConfig: ForgeSettings, camera):
         super().__init__(forgeConfig)
+
+        AutomationSettingsManager.scope_dir(self.AUTOMATION_CONFIG_SUBDIR)
+        self.automation_settings: AutomationSettings = AutomationSettingsManager.load(self.AUTOMATION_CONFIG_SUBDIR)
         
         # Initialize printer configurations
         self.camera = camera
-        self.machine_vision = MachineVision(camera, tile_size=48, stride=48, top_percent=0.15, min_score=50.0, soft_min_score=35.0)
+        s = self.automation_settings
+        self.machine_vision = MachineVision(
+            camera,
+            tile_size=s.tile_size,
+            stride=s.stride,
+            top_percent=s.top_percent,
+            min_score=s.min_score,
+            soft_min_score=s.soft_min_score,
+            inset_left_pct=s.inset_left_pct,
+            inset_top_pct=s.inset_top_pct,
+            inset_right_pct=s.inset_right_pct,
+            inset_bottom_pct=s.inset_bottom_pct,
+            scale_factor= s.scale_factor
+        )
         self.is_automated = False
         
-        self.image_namer = ImageNameFormatter(
-            controller=self,            # lets formatter query positions and sample index
-            pad_positions=True,        # set True if you want zero-padded integer parts
+        self.image_formatter = ImageNameFormatter(
+            controller=self,
+            pad_positions=self.automation_settings.zero_pad,
             position_decimals=0,
-            delimiter=".",              # replace '.' between integer/fraction if desired
-            template="Y{y} X{x} Z{z} F{f}",
+            delimiter=self.automation_settings.delimiter,
+            template=self.automation_settings.image_name_template,
         )
 
         self.sample_list: ListFrame | None = None
@@ -195,6 +220,115 @@ class AutomatedPrinter(BasePrinterController):
         
         # Automation Routines
         self.register_handler("SCAN_SAMPLE_BOUNDS", self.scan_sample_bounds)
+
+    def get_automation_config_dir(self) -> Path:
+        """Return the resolved config directory Path for automation settings."""
+        scope = self.AUTOMATION_CONFIG_SUBDIR
+        return AutomationSettingsManager.scope_dir(scope)
+
+    def load_and_apply_automation_settings(self, filename: str = AUTO_ACTIVE_FILENAME):
+        """
+        Load automation settings from YAML and apply to live objects (MachineVision, ImageNameFormatter).
+        If the active file is missing, fall back to default_settings.yaml, else built-ins.
+        """
+        scope = self.AUTOMATION_CONFIG_SUBDIR
+        loaded = AutomationSettingsManager.load(scope)
+        self.automation_settings = loaded
+        self._apply_automation_settings(self.automation_settings)
+
+    def _apply_automation_settings(self, settings: AutomationSettings):
+        """
+        Apply settings to runtime objects. Reuse existing instances if present; otherwise create them.
+        This mirrors BaseCamera.apply_settings(...) calling a hardware hook.
+        """
+        mv = self.machine_vision
+        mv.tile_size       = settings.tile_size
+        mv.stride          = settings.stride
+        mv.top_percent     = settings.top_percent
+        mv.min_score       = settings.min_score
+        mv.soft_min_score  = settings.soft_min_score
+        mv.edge_left_pct   = settings.inset_left_pct
+        mv.edge_top_pct    = settings.inset_top_pct
+        mv.edge_right_pct  = settings.inset_right_pct
+        mv.edge_bottom_pct = settings.inset_bottom_pct
+        mv.scale_factor    = settings.scale_factor
+
+        self.image_formatter.set_template(settings.image_name_template)
+
+    def save_automation_settings(self, filename: str = AUTO_ACTIVE_FILENAME):
+        """
+        Persist current automation settings to YAML in the scoped folder.
+        Old version is backed up; most recent N backups are kept (per manager policy).
+        """
+        scope = self.AUTOMATION_CONFIG_SUBDIR
+        AutomationSettingsManager.save(scope, self.automation_settings)
+
+    def set_automation_settings(
+        self,
+        settings: AutomationSettings,
+        persist: bool = False,
+        filename: str = AUTO_ACTIVE_FILENAME,
+    ):
+        """
+        Replace entire automation settings object, apply immediately, optionally persist to disk.
+        """
+        self.automation_settings = settings
+        self._apply_automation_settings(self.automation_settings)
+        if persist:
+            self.save_automation_settings(filename=filename)
+
+    def update_automation_settings(
+        self,
+        persist: bool = False,
+        filename: str = AUTO_ACTIVE_FILENAME,
+        **updates,
+    ):
+        """
+        Update one or more attributes on the current automation settings, apply immediately,
+        and optionally persist to disk. Unknown keys raise AttributeError (avoids silent typos).
+        """
+        #self.load_and_apply_automation_settings(filename=filename)
+
+        for k, v in updates.items():
+            if hasattr(self.automation_settings, k):
+                setattr(self.automation_settings, k, v)
+            else:
+                raise AttributeError(f"Unknown automation setting '{k}'")
+
+        self._apply_automation_settings(self.automation_settings)
+        if persist:
+            self.save_automation_settings(filename=filename)
+
+    # ----- Defaults helpers (parity with camera) -----
+    def get_automation_default_config_path(self) -> Path:
+        return self.get_automation_config_dir() / AUTO_DEFAULT_FILENAME
+
+    def write_default_automation_settings(self, settings: AutomationSettings | None = None) -> Path:
+        """Write default_settings.yaml for automation (or built-ins if None)."""
+        scope = self.AUTOMATION_CONFIG_SUBDIR
+        return AutomationSettingsManager.write_defaults(scope, settings)
+
+    def load_default_automation_settings(self) -> AutomationSettings:
+        """
+        Load defaults from default_settings.yaml (or built-ins if missing),
+        apply but do NOT persist to active.
+        """
+        scope = self.AUTOMATION_CONFIG_SUBDIR
+        defaults = AutomationSettingsManager.load_defaults(scope)
+        self.set_automation_settings(defaults, persist=False)
+        return defaults
+
+    def restore_default_automation_settings(self, persist: bool = True) -> AutomationSettings:
+        """
+        Restore defaults into the active automation file (backup the current one),
+        apply, and optionally persist.
+        """
+        scope = self.AUTOMATION_CONFIG_SUBDIR
+        restored = AutomationSettingsManager.restore_defaults_into_active(scope)
+        self.set_automation_settings(restored, persist=False)
+        if persist:
+            self.save_automation_settings()
+        return restored
 
 
     def get_sample_position(self, index: int) -> Position:

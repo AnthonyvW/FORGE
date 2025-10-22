@@ -28,6 +28,7 @@ from UI.styles import (
     make_settings_text_style,
 )
 from UI.modals.camera_settings_modal import build_camera_settings_modal
+from UI.modals.automation_settings_modal import build_automation_settings_modal
 
 RIGHT_PANEL_WIDTH = 400
 
@@ -67,7 +68,6 @@ def create_control_panel(
     """
 
     control_frame = _build_right_control_panel(root_frame)
-    box_spacing = 10
 
     # --- Camera View
     camera_view = CameraView(
@@ -102,7 +102,10 @@ def create_control_panel(
         x=0, y=0, width=1.0, height=140,
         width_is_percent=True
     )
-    _build_automation_control(automation_box, movementSystem, machine_vision_overlay)
+    automation_settings_modal = Modal(parent=root_frame, title="Automation Settings", overlay=False, width=500, height=445)
+    build_automation_settings_modal(automation_settings_modal, movementSystem)
+    automation_settings_modal.open()
+    _build_automation_control(automation_box, movementSystem, machine_vision_overlay, automation_settings_modal)
 
     # --- Camera Settings Modal ---
     camera_settings_modal = Modal(parent=root_frame, title="Camera Settings", overlay=False, width=308, height=660)
@@ -384,12 +387,9 @@ def _build_camera_control(camera_control, movementSystem: AutomatedPrinter, came
     Button(open_capture_folder,x=254, y=10, width=117, height=40, text="Open Path", parent=camera_control, text_style=make_button_text_style())
     
 
-def _build_automation_control(automation_box, movementSystem, machine_vision_overlay):
+def _build_automation_control(automation_box, movementSystem, machine_vision_overlay, automation_settings_modal):
 
-    def on_click():
-        print("clicked!")
-
-    settings = Button(on_click, x=0, y=0, 
+    settings = Button(lambda: automation_settings_modal.open(), x=0, y=0, 
         width=automation_box.header.height, 
         height=automation_box.header.height, 
         parent=automation_box.header,
