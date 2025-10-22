@@ -28,9 +28,9 @@ class MachineVision:
         top_percent: float = 0.15,
         min_score: float | None = None,
         soft_min_score: float | None = None,
-        inset_left_pct: float = 0.0,
+        inset_left_pct: float = 0.10,
         inset_top_pct: float = 0.0,
-        inset_right_pct: float = 0.0,
+        inset_right_pct: float = 0.10,
         inset_bottom_pct: float = 0.0,
     ):
         self.camera = camera

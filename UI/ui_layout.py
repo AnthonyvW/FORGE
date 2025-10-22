@@ -18,7 +18,8 @@ from UI.list_frame import ListFrame
 from UI.flex_frame import FlexFrame
 
 from UI.input.text_field import TextField
-from UI.input.button import Button, ButtonShape
+from UI.input.button import Button, ButtonShape, ButtonColors
+from UI.input.button_icon import ButtonIcon
 from UI.input.toggle_button import ToggleButton, ToggledColors
 from UI.input.scroll_frame import ScrollFrame
 from UI.styles import (
@@ -26,7 +27,7 @@ from UI.styles import (
     make_display_text_style,
     make_settings_text_style,
 )
-from UI.camera_settings_modal import build_camera_settings_modal
+from UI.modals.camera_settings_modal import build_camera_settings_modal
 
 RIGHT_PANEL_WIDTH = 400
 
@@ -98,13 +99,13 @@ def create_control_panel(
         parent=control_frame,
         title="Automation",
         collapsible=True,
-        x=0, y=0, width=1.0, height=90,
+        x=0, y=0, width=1.0, height=140,
         width_is_percent=True
     )
-    _build_automation_control(automation_box, movementSystem)
+    _build_automation_control(automation_box, movementSystem, machine_vision_overlay)
 
     # --- Camera Settings Modal ---
-    camera_settings_modal = Modal(parent=root_frame, title="Camera Settings", overlay=False, width=308, height=680)
+    camera_settings_modal = Modal(parent=root_frame, title="Camera Settings", overlay=False, width=308, height=660)
     build_camera_settings_modal(camera_settings_modal, camera)
 
     # --- Camera Settings ---
@@ -112,10 +113,10 @@ def create_control_panel(
         parent=control_frame,
         title="Camera Control",
         collapsible=True,
-        x=0, y=0, width=1.0, height=213,
+        x=0, y=0, width=1.0, height=163,
         width_is_percent=True
     )
-    _build_camera_control(camera_control, machine_vision_overlay, movementSystem, camera, camera_settings_modal)
+    _build_camera_control(camera_control, movementSystem, camera, camera_settings_modal)
 
     # --- Sample Box ---
     sample_box = Section(
@@ -306,7 +307,7 @@ def _build_sample_box(sample_box, movementSystem, camera, current_sample_index):
             style=make_button_text_style()
         )
 
-        TextField(parent=parent, x=150, y=0, width=180, height=30, placeholder=f"sample {i+1}", border_color=pygame.Color("#b3b4b6"), text_color=pygame.Color("#5a5a5a"))
+        TextField(parent=parent, x=150, y=0, width=180, height=30, placeholder=f"Sample {i+1} Name", border_color=pygame.Color("#b3b4b6"), text_color=pygame.Color("#5a5a5a"))
         
     scroll_area = ScrollFrame(parent=sample_box, x=10, y= 60, width=RIGHT_PANEL_WIDTH - 40, height=295, fill_remaining_height=True)
 
@@ -319,7 +320,32 @@ def _build_sample_box(sample_box, movementSystem, camera, current_sample_index):
     return go_to_sample_button, decrement_button, increment_button, sample_label#, pos1_display, pos2_display
 
 
-def _build_camera_control(camera_control, machine_vision_overlay, movementSystem: AutomatedPrinter, camera, camera_settings_modal):
+def _build_camera_control(camera_control, movementSystem: AutomatedPrinter, camera, camera_settings_modal):
+
+    # Header Settings Button
+    settings = Button(lambda: camera_settings_modal.open(), x=0, y=0, 
+        width=camera_control.header.height, 
+        height=camera_control.header.height, 
+        parent=camera_control.header,
+        colors=ButtonColors(
+            background=pygame.Color("#dbdbdb"),
+            foreground=pygame.Color("#dbdbdb"),
+            hover_background=pygame.Color("#b3b4b6"),
+            disabled_background=pygame.Color("#dbdbdb"),
+            disabled_foreground=pygame.Color("#dbdbdb")
+        )
+    )
+    camera_control.add_header_button(settings)
+    ButtonIcon(
+        parent_button=settings,
+        image="assets/gear.png",
+        normal_replace=(122, 122, 122, 255),
+        hover_replace=(122, 122, 122, 255),
+        size=(camera_control.header.height - 8, camera_control.header.height - 8),         # explicit size in pixels
+        inset_px=0
+    )
+
+    # Body of Camera Control
     camera_control.add_child(make_button(
         camera.capture_and_save,
         10, 10, 117, 40, "Take Photo"
@@ -333,8 +359,6 @@ def _build_camera_control(camera_control, machine_vision_overlay, movementSystem
 
     Button(on_set_path, 132,  10, 117, 40, "Set Path", parent=camera_control, text_style=make_button_text_style())
 
-    
-    Button(lambda: camera_settings_modal.open(), 254,  10, 117, 40, "Settings", parent=camera_control, text_style=make_button_text_style())
     
     Button(lambda: movementSystem.start_autofocus(), 10, 85, 117, 40, "Autofocus", parent=camera_control, text_style=make_button_text_style())
     Button(lambda: movementSystem.start_fine_autofocus(), 132, 85, 167, 40, "Fine Autofocus", parent=camera_control, text_style=make_button_text_style())
@@ -357,13 +381,46 @@ def _build_camera_control(camera_control, machine_vision_overlay, movementSystem
 
         print("Opened Image Output Folder")
 
-    Button(open_capture_folder,x=304, y=85, width=40, height=40,text="OF", parent=camera_control, text_style=make_button_text_style())
+    Button(open_capture_folder,x=254, y=10, width=117, height=40, text="Open Path", parent=camera_control, text_style=make_button_text_style())
+    
+
+def _build_automation_control(automation_box, movementSystem, machine_vision_overlay):
+
+    def on_click():
+        print("clicked!")
+
+    settings = Button(on_click, x=0, y=0, 
+        width=automation_box.header.height, 
+        height=automation_box.header.height, 
+        parent=automation_box.header,
+        colors=ButtonColors(
+            background=pygame.Color("#dbdbdb"),
+            foreground=pygame.Color("#dbdbdb"),
+            hover_background=pygame.Color("#b3b4b6"),
+            disabled_background=pygame.Color("#dbdbdb"),
+            disabled_foreground=pygame.Color("#dbdbdb")
+        )
+    )
+    automation_box.add_header_button(settings)
+    ButtonIcon(
+        parent_button=settings,
+        image="assets/gear.png",
+        normal_replace=(122, 122, 122, 255),
+        hover_replace=(122, 122, 122, 255),
+        size=(automation_box.header.height - 8, automation_box.header.height - 8),         # explicit size in pixels
+        inset_px=0
+    )
+
+    
+    Button(movementSystem.start_automation, 10,  10, 115, 40, "Start", parent=automation_box, text_style=make_button_text_style())
+    Button(movementSystem.stop,             133, 10, 115, 40, "Stop" , parent=automation_box, text_style=make_button_text_style())
+    Button(movementSystem.toggle_pause,     255, 10, 115, 40, "Pause", parent=automation_box, text_style=make_button_text_style())    
 
     def toggle_overlay():
         print("Toggling Overlay")
         machine_vision_overlay.toggle_overlay()
 
-    Button(toggle_overlay,x=10, y=130, width=117, height=40,text="Toggle MV", parent=camera_control, text_style=make_button_text_style())
+    Button(toggle_overlay,x=10, y=60, width=117, height=40,text="Toggle MV", parent=automation_box, text_style=make_button_text_style())
 
     def toggle_overlay():
         print("Setting Hot Pixel Map")
@@ -371,18 +428,10 @@ def _build_camera_control(camera_control, machine_vision_overlay, movementSystem
         count = machine_vision_overlay.build_hot_pixel_map(include_soft=True)  
         print(f"Marked {count} hot tiles invalid")
 
-    Button(toggle_overlay,x=132, y=130, width=212, height=40, text="MV Hot Pixel Filter", parent=camera_control, text_style=make_button_text_style())
-    def print_color():
-        print(movementSystem.machine_vision.get_average_color())
-    
-    #Button(print_color,x=349, y=85, width=40, height=40,text="C", parent=camera_control, text_style=make_button_text_style())
-    
+    Button(toggle_overlay,x=132, y=60, width=212, height=40, text="MV Hot Pixel Filter", parent=automation_box, text_style=make_button_text_style())
 
-def _build_automation_control(automation_box, movementSystem):
-    
-    Button(movementSystem.start_automation, 10,  10, 115, 40, "Start", parent=automation_box, text_style=make_button_text_style())
-    Button(movementSystem.stop,             133, 10, 115, 40, "Stop" , parent=automation_box, text_style=make_button_text_style())
-    pause = Button(movementSystem.toggle_pause,     255, 10, 115, 40, "Pause", parent=automation_box, text_style=make_button_text_style())
-    #pause.add_hidden_reason("SYSTEM")
+
+
+
 
 

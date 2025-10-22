@@ -528,7 +528,7 @@ def build_camera_settings_modal(modal, camera) -> None:
     modal._settings_syncers.clear()
     settings = camera.settings
 
-    scroll_area = ScrollFrame(parent=modal, x=0, y= 0, width=modal.width, height=600)
+    scroll_area = ScrollFrame(parent=modal, x=0, y= 0, width=modal.width, height=580)
     layout = _Layout(offset=60)
     
 
