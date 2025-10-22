@@ -250,6 +250,7 @@ Example:\n\
     def on_focus_scale_change(val: float):
         try:
             val = max(0.0, min(1.0, float(val)))
+            automated_controller.update_automation_settings(persist=False, scale_factor=val)
             automated_controller.machine_vision.scale_factor = val
             focus_scale_value.set_text(f"{val:.3f}")
         except Exception as e:
@@ -317,6 +318,14 @@ Example:\n\
         # delimiter
         try:
             delim_group.set_value(st.delimiter if st.delimiter in {"_", "-", "=", "."} else ".")
+        except Exception:
+            pass
+
+        # focus scale
+        try:
+            fs = float(st.scale_factor)
+            focus_scale_slider.set_value(fs, notify=False)
+            focus_scale_value.set_text(f"{fs:.3f}")
         except Exception:
             pass
 
