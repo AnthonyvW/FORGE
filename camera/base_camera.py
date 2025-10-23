@@ -236,7 +236,7 @@ class BaseCamera(ABC):
         self.capture_image()
         self.save_image(filename, folder)
 
-    def save_image(self, filename: str = "", folder: str = ""):
+    def save_image(self, folder: str = "", filename: str = ""):
         while self.is_taking_image:
             time.sleep(0.01)
 

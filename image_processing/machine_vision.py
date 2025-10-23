@@ -667,7 +667,7 @@ class MachineVision:
         else:
             return (float(out3[0]), float(out3[1]), float(out3[2]), float(Y_out))
         
-    def is_black_current_frame(self, *, threshold: float = 5.0, source: str = "latest") -> bool:
+    def is_black(self, *, threshold: float = 5.0, source: str = "latest") -> bool:
         """
         Black-frame check on the *interior-cropped* region.
         """

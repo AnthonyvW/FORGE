@@ -390,7 +390,7 @@ class AutomatedPrinter(BasePrinterController):
             return float("-inf")
         try:
             img = self.camera.get_last_frame(prefer="still", wait_for_still=False)
-            res = self.machine_vision.analyze_focus(img)
+            res = self.machine_vision.analyze_focus()
             return float(getattr(res, "focus_score", float("-inf")))
         except Exception:
             return float("-inf")
@@ -403,7 +403,7 @@ class AutomatedPrinter(BasePrinterController):
             return float("-inf")
         try:
             img = self.camera.get_last_frame(prefer="stream", wait_for_still=False)
-            res = self.machine_vision.analyze_focus(img)
+            res = self.machine_vision.analyze_focus()
             return float(getattr(res, "focus_score", float("-inf")))
         except Exception:
             return float("-inf")
@@ -547,7 +547,7 @@ class AutomatedPrinter(BasePrinterController):
                 return float("-inf")
             try:
                 img = self.camera.get_last_frame(prefer="still", wait_for_still=False)
-                res = self.machine_vision.analyze_focus(img)
+                res = self.machine_vision.analyze_focus()
                 return float(res.focus_score)
             except Exception:
                 return float("-inf")
@@ -559,7 +559,7 @@ class AutomatedPrinter(BasePrinterController):
                 return float("-inf")
             try:
                 img = self.camera.get_last_frame(prefer="stream", wait_for_still=False)
-                res = self.machine_vision.analyze_focus(img)
+                res = self.machine_vision.analyze_focus()
                 return float(res.focus_score)
             except Exception:
                 return float("-inf")
@@ -799,7 +799,7 @@ class AutomatedPrinter(BasePrinterController):
             if self.machine_vision.is_black(source="still"):
                 return float("-inf")
             img = self.camera.get_last_frame(prefer="still", wait_for_still=False)
-            res = self.machine_vision.analyze_focus(img)
+            res = self.machine_vision.analyze_focus()
             return float(res.focus_score)
 
         def score_preview() -> float:
@@ -808,7 +808,7 @@ class AutomatedPrinter(BasePrinterController):
             if self.machine_vision.is_black(source="stream"):
                 return float("-inf")
             img = self.camera.get_last_frame(prefer="stream", wait_for_still=False)
-            res = self.machine_vision.analyze_focus(img)
+            res = self.machine_vision.analyze_focus()
             return float(res.focus_score)
 
         def score_at(zt: int, cache: dict, scorer) -> float:
