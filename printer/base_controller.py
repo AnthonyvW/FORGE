@@ -127,11 +127,11 @@ class BasePrinterController:
 
 
         # Initialize serial connection
-        self._initialize_printer(forgeConfig)
+        #self._initialize_printer(forgeConfig)
         
         # Start command processing thread
-        self._processing_thread = threading.Thread(target=self._process_commands, daemon=True)
-        self._processing_thread.start()
+        #self._processing_thread = threading.Thread(target=self._process_commands, daemon=True)
+        #self._processing_thread.start()
 
     def _initialize_printer(self, forgeConfig):
         """Initialize printer serial connection"""
