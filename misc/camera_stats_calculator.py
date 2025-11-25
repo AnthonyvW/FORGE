@@ -328,8 +328,8 @@ def render_summary_table(
 if __name__ == "__main__":
     # You supplied mag and numerical_aperature externally.
     # Example: set them here, or import from your config.
-    mag = 1
-    numerical_aperature = 0.1  # NA
+    mag = 40
+    numerical_aperature = 0.65  # NA
     lam = 0.55                  # µm
     available_binnings = (1, 2, 3, 4, 5, 6, 7, 8)  # adjust to SDK
 
@@ -337,12 +337,11 @@ if __name__ == "__main__":
         ("MU 1000-HS",                    3584, 2748, 3.45,  mag, numerical_aperature),
         ("MU 500",                        2592, 1944, 2.20,  mag, numerical_aperature),
         ("Mokose 4k USB Webcam",          3840, 2160, 2.00,  mag, numerical_aperature),
-        ("Generic 48mp Microscope Camera",8000, 6000, 0.8, mag, numerical_aperature),
-        ("Generic 55mp Microscope Camera",9885, 5560, 1.33,  mag, numerical_aperature),
         ("Raspberry Pi HQ Camera",        4056, 3040, 1.55,  mag, numerical_aperature),
         ("Raspberry Pi GS Camera",        1456, 1088, 3.45,  mag, numerical_aperature),
         ("Arducam 120fps camera",         5496, 3672, 2.4,  mag, numerical_aperature),
         ("Fujifilm X-M5",                 9504, 6336, 3.76,  mag, numerical_aperature),
+        ("TCD1304",                       3648, 1, 8,  mag, numerical_aperature),
     ]
 
     reports: List[SamplingReport] = []
