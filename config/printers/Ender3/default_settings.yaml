@@ -3,8 +3,8 @@ MACHINE_TYPE: "Ender-3"
 baud_rate: 115200
 max_x: 23500  # Maximum X dimension in steps
 max_y: 22500  # Maximum Y dimension in steps
-max_z: 6000   # Maximum Z dimension in steps
-step_size: 4  # minimum distance that can be moved in 1 step
+max_z: 36000   # Maximum Z dimension in steps
+step_size: 1  # minimum distance that can be moved in 1 step
 sample_positions:
   1: { x: 22.12, y: 200.00, z: 29.00 }
   2: { x: 33.47, y: 200.00, z: 29.00 }
