@@ -1,10 +1,11 @@
 """
-Best Image Hierarchical Stitching Tool
+Sequential Image Stitching Tool
 
-This module performs hierarchical stitching on images to create high-quality panoramas.
+This module performs sequential stitching on images to create panoramas.
+Images are stitched in order: 1+2, then result+3, then result+4, etc.
 
 Usage:
-    python bestImageStitch.py [folder_path] [axis] [options]
+    python sequentialImageStitch.py [folder_path] [axis] [options]
     
 Arguments:
     folder_path: Path to directory containing images (default: current directory)
@@ -23,10 +24,10 @@ The script expects:
 - Supported formats: TIFF, TIF, JPG, JPEG, PNG
 
 Examples:
-    python bestImageStitch.py /path/to/images y                    # Basic (final output only)
-    python bestImageStitch.py /path/to/images x --debug            # With debug images
-    python bestImageStitch.py . y --keep-intermediates             # Keep intermediates
-    python bestImageStitch.py . y --debug --keep-intermediates     # Full output
+    python sequentialImageStitch.py /path/to/images y                    # Basic (final output only)
+    python sequentialImageStitch.py /path/to/images x --debug            # With debug images
+    python sequentialImageStitch.py . y --keep-intermediates             # Keep intermediates
+    python sequentialImageStitch.py . y --debug --keep-intermediates     # Full output
 """
 
 import os
@@ -36,28 +37,33 @@ import re
 import argparse
 import time
 from pathlib import Path
-from collections import deque
+from typing import Tuple, Optional
 
 # Third-party imports
 import cv2 as cv
-from stitching import AffineStitcher, Stitcher
 import numpy as np
 
 
-
-def stitch_image_pair(img1_path: Path, img2_path: Path, output_path: Path, axis: str = 'y', pair_info: str = "", save_debug: bool = False) -> bool:
+def find_alignment(img1_path: Path, img2_path: Path, 
+                  rotate_images: bool = False, pair_info: str = "", 
+                  save_debug: bool = False, debug_dir: Optional[Path] = None) -> Optional[Tuple[int, int, float]]:
     """
-    Optimized stitching that only evaluates relevant edge regions.
+    Find alignment between two images without creating the stitched output.
     
     Args:
-        img1_path: Path to first image
-        img2_path: Path to second image
-        output_path: Path to save stitched result
-        axis: 'x' or 'y' - determines if rotation is needed ('y' requires rotation)
+        img1_path: Path to first image (left image)
+        img2_path: Path to second image (right image)
+        rotate_images: Whether to rotate images 90° CCW before analysis
+        pair_info: String identifier for this pair (used in debug filenames)
+        save_debug: Whether to save debug images
+        debug_dir: Directory to save debug images (if save_debug is True)
+    
+    Returns:
+        Tuple of (x_overlap, y_offset, score) if alignment found, None otherwise
     """
     try:
-        img1 = cv.imread(str(img1_path))  # Left/Top image (lower coordinate)
-        img2 = cv.imread(str(img2_path))  # Right/Bottom image (higher coordinate)
+        img1 = cv.imread(str(img1_path))  # Left image
+        img2 = cv.imread(str(img2_path))  # Right image
         
         if img1 is None:
             print(f"    ERROR: Failed to load img1 from {img1_path}")
@@ -66,8 +72,8 @@ def stitch_image_pair(img1_path: Path, img2_path: Path, output_path: Path, axis:
             print(f"    ERROR: Failed to load img2 from {img2_path}")
             return False
         
-        # Only rotate images if stitching along Y axis (top-to-bottom needs to become left-to-right)
-        if axis == 'y':
+        # Rotate images if requested (only for initial images from Y-axis scans)
+        if rotate_images:
             img1 = cv.rotate(img1, cv.ROTATE_90_COUNTERCLOCKWISE)
             img2 = cv.rotate(img2, cv.ROTATE_90_COUNTERCLOCKWISE)
         
@@ -75,7 +81,7 @@ def stitch_image_pair(img1_path: Path, img2_path: Path, output_path: Path, axis:
         h2, w2 = img2.shape[:2]
         
         # Calculate edge regions for evaluation
-        max_expected_overlap = int(w1 * 0.95)  # 90% max overlap
+        max_expected_overlap = int(w1 * 0.95)  # 95% max overlap
         
         # For img1 (left image): only use right edge that could overlap
         img1_eval_width = min(max_expected_overlap, w1)
@@ -88,8 +94,7 @@ def stitch_image_pair(img1_path: Path, img2_path: Path, output_path: Path, axis:
         img2_eval_region = img2[:, img2_eval_start:img2_eval_start + img2_eval_width]
         
         # Save evaluation regions for debugging (only if save_debug is True)
-        if save_debug:
-            debug_dir = output_path.parent / "eval_regions"
+        if save_debug and debug_dir:
             debug_dir.mkdir(exist_ok=True)
             
             # Use pair_info for filename prefix
@@ -116,12 +121,12 @@ def stitch_image_pair(img1_path: Path, img2_path: Path, output_path: Path, axis:
             # Save just the eval regions themselves
             cv.imwrite(str(debug_dir / f"{prefix}img1_eval_only.jpg"), img1_eval_region)
             cv.imwrite(str(debug_dir / f"{prefix}img2_eval_only.jpg"), img2_eval_region)
+            
         # Convert evaluation regions to grayscale
         gray1_eval = cv.cvtColor(img1_eval_region, cv.COLOR_BGR2GRAY)
         gray2_eval = cv.cvtColor(img2_eval_region, cv.COLOR_BGR2GRAY)
         
         # Stage 1: Coarse horizontal search on evaluation regions
-        # Overlap is measured relative to the evaluation regions
         min_eval_overlap = int(min(img1_eval_width, img2_eval_width) * 0.3)
         max_eval_overlap = int(min(img1_eval_width, img2_eval_width) * 0.95)
         
@@ -209,26 +214,22 @@ def stitch_image_pair(img1_path: Path, img2_path: Path, output_path: Path, axis:
                     best_y_offset = y_offset
         
         # Convert evaluation region overlap back to full image coordinates
-        # The overlap in eval region corresponds to this overlap in full images:
         actual_x_overlap = best_eval_x_overlap
         
         print(f"    Fine alignment: eval_x_overlap={best_eval_x_overlap}, actual_x_overlap={actual_x_overlap}, Y_offset={best_y_offset}, score={best_xy_score:.4f}")
         
-        # Create visualization of matched regions FROM EVAL REGIONS (where matching actually happened)
-        # Extract the final matched regions for visualization
+        # Create visualization of matched regions FROM EVAL REGIONS
         if best_y_offset >= 0:
             compare_height = min(gray1_eval.shape[0] - best_y_offset, gray2_eval.shape[0])
-            # From eval regions, not full images!
             matched_region1 = img1_eval_region[best_y_offset:best_y_offset + compare_height, -actual_x_overlap:]
             matched_region2 = img2_eval_region[:compare_height, :actual_x_overlap]
         else:
             compare_height = min(gray1_eval.shape[0], gray2_eval.shape[0] + best_y_offset)
-            # From eval regions, not full images!
             matched_region1 = img1_eval_region[:compare_height, -actual_x_overlap:]
             matched_region2 = img2_eval_region[-best_y_offset:-best_y_offset + compare_height, :actual_x_overlap]
         
         # Save matched comparison (only if save_debug is True)
-        if save_debug:
+        if save_debug and debug_dir:
             # Create side-by-side comparison
             comparison = np.hstack([matched_region1, matched_region2])
             
@@ -249,156 +250,70 @@ def stitch_image_pair(img1_path: Path, img2_path: Path, output_path: Path, axis:
             
             # Use pair_info for filename prefix
             prefix = f"{pair_info}_" if pair_info else ""
-            debug_dir = output_path.parent / "eval_regions"
-            debug_dir.mkdir(exist_ok=True)
             match_path = debug_dir / f"{prefix}matched_comparison.jpg"
             cv.imwrite(str(match_path), comparison)
         
-        # Stage 3: Create output using full images
+        # Return alignment parameters if score is good enough
         if best_xy_score > 0.7:
-            # Calculate canvas size
-            if best_y_offset >= 0:
-                canvas_height = max(h1, h2 + best_y_offset)
-                img1_y_start = 0
-                img2_y_start = best_y_offset
-            else:
-                canvas_height = max(h1 - best_y_offset, h2)
-                img1_y_start = -best_y_offset
-                img2_y_start = 0
-            
-            total_width = w1 + w2 - actual_x_overlap
-            result = np.zeros((canvas_height, total_width, 3), dtype=np.uint8)
-            
-            # Place full img1 (left image - it should be on the left side)
-            result[img1_y_start:img1_y_start + h1, :w1] = img1
-            
-            # Place full img2 (right image - offset to the right with overlap)
-            img2_x_start = w1 - actual_x_overlap
-            result[img2_y_start:img2_y_start + h2, img2_x_start:img2_x_start + w2] = img2
-            
-            cv.imwrite(str(output_path), result)
-            
-            # Enhanced Debug visualization (only if save_debug is True)
-            if save_debug:
-                # Calculate x_seam for debug visualization
-                x_seam = w1 - actual_x_overlap
-                img2_x_start = w1 - actual_x_overlap
-                
-                debug_img = result.copy()
-                
-                # Draw the overlap seam in bright green
-                cv.line(debug_img, (x_seam, 0), (x_seam, canvas_height), (0, 255, 0), 3)
-                
-                # Draw img1 boundary in blue
-                cv.rectangle(debug_img, (0, img1_y_start), (w1-1, img1_y_start + h1-1), (255, 0, 0), 2)
-                
-                # Draw img2 boundary in red
-                cv.rectangle(debug_img, (img2_x_start, img2_y_start), 
-                            (img2_x_start + w2-1, img2_y_start + h2-1), (0, 0, 255), 2)
-                
-                # Draw Y offset line if present
-                if best_y_offset != 0:
-                    y_line = max(img1_y_start, img2_y_start) + min(h1, h2) // 2
-                    cv.line(debug_img, (0, y_line), (total_width, y_line), (255, 255, 0), 2)
-                
-                # Add comprehensive text information
-                font = cv.FONT_HERSHEY_SIMPLEX
-                font_scale = 0.7
-                thickness = 2
-                y_text = 30
-                line_height = 35
-                
-                # Background for text readability
-                cv.rectangle(debug_img, (5, 5), (600, 350), (0, 0, 0), -1)
-                cv.rectangle(debug_img, (5, 5), (600, 350), (255, 255, 255), 2)
-                
-                # Display comprehensive info
-                texts = [
-                    f"IMG1 (BLUE): {img1_path.name[:40]}",
-                    f"  Size: {w1}x{h1}, Y_start: {img1_y_start}",
-                    f"  Position: (0, {img1_y_start}) to ({w1}, {img1_y_start + h1})",
-                    f"",
-                    f"IMG2 (RED): {img2_path.name[:40]}",
-                    f"  Size: {w2}x{h2}, Y_start: {img2_y_start}",
-                    f"  Position: ({img2_x_start}, {img2_y_start}) to ({img2_x_start + w2}, {img2_y_start + h2})",
-                    f"",
-                    f"OVERLAP: {actual_x_overlap}px (GREEN line at x={x_seam})",
-                    f"Y_OFFSET: {best_y_offset}px, Score: {best_xy_score:.4f}",
-                    f"Canvas: {total_width}x{canvas_height}"
-                ]
-                
-                for i, text in enumerate(texts):
-                    cv.putText(debug_img, text, (10, y_text + i * line_height), 
-                              font, font_scale, (255, 255, 255), thickness)
-                
-                debug_path = output_path.parent / f"optimized_debug_{output_path.name}"
-                cv.imwrite(str(debug_path), debug_img)
-            
-            return True
+            print(f"    ✓ Alignment found: overlap={actual_x_overlap}px, y_offset={best_y_offset}px, score={best_xy_score:.4f}")
+            return (actual_x_overlap, best_y_offset, best_xy_score)
         else:
-            print("    No acceptable alignment found (score < 0.7)")
-            return False
+            print(f"    ✗ No acceptable alignment (score {best_xy_score:.4f} < 0.7)")
+            return None
         
     except Exception as e:
-        print(f"Optimized stitch error: {e}")
-        return False
+        print(f"Alignment error: {e}")
+        import traceback
+        traceback.print_exc()
+        return None
 
 
-def hierarchical_stitch_best_images(best_images_dir: Path = None, output_dir: Path = None, axis: str = 'y', save_debug: bool = False, keep_intermediates: bool = False):
+def sequential_stitch_images(images_dir: Path, output_dir: Path, axis: str = 'y', 
+                             save_debug: bool = False, keep_intermediates: bool = False):
     """
-    Hierarchically stitch images from a directory.
+    Sequentially stitch images by finding all offsets, then creating final image.
+    Process: Find offsets for pairs 1+2, 2+3, 3+4, etc., then assemble all images.
     
     Args:
-        best_images_dir (Path): Path to the directory containing images. If None, uses current directory
-        output_dir (Path): Path to the output directory. If None, uses current directory
-        axis (str): Axis along which images vary - 'x' or 'y' (default: 'y')
+        images_dir: Path to directory containing images
+        output_dir: Path to output directory
+        axis: 'x' or 'y' - which coordinate varies in the images
+        save_debug: Whether to save debug images
+        keep_intermediates: Whether to keep intermediate stitching results
     """
-    if best_images_dir is None:
-        best_images_dir = Path('.').absolute()
-    
-    if output_dir is None:
-        output_dir = Path('.').absolute()
-    
-    if not best_images_dir.exists():
-        print(f"Best images directory not found: {best_images_dir}")
-        print("Please ensure the directory exists.")
+    if not images_dir.exists():
+        print(f"Images directory not found: {images_dir}")
         return
     
-    # Get all image files in the directory (no longer filtering by strategy)
-    best_images = []
+    # Get all image files
+    image_files = []
     for ext in ['*.tiff', '*.tif', '*.jpg', '*.jpeg', '*.png']:
-        best_images.extend(list(best_images_dir.glob(ext)))
-        best_images.extend(list(best_images_dir.glob(ext.upper())))
+        image_files.extend(list(images_dir.glob(ext)))
+        image_files.extend(list(images_dir.glob(ext.upper())))
     
-    # Remove duplicates (can happen with case-insensitive filesystems or mixed case extensions)
-    best_images_unique = []
+    # Remove duplicates
+    unique_images = []
     seen_paths = set()
-    for img_path in best_images:
-        # Normalize path to detect duplicates
+    for img_path in image_files:
         normalized = str(img_path.resolve())
         if normalized not in seen_paths:
             seen_paths.add(normalized)
-            best_images_unique.append(img_path)
+            unique_images.append(img_path)
     
-    best_images = best_images_unique
-    
-    if not best_images:
+    if not unique_images:
         print(f"No images found in directory")
         return
     
-    print(f"Starting hierarchical stitching along {axis.upper()} axis")
-    print(f"Found {len(best_images)} unique images to stitch")
+    print(f"Starting sequential stitching along {axis.upper()} axis")
+    print(f"Found {len(unique_images)} unique images to stitch")
     
     # Extract coordinates and sort images
     images_with_coords = []
-    coord_letter = axis.upper()  # 'X' or 'Y'
+    coord_letter = axis.upper()
     
-    for img_path in best_images:
+    for img_path in unique_images:
         try:
-            # Use regex to find X and Y coordinates anywhere in the filename
-            filename = img_path.stem  # Get filename without extension
-            
-            # Find the coordinate for the specified axis
+            filename = img_path.stem
             coord_match = re.search(rf'{coord_letter}(\d+)', filename, re.IGNORECASE)
             
             if coord_match:
@@ -416,7 +331,6 @@ def hierarchical_stitch_best_images(best_images_dir: Path = None, output_dir: Pa
                     print(f"  Found: {img_path.name} -> {coord_letter}={coord_pos}")
             else:
                 print(f"Skipping {img_path.name}: No {coord_letter} coordinate found")
-            
         except (IndexError, ValueError) as e:
             print(f"Skipping {img_path.name}: Could not parse coordinates - {e}")
             continue
@@ -425,238 +339,206 @@ def hierarchical_stitch_best_images(best_images_dir: Path = None, output_dir: Pa
         print(f"Need at least 2 images to stitch, found {len(images_with_coords)}")
         return
     
-    # Sort by the specified coordinate
+    # Sort by coordinate
     images_with_coords.sort(key=lambda x: x[0])
+    sorted_images = [img_path for _, img_path in images_with_coords]
     
     print(f"\nImages sorted by {coord_letter} coordinate:")
-    for coord_pos, img_path in images_with_coords:
-        print(f"  {coord_letter}{coord_pos}: {img_path.name}")
+    for i, (coord_pos, img_path) in enumerate(images_with_coords):
+        print(f"  [{i}] {coord_letter}{coord_pos}: {img_path.name}")
     
-    # Create working directory for intermediate results
+    # Create working directory and debug directory
     working_dir = output_dir / "stitch_working"
     working_dir.mkdir(exist_ok=True)
     
+    debug_dir = output_dir / "eval_regions" if save_debug else None
+    if debug_dir:
+        debug_dir.mkdir(exist_ok=True)
+    
+    print(f"\nProcessing {len(sorted_images)} images")
+    
     try:
-        # Start hierarchical stitching
-        current_images = [img_path for _, img_path in images_with_coords]
-        level = 0
+        # Phase 1: Find alignment offsets for all consecutive pairs
+        print("\n" + "=" * 80)
+        print("PHASE 1: Finding Alignment Offsets")
+        print("=" * 80)
         
-        # Timing tracking for estimates
-        pair_times = deque(maxlen=3)  # Keep last 3 pair times for averaging
-        total_pairs_to_process = len(current_images) - 1  # N-1 pairs total
-        pairs_completed = 0
+        pair_offsets = []  # List of (x_overlap, y_offset, score) tuples
         
-        print(f"\nInitial image list ({len(current_images)} images):")
-        for idx, img in enumerate(current_images):
-            print(f"  [{idx}] {img.name}")
-        
-        # Check for duplicates in initial list
-        if len(current_images) != len(set(str(p.resolve()) for p in current_images)):
-            print("\n⚠️  WARNING: Duplicate images detected in initial list!")
-            seen = {}
-            for idx, img in enumerate(current_images):
-                key = str(img.resolve())
-                if key in seen:
-                    print(f"    Duplicate at index {idx}: {img.name} (same as index {seen[key]})")
-                else:
-                    seen[key] = idx
-        
-        while len(current_images) > 1:
-            level += 1
-            print(f"\n--- Stitching Level {level} ---")
-            print(f"Processing {len(current_images)} images")
+        for i in range(len(sorted_images) - 1):
+            img1_path = sorted_images[i]
+            img2_path = sorted_images[i + 1]
             
-            next_level_images = []
-            pairs_processed = 0
+            pair_info = f"pair{i+1}"
             
-            # Process pairs of neighboring images
-            for i in range(0, len(current_images), 2):
-                if i + 1 < len(current_images):
-                    # Pair of images
-                    img1 = current_images[i]
-                    img2 = current_images[i + 1]
-                    
-                    # Validate we're not trying to stitch an image with itself
-                    if img1 == img2:
-                        print(f"    ERROR: Pair {pairs_processed + 1} has the same image twice!")
-                        print(f"      This indicates a bug in the image list. Skipping this pair.")
-                        continue
-                    
-                    # Create output filename for this pair
-                    output_name = f"level{level}_pair{pairs_processed + 1}.tiff"
-                    output_path = working_dir / output_name
-                    
-                    print(f"  Stitching Pair {pairs_processed + 1}: {img1.name}, {img2.name}")
-                    
-                    # Create pair info for debug filenames
-                    pair_info = f"level{level}_pair{pairs_processed + 1}"
-                    
-                    # Time this pair
-                    pair_start_time = time.time()
-                    
-                    if stitch_image_pair(img1, img2, output_path, axis, pair_info, save_debug):
-                        pair_elapsed = time.time() - pair_start_time
-                        pair_times.append(pair_elapsed)
-                        pairs_completed += 1
-                        
-                        next_level_images.append(output_path)
-                        
-                        # Format success message with timing
-                        success_msg = f"    Success - Added {output_path.name} to next level ({pair_elapsed:.1f}s)"
-                        
-                        # Add time estimate after first pair
-                        if pairs_completed > 0:
-                            avg_time = sum(pair_times) / len(pair_times)
-                            remaining_pairs = total_pairs_to_process - pairs_completed
-                            estimated_remaining = avg_time * remaining_pairs
-                            
-                            # Format time estimate
-                            if estimated_remaining < 60:
-                                time_str = f"{estimated_remaining:.0f}s"
-                            elif estimated_remaining < 3600:
-                                minutes = estimated_remaining / 60
-                                time_str = f"{minutes:.1f}m"
-                            else:
-                                hours = estimated_remaining / 3600
-                                time_str = f"{hours:.1f}h"
-                            
-                            success_msg += f" | Est. remaining: {time_str} ({remaining_pairs} pairs left)"
-                        
-                        print(success_msg)
-                        pairs_processed += 1
-                    else:
-                        pair_elapsed = time.time() - pair_start_time
-                        print(f"    Failed to stitch pair ({pair_elapsed:.1f}s)")
-                        # If stitching fails, keep both images for next level separately
-                        next_level_images.append(img1)
-                        next_level_images.append(img2)
-                        print(f"    Added both images separately to next level")
-                        
-                else:
-                    # Odd image out, carry to next level
-                    print(f"  Carrying forward (odd image): {current_images[i].name}")
-                    next_level_images.append(current_images[i])
+            print(f"\nPair {i+1}/{len(sorted_images)-1}: {img1_path.name} + {img2_path.name}")
             
-            current_images = next_level_images
-            print(f"Level {level} completed. {len(current_images)} images remain:")
-            for idx, img in enumerate(current_images):
-                print(f"    [{idx}] {img.name}")
-        
-        # Move final result to main output directory
-        if current_images:
-            final_image = current_images[0]
-            final_output = output_dir / "final_stitched.tiff"
+            pair_start = time.time()
             
-            # Remove existing final output if it exists
-            if final_output.exists():
-                final_output.unlink()
-                print(f"Removed existing final output: {final_output}")
+            # Find alignment (rotate if axis='y' to convert vertical scan to horizontal)
+            alignment = find_alignment(img1_path, img2_path, 
+                                     rotate_images=(axis == 'y'),  # Rotate for Y-axis scans
+                                     pair_info=pair_info, 
+                                     save_debug=save_debug,
+                                     debug_dir=debug_dir)
             
-            if final_image.parent == working_dir:
-                # It's an intermediate result, move it
-                final_image.rename(final_output)
+            pair_elapsed = time.time() - pair_start
+            
+            if alignment:
+                x_overlap, y_offset, score = alignment
+                pair_offsets.append((x_overlap, y_offset, score))
+                print(f"  Time: {pair_elapsed:.1f}s")
             else:
-                # It's an original image (only one image was provided), copy it
-                shutil.copy2(final_image, final_output)
-            
-            print(f"\n🎉 Image stitching completed!")
-            print(f"Final result: {final_output}")
+                print(f"  ✗ Alignment failed ({pair_elapsed:.1f}s)")
+                print(f"\n⚠️  STOPPING: Failed to align pair {i+1}")
+                print(f"Successfully aligned {i} out of {len(sorted_images)-1} pairs")
+                
+                # Create partial result if we have any successful alignments
+                if pair_offsets and i > 0:
+                    print("\n" + "=" * 80)
+                    print(f"CREATING PARTIAL RESULT ({i+1} images)")
+                    print("=" * 80)
+                    partial_images = sorted_images[:i+1]
+                    partial_offsets = pair_offsets
+                    create_final_stitched_image(partial_images, partial_offsets, output_dir, axis, 
+                                               f"partial_stitched_{i+1}_images.tiff")
+                
+                return
+        
+        print(f"\n✓ All {len(sorted_images)-1} pairs aligned successfully!")
+        
+        # Phase 2: Create final stitched image using all offsets
+        print("\n" + "=" * 80)
+        print("PHASE 2: Creating Final Stitched Image")
+        print("=" * 80)
+        
+        create_final_stitched_image(sorted_images, pair_offsets, output_dir, axis, "final_stitched.tiff")
         
     except Exception as e:
-        print(f"Error during hierarchical stitching: {e}")
+        print(f"Error during sequential stitching: {e}")
+        import traceback
+        traceback.print_exc()
         
     finally:
         # Handle intermediate results based on keep_intermediates flag
         if keep_intermediates:
-            print(f"Intermediate stitching results saved in: {working_dir}")
-            print("Intermediate files have been preserved for inspection.")
+            print(f"\nIntermediate stitching results saved in: {working_dir}")
         else:
             # Clean up intermediate files
             if working_dir.exists():
                 try:
                     shutil.rmtree(working_dir)
-                    print(f"Intermediate stitching results cleaned up")
+                    print(f"\nIntermediate stitching results cleaned up")
                 except Exception as e:
                     print(f"Warning: Could not remove intermediate directory: {e}")
         
         # Handle debug images based on save_debug flag
-        if not save_debug:
-            debug_dir = output_dir / "eval_regions"
-            if debug_dir.exists():
-                try:
-                    shutil.rmtree(debug_dir)
-                    print(f"Debug images cleaned up")
-                except Exception as e:
-                    print(f"Warning: Could not remove debug directory: {e}")
+        if not save_debug and debug_dir and debug_dir.exists():
+            try:
+                shutil.rmtree(debug_dir)
+            except Exception as e:
+                print(f"Warning: Could not remove debug directory: {e}")
 
 
-def process_best_image_stitching(best_images_dir: Path = None, output_dir: Path = None, axis: str = 'y', save_debug: bool = False, keep_intermediates: bool = False):
+def create_final_stitched_image(image_paths: list, offsets: list, output_dir: Path, 
+                                axis: str, output_filename: str):
     """
-    Complete pipeline: stitch images hierarchically.
+    Create final stitched image from a list of images and their pairwise offsets.
     
     Args:
-        best_images_dir (Path): Path to the directory containing images. If None, uses current directory
-        output_dir (Path): Path to the output directory. If None, uses current directory
-        axis (str): Axis along which images vary - 'x' or 'y' (default: 'y')
-        save_debug (bool): Whether to save debug images (default: False)
-        keep_intermediates (bool): Whether to keep intermediate stitching results (default: False)
+        image_paths: List of image paths in order
+        offsets: List of (x_overlap, y_offset, score) tuples for consecutive pairs
+        output_dir: Directory to save output
+        axis: 'x' or 'y' - determines if rotation is needed
+        output_filename: Name for the output file
     """
-    if best_images_dir is None:
-        best_images_dir = Path('.').absolute()
-        
-    if output_dir is None:
-        output_dir = Path('.').absolute()
+    print(f"\nAssembling {len(image_paths)} images...")
     
-    print("=" * 80)
-    print("HIERARCHICAL IMAGE STITCHING")
-    print("=" * 80)
-    
-    try:
-        # Check if directory exists
-        if not best_images_dir.exists():
-            print(f"Error: Directory not found: {best_images_dir}")
-            print("Please ensure the directory exists.")
+    # Load all images (rotate if axis is 'y')
+    images = []
+    for img_path in image_paths:
+        img = cv.imread(str(img_path))
+        if img is None:
+            print(f"ERROR: Could not load {img_path}")
             return
         
-        # Hierarchical stitching
-        print("Starting hierarchical stitching...")
-        hierarchical_stitch_best_images(best_images_dir, output_dir, axis, save_debug, keep_intermediates)
+        # Rotate if needed
+        if axis == 'y':
+            img = cv.rotate(img, cv.ROTATE_90_COUNTERCLOCKWISE)
         
-        print("\n" + "=" * 80)
-        print("STITCHING COMPLETED SUCCESSFULLY!")
-        print("=" * 80)
+        images.append(img)
+        print(f"  Loaded: {img_path.name} -> {img.shape[1]}x{img.shape[0]}")
+    
+    # Calculate cumulative positions for each image
+    # First image starts at x=0
+    image_positions = [(0, 0)]  # (x_start, y_offset) for first image
+    
+    current_x = 0
+    for i, (x_overlap, y_offset, score) in enumerate(offsets):
+        # Each subsequent image is positioned based on the previous image and the overlap
+        prev_img = images[i]
+        current_x = current_x + prev_img.shape[1] - x_overlap
+        image_positions.append((current_x, y_offset))
+        print(f"  Image {i+1}: overlap={x_overlap}px, y_offset={y_offset}px -> x_pos={current_x}")
+    
+    # Calculate canvas size
+    # Find total width (rightmost extent)
+    total_width = 0
+    for i, (x_pos, y_offset) in enumerate(image_positions):
+        img = images[i]
+        right_edge = x_pos + img.shape[1]
+        total_width = max(total_width, right_edge)
+    
+    # Find total height (accounting for y offsets)
+    min_y = 0
+    max_y = 0
+    for i, (x_pos, y_offset) in enumerate(image_positions):
+        img = images[i]
+        min_y = min(min_y, y_offset)
+        max_y = max(max_y, y_offset + img.shape[0])
+    
+    total_height = max_y - min_y
+    
+    print(f"\nCanvas size: {total_width}x{total_height}")
+    print(f"Y range: {min_y} to {max_y}")
+    
+    # Create canvas
+    canvas = np.zeros((total_height, total_width, 3), dtype=np.uint8)
+    
+    # Place each image on the canvas
+    for i, (x_pos, y_offset) in enumerate(image_positions):
+        img = images[i]
+        h, w = img.shape[:2]
         
-        # Print summary
-        if best_images_dir.exists():
-            best_files = []
-            for ext in ['*.tiff', '*.tif', '*.jpg', '*.jpeg', '*.png']:
-                best_files.extend(list(best_images_dir.glob(ext)))
-                best_files.extend(list(best_images_dir.glob(ext.upper())))
-            print(f"\nProcessed {len(best_files)} images:")
-            for file in sorted(best_files):
-                print(f"  - {file.name}")
+        # Adjust y position relative to min_y
+        y_pos = y_offset - min_y
         
-        final_result = output_dir / "final_stitched.tiff"
-        if final_result.exists():
-            print(f"\nFinal stitched result: {final_result}")
-        else:
-            print(f"\nNo final result found. Check for errors above.")
+        print(f"  Placing image {i}: {image_paths[i].name} at ({x_pos}, {y_pos})")
         
-    except Exception as e:
-        print(f"Error during processing: {e}")
+        # Place image
+        canvas[y_pos:y_pos + h, x_pos:x_pos + w] = img
+    
+    # Save result
+    output_path = output_dir / output_filename
+    cv.imwrite(str(output_path), canvas)
+    
+    print(f"\n🎉 Stitched image created!")
+    print(f"Output: {output_path}")
+    print(f"Size: {total_width}x{total_height}")
+    print(f"Successfully combined {len(image_paths)} images")
 
 
 def main():
-    """Main function - runs the hierarchical stitching on images in specified folder."""
+    """Main function - runs sequential stitching on images in specified folder."""
     parser = argparse.ArgumentParser(
-        description='Hierarchical Image Stitching Tool',
+        description='Sequential Image Stitching Tool',
         formatter_class=argparse.RawDescriptionHelpFormatter,
         epilog="""
 Examples:
-  python bestImageStitch.py /path/to/images y              # Basic stitching (no debug/intermediates)
-  python bestImageStitch.py /path/to/images x --debug      # With debug images
-  python bestImageStitch.py . y --keep-intermediates       # Keep intermediate files
-  python bestImageStitch.py . y --debug --keep-intermediates  # Full output
+  python sequentialImageStitch.py /path/to/images y              # Basic stitching
+  python sequentialImageStitch.py /path/to/images x --debug      # With debug images
+  python sequentialImageStitch.py . y --keep-intermediates       # Keep intermediate files
+  python sequentialImageStitch.py . y --debug --keep-intermediates  # Full output
         """
     )
     
@@ -678,7 +560,7 @@ Examples:
     parser.add_argument(
         '--debug',
         action='store_true',
-        help='Enable saving debug images (eval regions, matched comparisons, annotated outputs)'
+        help='Enable saving debug images (eval regions, matched comparisons)'
     )
     
     parser.add_argument(
@@ -690,7 +572,6 @@ Examples:
     try:
         args = parser.parse_args()
         
-        # Convert to Path and normalize
         images_dir = Path(args.folder_path).absolute()
         axis = args.axis.lower()
         save_debug = args.debug
@@ -705,35 +586,37 @@ Examples:
             print(f"Error: '{images_dir}' is not a directory!")
             return 1
         
-        # Check if there are any images in the directory
+        # Check for images
         image_files = []
         for ext in ['*.tiff', '*.tif', '*.jpg', '*.jpeg', '*.png']:
             image_files.extend(list(images_dir.glob(ext)))
             image_files.extend(list(images_dir.glob(ext.upper())))
-        
-        # Remove duplicates
-        image_files_unique = []
-        seen = set()
-        for img in image_files:
-            normalized = str(img.resolve())
-            if normalized not in seen:
-                seen.add(normalized)
-                image_files_unique.append(img)
-        image_files = image_files_unique
         
         if not image_files:
             print(f"Error: No images found in directory '{images_dir}'!")
             print("Supported formats: TIFF, TIF, JPG, JPEG, PNG")
             return 1
         
+        print("=" * 80)
+        print("SEQUENTIAL IMAGE STITCHING")
+        print("=" * 80)
         print(f"Found {len(image_files)} images in directory")
         print(f"Stitching along {axis.upper()} axis")
         if save_debug or keep_intermediates:
-            print(f"Options: {'debug images' if save_debug else ''}{' ' if save_debug and keep_intermediates else ''}{'keep intermediates' if keep_intermediates else ''}")
+            options = []
+            if save_debug:
+                options.append('debug images')
+            if keep_intermediates:
+                options.append('keep intermediates')
+            print(f"Options: {', '.join(options)}")
         print()
         
-        # Run the stitching pipeline
-        process_best_image_stitching(images_dir, images_dir, axis, save_debug, keep_intermediates)
+        # Run sequential stitching
+        sequential_stitch_images(images_dir, images_dir, axis, save_debug, keep_intermediates)
+        
+        print("\n" + "=" * 80)
+        print("STITCHING PROCESS COMPLETED")
+        print("=" * 80)
         
         return 0
         
