@@ -2,7 +2,7 @@
 PHASE 1 OPTIMIZED Sequential Image Stitching Tool
 
 KEY OPTIMIZATIONS IMPLEMENTED:
-1. Graduated fine search (coarse grid → fine refinement) - 3-5x faster on difficult pairs
+1. Graduated fine search (coarse grid -> fine refinement) - 3-5x faster on difficult pairs
 2. Y-offset prediction from history - reduces search space dramatically  
 3. Adaptive Y-range based on coarse score - intelligent search bounds
 4. Chromatic aberration correction - uses center portions of images in overlaps
@@ -34,6 +34,13 @@ from typing import Tuple, Optional, List
 
 import cv2 as cv
 import numpy as np
+
+# Import multi-neighbor refinement (if available)
+try:
+    from multi_neighbor_refinement import multi_neighbor_refinement_pass
+    REFINEMENT_AVAILABLE = True
+except ImportError:
+    REFINEMENT_AVAILABLE = False
 
 
 class OutlierDetector:
@@ -354,7 +361,11 @@ def find_alignment_optimized(img1_path: Path, img2_path: Path,
                             save_debug: bool = False, 
                             debug_dir: Optional[Path] = None,
                             adaptive_searcher: Optional[AdaptiveSearcher] = None,
-                            outlier_detector: Optional[OutlierDetector] = None) -> Optional[Tuple[int, int, float, str, List[str]]]:
+                            outlier_detector: Optional[OutlierDetector] = None,
+                            min_overlap_fraction: float = 0.3,
+                            max_overlap_fraction: float = 0.95,
+                            min_acceptable_score: float = 0.7,
+                            rotate_180: bool = False) -> Optional[Tuple[int, int, float, str, List[str]]]:
     """
     OPTIMIZED: Find alignment between two images with adaptive search and pyramid optimization
     
@@ -373,11 +384,15 @@ def find_alignment_optimized(img1_path: Path, img2_path: Path,
             img1 = cv.rotate(img1, cv.ROTATE_90_COUNTERCLOCKWISE)
             img2 = cv.rotate(img2, cv.ROTATE_90_COUNTERCLOCKWISE)
         
+        if rotate_180:
+            img1 = cv.rotate(img1, cv.ROTATE_180)
+            img2 = cv.rotate(img2, cv.ROTATE_180)
+        
         h1, w1 = img1.shape[:2]
         h2, w2 = img2.shape[:2]
         
         # Calculate edge regions for evaluation
-        max_expected_overlap = int(w1 * 0.95)
+        max_expected_overlap = int(w1 * max_overlap_fraction)
         
         img1_eval_width = min(max_expected_overlap, w1)
         img1_eval_start = w1 - img1_eval_width
@@ -409,8 +424,8 @@ def find_alignment_optimized(img1_path: Path, img2_path: Path,
         gray2_eval = cv.cvtColor(img2_eval_region, cv.COLOR_BGR2GRAY)
         
         # OPTIMIZATION 1: Adaptive search bounds
-        default_min = int(min(img1_eval_width, img2_eval_width) * 0.3)
-        default_max = int(min(img1_eval_width, img2_eval_width) * 0.95)
+        default_min = int(min(img1_eval_width, img2_eval_width) * min_overlap_fraction)
+        default_max = int(min(img1_eval_width, img2_eval_width) * max_overlap_fraction)
         
         if adaptive_searcher:
             min_eval_overlap, max_eval_overlap = adaptive_searcher.get_search_bounds(default_min, default_max)
@@ -475,7 +490,7 @@ def find_alignment_optimized(img1_path: Path, img2_path: Path,
             )
             
             if outlier_flags:
-                print(f"    ⚠️  OUTLIER DETECTED: {', '.join(outlier_flags)}")
+                print(f"    ⚠  OUTLIER DETECTED: {', '.join(outlier_flags)}")
                 print(f"    Confidence: {confidence}")
         
         # Save matched comparison if debug enabled
@@ -500,16 +515,16 @@ def find_alignment_optimized(img1_path: Path, img2_path: Path,
             cv.imwrite(str(debug_dir / f"{prefix}matched_comparison.jpg"), comparison)
         
         # Update adaptive searcher
-        if adaptive_searcher and best_xy_score > 0.7:
+        if adaptive_searcher and best_xy_score > min_acceptable_score:
             adaptive_searcher.add_result(actual_x_overlap, best_y_offset)
         
         # Return alignment if acceptable
-        if best_xy_score > 0.7:
-            status = "✓" if confidence == "HIGH" else ("⚠" if confidence == "MEDIUM" else "✗")
+        if best_xy_score > min_acceptable_score:
+            status = "✓" if confidence == "HIGH" else ("⚠" if confidence == "MEDIUM" else "X")
             print(f"    {status} Alignment: overlap={actual_x_overlap}px, y_offset={best_y_offset}px, score={best_xy_score:.4f}, confidence={confidence}")
             return (actual_x_overlap, best_y_offset, best_xy_score, confidence, outlier_flags)
         else:
-            print(f"    ✗ No acceptable alignment (score {best_xy_score:.4f} < 0.7)")
+            print(f"    X No acceptable alignment (score {best_xy_score:.4f} < {min_acceptable_score:.2f})")
             return None
         
     except Exception as e:
@@ -520,7 +535,7 @@ def find_alignment_optimized(img1_path: Path, img2_path: Path,
 
 
 def create_final_stitched_image(image_paths: list, offsets: list, output_dir: Path, 
-                                axis: str, output_filename: str):
+                                axis: str, output_filename: str, rotate_180: bool = False):
     """
     Create final stitched image from a list of images and their pairwise offsets.
     
@@ -530,6 +545,7 @@ def create_final_stitched_image(image_paths: list, offsets: list, output_dir: Pa
         output_dir: Directory to save output
         axis: 'x' or 'y'
         output_filename: Name for the output file
+        rotate_180: Whether to rotate images 180 degrees
     """
     print(f"\nAssembling {len(image_paths)} images...")
     
@@ -543,6 +559,9 @@ def create_final_stitched_image(image_paths: list, offsets: list, output_dir: Pa
         
         if axis == 'y':
             img = cv.rotate(img, cv.ROTATE_90_COUNTERCLOCKWISE)
+        
+        if rotate_180:
+            img = cv.rotate(img, cv.ROTATE_180)
         
         images.append(img)
         print(f"  Loaded: {img_path.name} -> {img.shape[1]}x{img.shape[0]}")
@@ -560,7 +579,7 @@ def create_final_stitched_image(image_paths: list, offsets: list, output_dir: Pa
         current_x = current_x + prev_img.shape[1] - x_overlap
         image_positions.append((current_x, y_offset))
         
-        conf_marker = "✓" if confidence == "HIGH" else ("⚠" if confidence == "MEDIUM" else "✗")
+        conf_marker = "✓" if confidence == "HIGH" else ("⚠" if confidence == "MEDIUM" else "X")
         print(f"  {conf_marker} Image {i+1}: overlap={x_overlap}px, y_offset={y_offset}px -> x_pos={current_x} [{confidence}]")
     
     # Calculate canvas size
@@ -663,13 +682,18 @@ def create_final_stitched_image(image_paths: list, offsets: list, output_dir: Pa
     output_path = output_dir / output_filename
     cv.imwrite(str(output_path), canvas)
     
-    print(f"\n🎉 Stitched image created with chromatic aberration correction!")
+    print(f"\n   Stitched image created with chromatic aberration correction!")
     print(f"Output: {output_path}")
     print(f"Size: {total_width}x{total_height}")
 
 
 def sequential_stitch_images_optimized(images_dir: Path, output_dir: Path, axis: str = 'y', 
-                                      save_debug: bool = False, keep_intermediates: bool = False):
+                                      save_debug: bool = False, keep_intermediates: bool = False,
+                                      enable_refinement: bool = False,
+                                      min_overlap_fraction: float = 0.3,
+                                      max_overlap_fraction: float = 0.95,
+                                      min_acceptable_score: float = 0.7,
+                                      rotate_180: bool = False):
     """
     OPTIMIZED: Sequentially stitch images with adaptive search and outlier detection
     """
@@ -734,14 +758,6 @@ def sequential_stitch_images_optimized(images_dir: Path, output_dir: Path, axis:
     adaptive_searcher = AdaptiveSearcher()
     outlier_detector = OutlierDetector(window_size=5)
     
-    print(f"\n🚀 PHASE 1 Optimizations enabled:")
-    print(f"  • Graduated fine search (coarse → fine)")
-    print(f"  • Y-offset prediction from history")
-    print(f"  • Adaptive Y-range based on coarse score")
-    print(f"  • Adaptive X-search bounds")
-    print(f"  • Chromatic aberration correction")
-    print(f"  • Outlier detection system")
-    
     try:
         # Phase 1: Find alignments
         print("\n" + "=" * 80)
@@ -767,7 +783,11 @@ def sequential_stitch_images_optimized(images_dir: Path, output_dir: Path, axis:
                 save_debug=save_debug,
                 debug_dir=debug_dir,
                 adaptive_searcher=adaptive_searcher,
-                outlier_detector=outlier_detector
+                outlier_detector=outlier_detector,
+                min_overlap_fraction=min_overlap_fraction,
+                max_overlap_fraction=max_overlap_fraction,
+                min_acceptable_score=min_acceptable_score,
+                rotate_180=rotate_180
             )
             
             pair_elapsed = time.time() - pair_start
@@ -777,8 +797,8 @@ def sequential_stitch_images_optimized(images_dir: Path, output_dir: Path, axis:
                 pair_offsets.append(alignment)
                 print(f"  Time: {pair_elapsed:.1f}s (avg: {total_time/(i+1):.1f}s/pair)")
             else:
-                print(f"  ✗ Alignment failed ({pair_elapsed:.1f}s)")
-                print(f"\n⚠️  STOPPING: Failed to align pair {i+1}")
+                print(f"  X Alignment failed ({pair_elapsed:.1f}s)")
+                print(f"\n⚠  STOPPING: Failed to align pair {i+1}")
                 
                 if pair_offsets and i > 0:
                     print("\n" + "=" * 80)
@@ -786,19 +806,32 @@ def sequential_stitch_images_optimized(images_dir: Path, output_dir: Path, axis:
                     print("=" * 80)
                     create_final_stitched_image(
                         sorted_images[:i+1], pair_offsets, output_dir, axis,
-                        f"partial_stitched_{i+1}_images.tiff"
+                        f"partial_stitched_{i+1}_images.tiff", rotate_180
                     )
                 return
         
         print(f"\n✓ All {len(sorted_images)-1} pairs aligned successfully!")
         print(f"Total alignment time: {total_time:.1f}s (avg: {total_time/(len(sorted_images)-1):.1f}s/pair)")
         
+        # Phase 1.5: Multi-neighbor refinement (optional)
+        if enable_refinement and REFINEMENT_AVAILABLE:
+            try:
+                pair_offsets = multi_neighbor_refinement_pass(
+                    sorted_images, pair_offsets, axis, confidence_threshold="MEDIUM"
+                )
+            except Exception as e:
+                print(f"\n⚠  Refinement pass failed: {e}")
+                print("Continuing with initial alignments...")
+        elif enable_refinement and not REFINEMENT_AVAILABLE:
+            print("\n⚠  Refinement requested but multi_neighbor_refinement.py not found")
+            print("Continuing without refinement...")
+        
         # Phase 2: Create final image
         print("\n" + "=" * 80)
         print("PHASE 2: Creating Final Stitched Image")
         print("=" * 80)
         
-        create_final_stitched_image(sorted_images, pair_offsets, output_dir, axis, "final_stitched.tiff")
+        create_final_stitched_image(sorted_images, pair_offsets, output_dir, axis, "final_stitched.tiff", rotate_180)
         
         # Print summary
         print("\n" + "=" * 80)
@@ -810,12 +843,12 @@ def sequential_stitch_images_optimized(images_dir: Path, output_dir: Path, axis:
         low_conf = sum(1 for p in pair_offsets if p[3] == "LOW")
         
         print(f"Total pairs: {len(pair_offsets)}")
-        print(f"  • HIGH confidence: {high_conf}")
-        print(f"  • MEDIUM confidence: {med_conf}")
-        print(f"  • LOW confidence: {low_conf}")
+        print(f"  * HIGH confidence: {high_conf}")
+        print(f"  * MEDIUM confidence: {med_conf}")
+        print(f"  * LOW confidence: {low_conf}")
         
         if low_conf > 0:
-            print(f"\n⚠️  {low_conf} pair(s) with LOW confidence - manual review recommended")
+            print(f"\n⚠  {low_conf} pair(s) with LOW confidence - manual review recommended")
             for i, offset_data in enumerate(pair_offsets):
                 if offset_data[3] == "LOW":
                     print(f"  Pair {i+1}: {', '.join(offset_data[4])}")
@@ -848,6 +881,16 @@ def main():
                        help='Enable debug images')
     parser.add_argument('--keep-intermediates', action='store_true',
                        help='Keep intermediate results')
+    parser.add_argument('--refine', action='store_true',
+                       help='Enable multi-neighbor refinement pass for MEDIUM/LOW confidence pairs')
+    parser.add_argument('--min-overlap', type=float, default=0.3,
+                       help='Minimum overlap as fraction of image width (default: 0.3)')
+    parser.add_argument('--max-overlap', type=float, default=0.95,
+                       help='Maximum overlap as fraction of image width (default: 0.95)')
+    parser.add_argument('--min-score', type=float, default=0.7,
+                       help='Minimum acceptable alignment score (default: 0.7)')
+    parser.add_argument('--rotate-180', action='store_true',
+                       help='Rotate images 180 degrees before stitching (useful for reversed scan direction)')
     
     try:
         args = parser.parse_args()
@@ -859,12 +902,38 @@ def main():
             print(f"Error: '{images_dir}' is not a valid directory!")
             return 1
         
+        # Validate overlap arguments
+        if not (0.0 < args.min_overlap < 1.0):
+            print(f"Error: --min-overlap must be between 0 and 1, got {args.min_overlap}")
+            return 1
+        
+        if not (0.0 < args.max_overlap <= 1.0):
+            print(f"Error: --max-overlap must be between 0 and 1, got {args.max_overlap}")
+            return 1
+        
+        if args.min_overlap >= args.max_overlap:
+            print(f"Error: --min-overlap ({args.min_overlap}) must be less than --max-overlap ({args.max_overlap})")
+            return 1
+        
+        # Validate score argument
+        if not (0.0 < args.min_score <= 1.0):
+            print(f"Error: --min-score must be between 0 and 1, got {args.min_score}")
+            return 1
+        
         print("=" * 80)
         print("OPTIMIZED SEQUENTIAL IMAGE STITCHING")
         print("=" * 80)
+        print(f"Overlap range: {args.min_overlap:.1%} to {args.max_overlap:.1%}")
+        print(f"Minimum acceptable score: {args.min_score:.2f}")
+        if args.rotate_180:
+            print(f"180° rotation: ENABLED")
         
-        sequential_stitch_images_optimized(images_dir, images_dir, axis, 
-                                          args.debug, args.keep_intermediates)
+        sequential_stitch_images_optimized(
+            images_dir, images_dir, axis, 
+            args.debug, args.keep_intermediates,
+            args.refine, args.min_overlap, args.max_overlap, args.min_score,
+            args.rotate_180
+        )
         
         return 0
         
