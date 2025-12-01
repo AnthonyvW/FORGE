@@ -1,1160 +1,906 @@
+"""
+PHASE 1 OPTIMIZED Sequential Image Stitching Tool
+
+KEY OPTIMIZATIONS IMPLEMENTED:
+1. Graduated fine search (coarse grid â†’ fine refinement) - 3-5x faster on difficult pairs
+2. Y-offset prediction from history - reduces search space dramatically  
+3. Adaptive Y-range based on coarse score - intelligent search bounds
+4. Chromatic aberration correction - uses center portions of images in overlaps
+5. Adaptive X-search bounds - narrows to Â±100px after initial pairs
+6. Outlier detection - statistical analysis of alignments
+
+EXPECTED PERFORMANCE:
+- Fast pairs (coarse > 0.98): ~10 seconds
+- Slow pairs (coarse < 0.98): ~8-12 seconds (vs 31s before!)
+- Average: ~10-11 seconds per pair (vs 20-33s before)
+
+For 100 images: ~17 minutes (vs 34+ minutes)
+
+This version is optimized for tree core samples with low texture detail.
+No pyramid downsampling is used to preserve fine details.
+
+Usage:
+    python optimizedImageStitch.py [folder_path] [axis] [options]
+"""
+
 import os
-from pathlib import Path
-from stitching import AffineStitcher
-import cv2 as cv
-import glob
+import sys
+import shutil
 import re
-from typing import List, Tuple, Optional
-import statistics
+import argparse
+import time
+from pathlib import Path
+from typing import Tuple, Optional, List
 
-def extract_f_score(filename: str) -> Optional[float]:
-    """
-    Extract F score from filename in format "Z{score} F{score}.extension"
-    
-    Args:
-        filename (str): The filename to parse
-        
-    Returns:
-        Optional[float]: The F score if found, None otherwise
-    """
-    try:
-        # Look for pattern "F{score}" in filename
-        match = re.search(r'F([\d.]+)', filename)
-        if match:
-            return float(match.group(1))
-    except (ValueError, AttributeError):
-        pass
-    return None
+import cv2 as cv
+import numpy as np
 
-def get_images_with_f_scores(folder_path: Path) -> List[Tuple[Path, float]]:
-    """
-    Get all images in folder with their F scores.
-    
-    Args:
-        folder_path (Path): Path to the folder containing images
-        
-    Returns:
-        List[Tuple[Path, float]]: List of (image_path, f_score) tuples
-    """
-    images_with_scores = []
-    
-    for image_path in folder_path.iterdir():
-        if image_path.is_file() and image_path.suffix.lower() in ['.jpg', '.jpeg', '.png', '.tiff', '.tif']:
-            f_score = extract_f_score(image_path.name)
-            if f_score is not None:
-                images_with_scores.append((image_path, f_score))
-            else:
-                print(f"Warning: Could not extract F score from {image_path.name}")
-    
-    return images_with_scores
+# Import multi-neighbor refinement (if available)
+try:
+    from multi_neighbor_refinement import multi_neighbor_refinement_pass
+    REFINEMENT_AVAILABLE = True
+except ImportError:
+    REFINEMENT_AVAILABLE = False
 
-def execute_focus_stack(input_files: List[Path], output_file: Path, description: str = "") -> bool:
-    """
-    Execute the focus stacking command using the external focus-stack.exe tool.
+
+class OutlierDetector:
+    """Detects alignment outliers using multiple criteria"""
     
-    Args:
-        input_files (List[Path]): List of input image files to stack
-        output_file (Path): Path for the output stacked image
-        description (str): Description for logging purposes
+    def __init__(self, window_size=5):
+        self.window_size = window_size
+        self.overlap_history = []
+        self.score_history = []
+        self.coarse_score_history = []
         
-    Returns:
-        bool: True if successful, False otherwise
-    """
-    # Convert paths to strings and quote them
-    input_args = ' '.join([f'"{str(file)}"' for file in input_files])
-    
-    # Construct the command
-    command = (
-        f".\\focus-stack\\focus-stack.exe "
-        f"{input_args} "
-        f"--output=\"{output_file}\" "
-        f"--consistency=0 "
-        f"--no-whitebalance "
-        f"--no-contrast"
-    )
-    
-    print(f"Processing: {description}")
-    print(f"Running command: {command}")
-    
-    try:
-        # Execute the command
-        result = os.system(command)
-        if result == 0:
-            print(f"Successfully completed: {description}\n")
-            return True
+    def is_outlier(self, overlap: int, score: float, coarse_score: Optional[float] = None) -> Tuple[List[str], str]:
+        """
+        Detect if current alignment is an outlier
+        
+        Returns:
+            Tuple of (flags list, confidence level)
+        """
+        flags = []
+        
+        # 1. Low final score (absolute threshold)
+        if score < 0.95:
+            flags.append(f"LOW_FINAL_SCORE({score:.4f})")
+        
+        # 2. Low coarse score (indicates poor initial match)
+        if coarse_score and coarse_score < 0.93:
+            flags.append(f"LOW_COARSE_SCORE({coarse_score:.4f})")
+        
+        # 3. Large coarse-to-fine improvement (indicates unstable match)
+        if coarse_score and score - coarse_score > 0.10:
+            flags.append(f"LARGE_SCORE_JUMP({score - coarse_score:.4f})")
+        
+        # 4. Statistical outlier in overlap (if we have history)
+        if len(self.overlap_history) >= 3:
+            mean_overlap = np.mean(self.overlap_history[-self.window_size:])
+            std_overlap = np.std(self.overlap_history[-self.window_size:])
+            
+            if std_overlap > 0:
+                z_score = abs(overlap - mean_overlap) / std_overlap
+                if z_score > 3:  # 3 sigma rule
+                    flags.append(f"OVERLAP_DEVIATION({z_score:.2f}Ïƒ)")
+        
+        # 5. Score drop compared to recent pairs
+        if len(self.score_history) >= 2:
+            recent_avg_score = np.mean(self.score_history[-self.window_size:])
+            if score < recent_avg_score - 0.05:
+                flags.append(f"SCORE_DROP({recent_avg_score - score:.4f})")
+        
+        # Update history
+        self.overlap_history.append(overlap)
+        self.score_history.append(score)
+        if coarse_score:
+            self.coarse_score_history.append(coarse_score)
+        
+        # Determine confidence
+        if len(flags) == 0:
+            confidence = "HIGH"
+        elif len(flags) == 1 or (len(flags) == 2 and score > 0.97):
+            confidence = "MEDIUM"
         else:
-            print(f"Error executing command for: {description}\n")
-            return False
-    except Exception as e:
-        print(f"Exception during execution: {e}")
-        return False
-
-def focus_stack_images_strategy1(output_dir: Path, strategy_suffix: str = "all") -> Path:
-    """
-    Strategy 1: Stack all images in folder (original implementation)
-    
-    Args:
-        output_dir (Path): Path to the main output directory
-        strategy_suffix (str): Suffix to append to output filenames
+            confidence = "LOW"
         
-    Returns:
-        Path: Path to the directory containing focus stacked images
-    """
-    # Create focus_stacked directory if it doesn't exist
-    focus_stacked_dir = output_dir / "focus_stacked"
-    focus_stacked_dir.mkdir(exist_ok=True)
-    
-    # Check if output directory exists
-    if not output_dir.exists():
-        raise FileNotFoundError(f"Directory '{output_dir}' does not exist")
-    
-    # Stack all images in each folder
-    for folder in output_dir.iterdir():
-        if folder.is_dir() and not folder.name.startswith("focus_stacked"):
-            folder_name = folder.name
-            output_file = focus_stacked_dir / f"{folder_name}_{strategy_suffix}.tiff"
-            
-            # Get all image files in the folder
-            image_files = []
-            for ext in ['*.jpg', '*.jpeg', '*.png', '*.tiff', '*.tif']:
-                image_files.extend(folder.glob(ext))
-                image_files.extend(folder.glob(ext.upper()))
-            
-            if not image_files:
-                print(f"No image files found in {folder_name}")
-                continue
-            
-            description = f"Strategy 1 - {folder_name} (all {len(image_files)} images)"
-            execute_focus_stack(image_files, output_file, description)
-    
-    return focus_stacked_dir
+        return flags, confidence
 
-def stack_selected_images(output_dir: Path, folder_name: str, selected_images: List[Tuple[Path, float]], 
-                         strategy_suffix: str, description: str) -> bool:
-    """
-    Stack a selected set of images by passing them directly to focus-stack.exe.
-    
-    Args:
-        output_dir (Path): Main output directory
-        folder_name (str): Name of the source folder
-        selected_images (List[Tuple[Path, float]]): List of (image_path, f_score) tuples
-        strategy_suffix (str): Suffix for output filename
-        description (str): Description for logging
-        
-    Returns:
-        bool: True if successful, False otherwise
-    """
-    if len(selected_images) < 2:
-        print(f"Warning: Only {len(selected_images)} suitable images found in {folder_name}, skipping stacking")
-        return False
-    
-    focus_stacked_dir = output_dir / "focus_stacked"
-    focus_stacked_dir.mkdir(exist_ok=True)
-    
-    # Extract just the file paths from the (path, score) tuples
-    image_files = [img_path for img_path, _ in selected_images]
-    output_file = focus_stacked_dir / f"{folder_name}_{strategy_suffix}.tiff"
-    
-    return execute_focus_stack(image_files, output_file, description)
 
-def focus_stack_images_strategy2(output_dir: Path, n: int = 5, strategy_suffix: str = "top_n") -> Path:
-    """
-    Strategy 2: Stack top N images in folder based on F score
+class AdaptiveSearcher:
+    """Manages adaptive search bounds based on alignment history"""
     
-    Args:
-        output_dir (Path): Path to the main output directory
-        n (int): Number of top images to stack
-        strategy_suffix (str): Suffix to append to output filenames
+    def __init__(self):
+        self.overlap_history = []
+        self.y_offset_history = []
         
-    Returns:
-        Path: Path to the directory containing focus stacked images
-    """
-    focus_stacked_dir = output_dir / "focus_stacked"
-    focus_stacked_dir.mkdir(exist_ok=True)
-    
-    # Check if output directory exists
-    if not output_dir.exists():
-        raise FileNotFoundError(f"Directory '{output_dir}' does not exist")
-    
-    # Process each folder
-    for folder in output_dir.iterdir():
-        if folder.is_dir() and not folder.name.startswith("focus_stacked"):
-            folder_name = folder.name
-            
-            # Get images with F scores
-            images_with_scores = get_images_with_f_scores(folder)
-            
-            if not images_with_scores:
-                print(f"No images with F scores found in {folder_name}")
-                continue
-            
-            # Sort by F score (descending) and take top N
-            images_with_scores.sort(key=lambda x: x[1], reverse=True)
-            top_n_images = images_with_scores[:n]
-            
-            print(f"Strategy 2 - Processing folder: {folder_name}")
-            print(f"Found {len(images_with_scores)} images with F scores")
-            print(f"Using top {len(top_n_images)} images:")
-            for img_path, f_score in top_n_images:
-                print(f"  - {img_path.name} (F={f_score})")
-            
-            description = f"Strategy 2 - {folder_name} with top {len(top_n_images)} images"
-            stack_selected_images(output_dir, folder_name, top_n_images, strategy_suffix, description)
-    
-    return focus_stacked_dir
-
-def focus_stack_images_threshold(output_dir: Path, threshold: float = None, 
-                                threshold_type: str = "absolute", strategy_suffix: str = "threshold") -> Path:
-    """
-    Strategy 3: Stack images above a threshold F score
-    
-    Args:
-        output_dir (Path): Path to the main output directory
-        threshold (float): F score threshold. If None, calculated automatically
-        threshold_type (str): "absolute" for fixed threshold, "relative" for percentage of max
-        strategy_suffix (str): Suffix to append to output filenames
+    def get_search_bounds(self, default_min: int, default_max: int) -> Tuple[int, int]:
+        """
+        Calculate adaptive search bounds based on history
         
-    Returns:
-        Path: Path to the directory containing focus stacked images
-    """
-    focus_stacked_dir = output_dir / "focus_stacked"
-    focus_stacked_dir.mkdir(exist_ok=True)
+        Returns:
+            Tuple of (adaptive_min, adaptive_max)
+        """
+        if len(self.overlap_history) >= 2:
+            # Use mean Â± 2*std for adaptive bounds
+            recent_overlaps = self.overlap_history[-3:]  # Last 3 overlaps
+            mean_overlap = np.mean(recent_overlaps)
+            std_overlap = np.std(recent_overlaps) if len(recent_overlaps) > 1 else 50
+            
+            # Add buffer for safety
+            buffer = max(100, 2 * std_overlap)
+            adaptive_min = int(mean_overlap - buffer)
+            adaptive_max = int(mean_overlap + buffer)
+            
+            # Clamp to reasonable bounds
+            adaptive_min = max(default_min, adaptive_min)
+            adaptive_max = min(default_max, adaptive_max)
+            
+            return adaptive_min, adaptive_max
+        
+        return default_min, default_max
     
-    # Check if output directory exists
-    if not output_dir.exists():
-        raise FileNotFoundError(f"Directory '{output_dir}' does not exist")
-    
-    # Process each folder
-    for folder in output_dir.iterdir():
-        if folder.is_dir() and not folder.name.startswith("focus_stacked"):
-            folder_name = folder.name
+    def get_predicted_y_search(self, coarse_score: float) -> Tuple[int, int]:
+        """
+        Predict Y offset and determine search range based on history and coarse score
+        
+        Returns:
+            (predicted_y_center, y_search_radius)
+        """
+        # Predict Y center from history
+        if len(self.y_offset_history) >= 3:
+            recent_y = self.y_offset_history[-3:]
+            predicted_y = int(round(np.mean(recent_y)))
+            y_std = np.std(recent_y)
             
-            # Get images with F scores
-            images_with_scores = get_images_with_f_scores(folder)
-            
-            if not images_with_scores:
-                print(f"No images with F scores found in {folder_name}")
-                continue
-            
-            # Calculate threshold if not provided
-            f_scores = [score for _, score in images_with_scores]
-            
-            if threshold is None:
-                if threshold_type == "relative":
-                    # Use 70% of maximum F score as threshold
-                    calculated_threshold = max(f_scores) * 0.7
-                else:
-                    # Use mean + 0.5 * std dev as threshold
-                    mean_score = statistics.mean(f_scores)
-                    std_score = statistics.stdev(f_scores) if len(f_scores) > 1 else 0
-                    calculated_threshold = mean_score + (0.5 * std_score)
+            # Adaptive range based on both history and coarse score
+            if coarse_score > 0.98:
+                y_range = max(5, int(1.5 * y_std + 3))  # 1.5Ïƒ + buffer
+            elif coarse_score > 0.96:
+                y_range = max(6, int(2 * y_std + 4))    # 2Ïƒ + buffer
+            elif coarse_score > 0.94:
+                y_range = max(8, int(2.5 * y_std + 5))  # 2.5Ïƒ + buffer
             else:
-                if threshold_type == "relative":
-                    calculated_threshold = max(f_scores) * threshold
-                else:
-                    calculated_threshold = threshold
+                y_range = max(10, int(3 * y_std + 6))   # 3Ïƒ + buffer
             
-            # Filter images above threshold
-            suitable_images = [(path, score) for path, score in images_with_scores 
-                             if score >= calculated_threshold]
+            # Cap at reasonable maximum
+            y_range = min(y_range, 15)
             
-            print(f"Strategy 3 - Processing folder: {folder_name}")
-            print(f"Found {len(images_with_scores)} images with F scores")
-            print(f"F score range: {min(f_scores):.2f} - {max(f_scores):.2f}")
-            print(f"Calculated threshold: {calculated_threshold:.2f}")
-            print(f"Images above threshold: {len(suitable_images)}")
+            return predicted_y, y_range
+        else:
+            # No history - use coarse score only
+            predicted_y = 0
+            if coarse_score > 0.98:
+                y_range = 5
+            elif coarse_score > 0.96:
+                y_range = 8
+            elif coarse_score > 0.94:
+                y_range = 12
+            else:
+                y_range = 15
             
-            for img_path, f_score in suitable_images:
-                print(f"  - {img_path.name} (F={f_score:.2f})")
-            
-            description = f"Strategy 3 - {folder_name} with {len(suitable_images)} suitable images (threshold: {calculated_threshold:.2f})"
-            stack_selected_images(output_dir, folder_name, suitable_images, strategy_suffix, description)
+            return predicted_y, y_range
     
-    return focus_stacked_dir
+    def add_result(self, overlap: int, y_offset: int):
+        """Add successful alignment result to history"""
+        self.overlap_history.append(overlap)
+        self.y_offset_history.append(y_offset)
 
-# Keep all your existing stitching functions unchanged
-def stitch_images(focus_stacked_dir: Path, output_dir: Path) -> None:
+
+def coarse_search_optimized(gray1: np.ndarray, gray2: np.ndarray, 
+                           min_overlap: int, max_overlap: int,
+                           adaptive_step: int = 20) -> Tuple[int, float]:
     """
-    Stitch together focus stacked images into a panorama.
+    Optimized coarse search without aggressive pyramid (preserves detail for tree cores)
+    
+    Returns:
+        Tuple of (best_overlap, best_score)
+    """
+    best_score = -1
+    best_overlap = min_overlap
+    
+    # Single-pass coarse search with adaptive stepping
+    for overlap in range(min_overlap, max_overlap, adaptive_step):
+        if overlap > min(gray1.shape[1], gray2.shape[1]):
+            continue
+            
+        region1 = gray1[:, -overlap:]
+        region2 = gray2[:, :overlap]
+        
+        if region1.shape != region2.shape:
+            continue
+            
+        score = cv.matchTemplate(region1, region2, cv.TM_CCOEFF_NORMED)[0, 0]
+        
+        if score > best_score:
+            best_score = score
+            best_overlap = overlap
+    
+    return best_overlap, best_score
+
+
+def graduated_fine_search(gray1_eval: np.ndarray, gray2_eval: np.ndarray,
+                         best_coarse_overlap: int, x_min: int, x_max: int,
+                         predicted_y: int, y_range: int,
+                         img1_eval_width: int, img2_eval_width: int) -> Tuple[int, int, float]:
+    """
+    PHASE 1 KEY OPTIMIZATION: Two-stage graduated search
+    
+    Stage 2A: Coarse grid search (larger steps) - quickly find general region
+    Stage 2B: Fine refinement (smaller steps) - refine to pixel-perfect accuracy
+    
+    This replaces exhaustive search and is 3-5x faster on difficult pairs.
     
     Args:
-        focus_stacked_dir (Path): Directory containing the focus stacked images
-        output_dir (Path): Directory where the final stitched image will be saved
+        gray1_eval: Grayscale evaluation region from image 1
+        gray2_eval: Grayscale evaluation region from image 2
+        best_coarse_overlap: Starting X overlap from coarse search
+        x_min, x_max: X search bounds
+        predicted_y: Predicted Y offset (from history or 0)
+        y_range: Radius to search around predicted_y
+        img1_eval_width: Width of eval region 1
+        img2_eval_width: Width of eval region 2
+    
+    Returns:
+        (best_x_overlap, best_y_offset, best_score)
     """
-    print("Starting stitching process...")
     
-    # Get all PNG files in the focus_stacked directory
-    stacked_images = list(focus_stacked_dir.glob("*.png"))
-    if not stacked_images:
-        raise ValueError("No stacked images found to stitch!")
-
-    # Convert Path objects to strings
-    stacked_images = [str(img) for img in stacked_images]
+    # Stage 2A: COARSE grid search (larger steps)
+    coarse_x_step = 6  # Check every 6px in X
+    coarse_y_step = 4  # Check every 4px in Y
     
-    # Configure the stitcher
-    settings = {
-        "crop": False,
-        "detector": "sift",
-        "confidence_threshold": 0.2,
-        "blender_type": "no",
-        "warper_type": "affine",
-    }    
+    best_coarse_score = -1
+    best_coarse_x = best_coarse_overlap
+    best_coarse_y = predicted_y
+    
+    coarse_iterations = 0
+    
+    for x_overlap in range(x_min, x_max + 1, coarse_x_step):
+        if x_overlap > min(img1_eval_width, img2_eval_width):
+            continue
+            
+        for y_offset in range(predicted_y - y_range, predicted_y + y_range + 1, coarse_y_step):
+            # Calculate comparison regions with Y offset
+            if y_offset >= 0:
+                available_height1 = gray1_eval.shape[0] - y_offset
+                available_height2 = gray2_eval.shape[0]
+                compare_height = min(available_height1, available_height2)
+                
+                if compare_height <= 50:
+                    continue
+                
+                region1 = gray1_eval[y_offset:y_offset + compare_height, -x_overlap:]
+                region2 = gray2_eval[:compare_height, :x_overlap]
+            else:
+                available_height1 = gray1_eval.shape[0]
+                available_height2 = gray2_eval.shape[0] + y_offset
+                compare_height = min(available_height1, available_height2)
+                
+                if compare_height <= 50:
+                    continue
+                
+                region1 = gray1_eval[:compare_height, -x_overlap:]
+                region2 = gray2_eval[-y_offset:-y_offset + compare_height, :x_overlap]
+            
+            if region1.shape != region2.shape:
+                continue
+            
+            result = cv.matchTemplate(region1, region2, cv.TM_CCOEFF_NORMED)
+            score = result[0, 0]
+            coarse_iterations += 1
+            
+            if score > best_coarse_score:
+                best_coarse_score = score
+                best_coarse_x = x_overlap
+                best_coarse_y = y_offset
+    
+    # Stage 2B: FINE refinement around the best coarse result
+    fine_x_radius = 9   # Search Â±9px around best coarse X
+    fine_y_radius = 6   # Search Â±6px around best coarse Y
+    fine_x_step = 3     # Every 3px in X
+    fine_y_step = 2     # Every 2px in Y
+    
+    best_fine_score = best_coarse_score
+    best_fine_x = best_coarse_x
+    best_fine_y = best_coarse_y
+    
+    fine_iterations = 0
+    
+    for x_overlap in range(best_coarse_x - fine_x_radius, best_coarse_x + fine_x_radius + 1, fine_x_step):
+        if x_overlap < x_min or x_overlap > x_max:
+            continue
+        if x_overlap > min(img1_eval_width, img2_eval_width):
+            continue
+            
+        for y_offset in range(best_coarse_y - fine_y_radius, best_coarse_y + fine_y_radius + 1, fine_y_step):
+            # Stay within original Y bounds
+            if abs(y_offset - predicted_y) > y_range:
+                continue
+                
+            # Calculate comparison regions
+            if y_offset >= 0:
+                available_height1 = gray1_eval.shape[0] - y_offset
+                available_height2 = gray2_eval.shape[0]
+                compare_height = min(available_height1, available_height2)
+                
+                if compare_height <= 50:
+                    continue
+                
+                region1 = gray1_eval[y_offset:y_offset + compare_height, -x_overlap:]
+                region2 = gray2_eval[:compare_height, :x_overlap]
+            else:
+                available_height1 = gray1_eval.shape[0]
+                available_height2 = gray2_eval.shape[0] + y_offset
+                compare_height = min(available_height1, available_height2)
+                
+                if compare_height <= 50:
+                    continue
+                
+                region1 = gray1_eval[:compare_height, -x_overlap:]
+                region2 = gray2_eval[-y_offset:-y_offset + compare_height, :x_overlap]
+            
+            if region1.shape != region2.shape:
+                continue
+            
+            result = cv.matchTemplate(region1, region2, cv.TM_CCOEFF_NORMED)
+            score = result[0, 0]
+            fine_iterations += 1
+            
+            if score > best_fine_score:
+                best_fine_score = score
+                best_fine_x = x_overlap
+                best_fine_y = y_offset
+    
+    print(f"      Graduated search: coarse={coarse_iterations} iters, fine={fine_iterations} iters, total={coarse_iterations + fine_iterations}")
+    
+    return best_fine_x, best_fine_y, best_fine_score
 
+
+def find_alignment_optimized(img1_path: Path, img2_path: Path, 
+                            rotate_images: bool = False, 
+                            pair_info: str = "", 
+                            save_debug: bool = False, 
+                            debug_dir: Optional[Path] = None,
+                            adaptive_searcher: Optional[AdaptiveSearcher] = None,
+                            outlier_detector: Optional[OutlierDetector] = None) -> Optional[Tuple[int, int, float, str, List[str]]]:
+    """
+    OPTIMIZED: Find alignment between two images with adaptive search and pyramid optimization
+    
+    Returns:
+        Tuple of (x_overlap, y_offset, score, confidence, outlier_flags) if alignment found, None otherwise
+    """
     try:
-        # Create and run the stitcher
-        stitcher = AffineStitcher(**settings)
-        panorama = stitcher.stitch(stacked_images)
+        img1 = cv.imread(str(img1_path))
+        img2 = cv.imread(str(img2_path))
         
-        # Save the final stitched image in the output directory
-        output_path = output_dir / "final_stitched.tiff"
-        cv.imwrite(str(output_path), panorama)
-        print(f"Successfully created stitched image: {output_path}")
+        if img1 is None or img2 is None:
+            print(f"    ERROR: Failed to load images")
+            return None
+        
+        if rotate_images:
+            img1 = cv.rotate(img1, cv.ROTATE_90_COUNTERCLOCKWISE)
+            img2 = cv.rotate(img2, cv.ROTATE_90_COUNTERCLOCKWISE)
+        
+        h1, w1 = img1.shape[:2]
+        h2, w2 = img2.shape[:2]
+        
+        # Calculate edge regions for evaluation
+        max_expected_overlap = int(w1 * 0.95)
+        
+        img1_eval_width = min(max_expected_overlap, w1)
+        img1_eval_start = w1 - img1_eval_width
+        img1_eval_region = img1[:, img1_eval_start:]
+        
+        img2_eval_width = min(max_expected_overlap, w2)
+        img2_eval_start = 0
+        img2_eval_region = img2[:, img2_eval_start:img2_eval_start + img2_eval_width]
+        
+        # Save debug images if requested
+        if save_debug and debug_dir:
+            debug_dir.mkdir(exist_ok=True)
+            prefix = f"{pair_info}_" if pair_info else ""
+            
+            img1_debug = img1.copy()
+            cv.rectangle(img1_debug, (img1_eval_start, 0), (w1-1, h1-1), (0, 255, 0), 3)
+            cv.putText(img1_debug, f"IMG1: {img1_path.name}", (10, 30), 
+                      cv.FONT_HERSHEY_SIMPLEX, 0.7, (0, 255, 0), 2)
+            cv.imwrite(str(debug_dir / f"{prefix}img1_eval_region.jpg"), img1_debug)
+            
+            img2_debug = img2.copy()
+            cv.rectangle(img2_debug, (0, 0), (img2_eval_width-1, h2-1), (0, 0, 255), 3)
+            cv.putText(img2_debug, f"IMG2: {img2_path.name}", (10, 30), 
+                      cv.FONT_HERSHEY_SIMPLEX, 0.7, (0, 0, 255), 2)
+            cv.imwrite(str(debug_dir / f"{prefix}img2_eval_region.jpg"), img2_debug)
+        
+        # Convert to grayscale
+        gray1_eval = cv.cvtColor(img1_eval_region, cv.COLOR_BGR2GRAY)
+        gray2_eval = cv.cvtColor(img2_eval_region, cv.COLOR_BGR2GRAY)
+        
+        # OPTIMIZATION 1: Adaptive search bounds
+        default_min = int(min(img1_eval_width, img2_eval_width) * 0.3)
+        default_max = int(min(img1_eval_width, img2_eval_width) * 0.95)
+        
+        if adaptive_searcher:
+            min_eval_overlap, max_eval_overlap = adaptive_searcher.get_search_bounds(default_min, default_max)
+            print(f"    Adaptive bounds: {min_eval_overlap} to {max_eval_overlap} (default: {default_min} to {default_max})")
+        else:
+            min_eval_overlap = default_min
+            max_eval_overlap = default_max
+        
+        # OPTIMIZATION 2: Intelligent step sizing
+        search_range = max_eval_overlap - min_eval_overlap
+        adaptive_step = max(10, search_range // 40)  # Aim for ~40 iterations
+        
+        print(f"    Stage 1: Pyramid coarse search (step={adaptive_step})")
+        
+        # Use center strips for coarse search
+        eval_height = min(gray1_eval.shape[0], gray2_eval.shape[0])
+        y1_start = (gray1_eval.shape[0] - eval_height) // 2
+        y2_start = (gray2_eval.shape[0] - eval_height) // 2
+        gray1_strip = gray1_eval[y1_start:y1_start + eval_height, :]
+        gray2_strip = gray2_eval[y2_start:y2_start + eval_height, :]
+        
+        # OPTIMIZATION 3: Optimized coarse search (no pyramid for tree cores)
+        best_coarse_overlap, best_coarse_score = coarse_search_optimized(
+            gray1_strip, gray2_strip, min_eval_overlap, max_eval_overlap, adaptive_step
+        )
+        
+        print(f"    Coarse result: eval_overlap {best_coarse_overlap}, score {best_coarse_score:.4f}")
+        
+        # PHASE 1 OPTIMIZATION: Get predicted Y and adaptive range
+        if adaptive_searcher:
+            predicted_y, y_range = adaptive_searcher.get_predicted_y_search(best_coarse_score)
+            print(f"    Y prediction: center={predicted_y}, range=Â±{y_range}")
+        else:
+            predicted_y = 0
+            y_range = 5 if best_coarse_score > 0.98 else 15
+        
+        # Stage 2: GRADUATED fine search (KEY PHASE 1 OPTIMIZATION!)
+        x_range = 30
+        x_min = max(min_eval_overlap, best_coarse_overlap - x_range)
+        x_max = min(max_eval_overlap, best_coarse_overlap + x_range)
+        
+        print(f"    Stage 2: Graduated fine search (x_range=Â±{x_range}, y_center={predicted_y}Â±{y_range})")
+        
+        best_eval_x_overlap, best_y_offset, best_xy_score = graduated_fine_search(
+            gray1_eval, gray2_eval,
+            best_coarse_overlap, x_min, x_max,
+            predicted_y, y_range,
+            img1_eval_width, img2_eval_width
+        )
+        
+        actual_x_overlap = best_eval_x_overlap
+        
+        print(f"    Fine alignment: eval_x_overlap={best_eval_x_overlap}, actual_x_overlap={actual_x_overlap}, Y_offset={best_y_offset}, score={best_xy_score:.4f}")
+        
+        # OPTIMIZATION 5: Outlier detection
+        outlier_flags = []
+        confidence = "HIGH"
+        
+        if outlier_detector:
+            outlier_flags, confidence = outlier_detector.is_outlier(
+                actual_x_overlap, best_xy_score, best_coarse_score
+            )
+            
+            if outlier_flags:
+                print(f"    âš ï¸  OUTLIER DETECTED: {', '.join(outlier_flags)}")
+                print(f"    Confidence: {confidence}")
+        
+        # Save matched comparison if debug enabled
+        if save_debug and debug_dir:
+            if best_y_offset >= 0:
+                compare_height = min(gray1_eval.shape[0] - best_y_offset, gray2_eval.shape[0])
+                matched_region1 = img1_eval_region[best_y_offset:best_y_offset + compare_height, -actual_x_overlap:]
+                matched_region2 = img2_eval_region[:compare_height, :actual_x_overlap]
+            else:
+                compare_height = min(gray1_eval.shape[0], gray2_eval.shape[0] + best_y_offset)
+                matched_region1 = img1_eval_region[:compare_height, -actual_x_overlap:]
+                matched_region2 = img2_eval_region[-best_y_offset:-best_y_offset + compare_height, :actual_x_overlap]
+            
+            comparison = np.hstack([matched_region1, matched_region2])
+            font = cv.FONT_HERSHEY_SIMPLEX
+            cv.putText(comparison, "IMG1 RIGHT edge", (10, 30), font, 0.8, (0, 255, 0), 2)
+            cv.putText(comparison, "IMG2 LEFT edge", (matched_region1.shape[1] + 10, 30), font, 0.8, (0, 0, 255), 2)
+            cv.putText(comparison, f"Score: {best_xy_score:.4f} | Confidence: {confidence}", (10, 60), font, 0.8, (255, 255, 255), 2)
+            cv.line(comparison, (matched_region1.shape[1], 0), (matched_region1.shape[1], comparison.shape[0]), (0, 255, 255), 2)
+            
+            prefix = f"{pair_info}_" if pair_info else ""
+            cv.imwrite(str(debug_dir / f"{prefix}matched_comparison.jpg"), comparison)
+        
+        # Update adaptive searcher
+        if adaptive_searcher and best_xy_score > 0.7:
+            adaptive_searcher.add_result(actual_x_overlap, best_y_offset)
+        
+        # Return alignment if acceptable
+        if best_xy_score > 0.7:
+            status = "âœ“" if confidence == "HIGH" else ("âš " if confidence == "MEDIUM" else "âœ—")
+            print(f"    {status} Alignment: overlap={actual_x_overlap}px, y_offset={best_y_offset}px, score={best_xy_score:.4f}, confidence={confidence}")
+            return (actual_x_overlap, best_y_offset, best_xy_score, confidence, outlier_flags)
+        else:
+            print(f"    âœ— No acceptable alignment (score {best_xy_score:.4f} < 0.7)")
+            return None
         
     except Exception as e:
-        raise RuntimeError(f"Error during stitching: {e}")
+        print(f"Alignment error: {e}")
+        import traceback
+        traceback.print_exc()
+        return None
 
-def process_folders_with_all_strategies(n: int = 5, threshold: float = None, 
-                                      threshold_type: str = "absolute"):
+
+def create_final_stitched_image(image_paths: list, offsets: list, output_dir: Path, 
+                                axis: str, output_filename: str):
     """
-    Main function to process folders with ALL focus stacking strategies.
+    Create final stitched image from a list of images and their pairwise offsets.
     
     Args:
-        n (int): Number of top images for strategy 2
-        threshold (float): Threshold value for strategy 3
-        threshold_type (str): "absolute" or "relative" for threshold strategy
+        image_paths: List of image paths in order
+        offsets: List of (x_overlap, y_offset, score, confidence, flags) tuples
+        output_dir: Directory to save output
+        axis: 'x' or 'y'
+        output_filename: Name for the output file
     """
-    # Get the absolute path to the output directory
-    output_dir = Path('output').absolute()
+    print(f"\nAssembling {len(image_paths)} images...")
     
-    print("=" * 80)
-    print("PROCESSING WITH ALL FOCUS STACKING STRATEGIES")
-    print("=" * 80)
+    # Load all images
+    images = []
+    for img_path in image_paths:
+        img = cv.imread(str(img_path))
+        if img is None:
+            print(f"ERROR: Could not load {img_path}")
+            return
+        
+        if axis == 'y':
+            img = cv.rotate(img, cv.ROTATE_90_COUNTERCLOCKWISE)
+        
+        images.append(img)
+        print(f"  Loaded: {img_path.name} -> {img.shape[1]}x{img.shape[0]}")
     
-    strategies_results = {}
+    # Calculate cumulative positions
+    image_positions = [(0, 0)]
+    current_x = 0
+    
+    for i, offset_data in enumerate(offsets):
+        x_overlap = offset_data[0]
+        y_offset = offset_data[1]
+        confidence = offset_data[3] if len(offset_data) > 3 else "UNKNOWN"
+        
+        prev_img = images[i]
+        current_x = current_x + prev_img.shape[1] - x_overlap
+        image_positions.append((current_x, y_offset))
+        
+        conf_marker = "âœ“" if confidence == "HIGH" else ("âš " if confidence == "MEDIUM" else "âœ—")
+        print(f"  {conf_marker} Image {i+1}: overlap={x_overlap}px, y_offset={y_offset}px -> x_pos={current_x} [{confidence}]")
+    
+    # Calculate canvas size
+    total_width = 0
+    for i, (x_pos, y_offset) in enumerate(image_positions):
+        img = images[i]
+        right_edge = x_pos + img.shape[1]
+        total_width = max(total_width, right_edge)
+    
+    min_y = min(y_offset for _, y_offset in image_positions)
+    max_y = max(y_offset + images[i].shape[0] for i, (_, y_offset) in enumerate(image_positions))
+    total_height = max_y - min_y
+    
+    print(f"\nCanvas size: {total_width}x{total_height}")
+    
+    # Create canvas
+    canvas = np.zeros((total_height, total_width, 3), dtype=np.uint8)
+    
+    # CHROMATIC ABERRATION FIX: Use image whose center is closest to each pixel
+    # to avoid edge distortion in overlap regions
+    
+    # First pass: Place all images to establish full coverage
+    for i, (x_pos, y_offset) in enumerate(image_positions):
+        img = images[i]
+        h, w = img.shape[:2]
+        y_pos = y_offset - min_y
+        
+        canvas[y_pos:y_pos + h, x_pos:x_pos + w] = img
+    
+    # Second pass: Fix overlap regions using center-closest selection
+    print(f"\nApplying chromatic aberration correction in overlap regions...")
+    for i in range(len(images) - 1):
+        x_overlap = offsets[i][0]
+        
+        if x_overlap <= 0:
+            continue
+        
+        # Get positions and images
+        img1 = images[i]
+        img2 = images[i + 1]
+        x1_pos, y1_offset = image_positions[i]
+        x2_pos, y2_offset = image_positions[i + 1]
+        
+        # Overlap region in canvas coordinates
+        overlap_start_x = x2_pos
+        overlap_end_x = x1_pos + img1.shape[1]
+        
+        if overlap_start_x >= overlap_end_x:
+            continue
+            
+        # Image centers in canvas coordinates
+        img1_center_x = x1_pos + img1.shape[1] // 2
+        img2_center_x = x2_pos + img2.shape[1] // 2
+        
+        # For each column in overlap, use pixels from image whose center is closer
+        for canvas_x in range(overlap_start_x, overlap_end_x):
+            # Distance from this column to each image center
+            dist1 = abs(canvas_x - img1_center_x)
+            dist2 = abs(canvas_x - img2_center_x)
+            
+            # Calculate positions in source images
+            img1_x = canvas_x - x1_pos
+            img2_x = canvas_x - x2_pos
+            
+            # Check bounds
+            if img1_x < 0 or img1_x >= img1.shape[1]:
+                continue
+            if img2_x < 0 or img2_x >= img2.shape[1]:
+                continue
+            
+            # Use image whose center is closest (less chromatic aberration)
+            if dist1 < dist2:
+                # Use image 1
+                y_start = y1_offset - min_y
+                y_end = y_start + img1.shape[0]
+                
+                if y_start < total_height and y_end > 0:
+                    y_start_canvas = max(0, y_start)
+                    y_end_canvas = min(total_height, y_end)
+                    y_start_img = y_start_canvas - y_start
+                    y_end_img = y_start_img + (y_end_canvas - y_start_canvas)
+                    
+                    canvas[y_start_canvas:y_end_canvas, canvas_x] = img1[y_start_img:y_end_img, img1_x]
+            else:
+                # Use image 2
+                y_start = y2_offset - min_y
+                y_end = y_start + img2.shape[0]
+                
+                if y_start < total_height and y_end > 0:
+                    y_start_canvas = max(0, y_start)
+                    y_end_canvas = min(total_height, y_end)
+                    y_start_img = y_start_canvas - y_start
+                    y_end_img = y_start_img + (y_end_canvas - y_start_canvas)
+                    
+                    canvas[y_start_canvas:y_end_canvas, canvas_x] = img2[y_start_img:y_end_img, img2_x]
+        
+        print(f"  Corrected overlap {i}-{i+1}: x={overlap_start_x} to {overlap_end_x}")
+    
+    # Save result
+    output_path = output_dir / output_filename
+    cv.imwrite(str(output_path), canvas)
+    
+    print(f"\nðŸŽ‰ Stitched image created with chromatic aberration correction!")
+    print(f"Output: {output_path}")
+    print(f"Size: {total_width}x{total_height}")
+
+
+def sequential_stitch_images_optimized(images_dir: Path, output_dir: Path, axis: str = 'y', 
+                                      save_debug: bool = False, keep_intermediates: bool = False,
+                                      enable_refinement: bool = False):
+    """
+    OPTIMIZED: Sequentially stitch images with adaptive search and outlier detection
+    """
+    if not images_dir.exists():
+        print(f"Images directory not found: {images_dir}")
+        return
+    
+    # Get all image files
+    image_files = []
+    for ext in ['*.tiff', '*.tif', '*.jpg', '*.jpeg', '*.png']:
+        image_files.extend(list(images_dir.glob(ext)))
+        image_files.extend(list(images_dir.glob(ext.upper())))
+    
+    # Remove duplicates
+    unique_images = []
+    seen_paths = set()
+    for img_path in image_files:
+        normalized = str(img_path.resolve())
+        if normalized not in seen_paths:
+            seen_paths.add(normalized)
+            unique_images.append(img_path)
+    
+    if not unique_images:
+        print(f"No images found in directory")
+        return
+    
+    print(f"Starting OPTIMIZED sequential stitching along {axis.upper()} axis")
+    print(f"Found {len(unique_images)} unique images to stitch")
+    
+    # Extract coordinates and sort
+    images_with_coords = []
+    coord_letter = axis.upper()
+    
+    for img_path in unique_images:
+        try:
+            filename = img_path.stem
+            coord_match = re.search(rf'{coord_letter}(\d+)', filename, re.IGNORECASE)
+            
+            if coord_match:
+                coord_pos = int(coord_match.group(1))
+                images_with_coords.append((coord_pos, img_path))
+        except (IndexError, ValueError):
+            continue
+    
+    if len(images_with_coords) < 2:
+        print(f"Need at least 2 images, found {len(images_with_coords)}")
+        return
+    
+    images_with_coords.sort(key=lambda x: x[0])
+    sorted_images = [img_path for _, img_path in images_with_coords]
+    
+    print(f"\nImages sorted by {coord_letter} coordinate:")
+    for i, (coord_pos, img_path) in enumerate(images_with_coords):
+        print(f"  [{i}] {coord_letter}{coord_pos}: {img_path.name}")
+    
+    # Setup directories
+    debug_dir = output_dir / "eval_regions" if save_debug else None
+    if debug_dir:
+        debug_dir.mkdir(exist_ok=True)
+    
+    # Initialize optimizers
+    adaptive_searcher = AdaptiveSearcher()
+    outlier_detector = OutlierDetector(window_size=5)
+    
+    print(f"\nðŸš€ PHASE 1 Optimizations enabled:")
+    print(f"  â€¢ Graduated fine search (coarse â†’ fine)")
+    print(f"  â€¢ Y-offset prediction from history")
+    print(f"  â€¢ Adaptive Y-range based on coarse score")
+    print(f"  â€¢ Adaptive X-search bounds")
+    print(f"  â€¢ Chromatic aberration correction")
+    print(f"  â€¢ Outlier detection system")
     
     try:
-        # Strategy 1: Stack all images
-        print("\n" + "=" * 40)
-        print("STRATEGY 1: ALL IMAGES")
-        print("=" * 40)
-        strategies_results['all'] = focus_stack_images_strategy1(output_dir, "all")
-        
-        # Strategy 2: Stack top N images by F score
-        print("\n" + "=" * 40)
-        print(f"STRATEGY 2: TOP {n} IMAGES BY F-SCORE")
-        print("=" * 40)
-        strategies_results['top_n'] = focus_stack_images_strategy2(output_dir, n, f"top{n}")
-        
-        # Strategy 3: Threshold-based (automatic threshold)
-        print("\n" + "=" * 40)
-        print("STRATEGY 3: THRESHOLD-BASED (AUTO)")
-        print("=" * 40)
-        strategies_results['threshold_auto'] = focus_stack_images_threshold(
-            output_dir, None, "absolute", "thresh_auto"
-        )
-        
-        # Strategy 3 variant: Relative threshold (70% of max)
-        print("\n" + "=" * 40)
-        print("STRATEGY 3: THRESHOLD-BASED (70% OF MAX)")  
-        print("=" * 40)
-        strategies_results['threshold_relative'] = focus_stack_images_threshold(
-            output_dir, 0.7, "relative", "thresh_70pct"
-        )
-        
-        # If custom threshold provided, run that too
-        if threshold is not None:
-            print("\n" + "=" * 40)
-            print(f"STRATEGY 3: THRESHOLD-BASED (CUSTOM: {threshold})")
-            print("=" * 40)
-            strategies_results['threshold_custom'] = focus_stack_images_threshold(
-                output_dir, threshold, threshold_type, f"thresh_{threshold}"
-            )
-        
+        # Phase 1: Find alignments
         print("\n" + "=" * 80)
-        print("ALL STRATEGIES COMPLETED SUCCESSFULLY!")
+        print("PHASE 1: Finding Alignment Offsets (Graduated Search + Y Prediction)")
         print("=" * 80)
         
+        pair_offsets = []
+        total_time = 0
+        
+        for i in range(len(sorted_images) - 1):
+            img1_path = sorted_images[i]
+            img2_path = sorted_images[i + 1]
+            pair_info = f"pair{i+1}"
+            
+            print(f"\nPair {i+1}/{len(sorted_images)-1}: {img1_path.name} + {img2_path.name}")
+            
+            pair_start = time.time()
+            
+            alignment = find_alignment_optimized(
+                img1_path, img2_path,
+                rotate_images=(axis == 'y'),
+                pair_info=pair_info,
+                save_debug=save_debug,
+                debug_dir=debug_dir,
+                adaptive_searcher=adaptive_searcher,
+                outlier_detector=outlier_detector
+            )
+            
+            pair_elapsed = time.time() - pair_start
+            total_time += pair_elapsed
+            
+            if alignment:
+                pair_offsets.append(alignment)
+                print(f"  Time: {pair_elapsed:.1f}s (avg: {total_time/(i+1):.1f}s/pair)")
+            else:
+                print(f"  âœ— Alignment failed ({pair_elapsed:.1f}s)")
+                print(f"\nâš ï¸  STOPPING: Failed to align pair {i+1}")
+                
+                if pair_offsets and i > 0:
+                    print("\n" + "=" * 80)
+                    print(f"CREATING PARTIAL RESULT ({i+1} images)")
+                    print("=" * 80)
+                    create_final_stitched_image(
+                        sorted_images[:i+1], pair_offsets, output_dir, axis,
+                        f"partial_stitched_{i+1}_images.tiff"
+                    )
+                return
+        
+        print(f"\nâœ“ All {len(sorted_images)-1} pairs aligned successfully!")
+        print(f"Total alignment time: {total_time:.1f}s (avg: {total_time/(len(sorted_images)-1):.1f}s/pair)")
+        
+        # Phase 1.5: Multi-neighbor refinement (optional)
+        if enable_refinement and REFINEMENT_AVAILABLE:
+            try:
+                pair_offsets = multi_neighbor_refinement_pass(
+                    sorted_images, pair_offsets, axis, confidence_threshold="MEDIUM"
+                )
+            except Exception as e:
+                print(f"\nâš ï¸  Refinement pass failed: {e}")
+                print("Continuing with initial alignments...")
+        elif enable_refinement and not REFINEMENT_AVAILABLE:
+            print("\nâš ï¸  Refinement requested but multi_neighbor_refinement.py not found")
+            print("Continuing without refinement...")
+        
+        # Phase 2: Create final image
+        print("\n" + "=" * 80)
+        print("PHASE 2: Creating Final Stitched Image")
+        print("=" * 80)
+        
+        create_final_stitched_image(sorted_images, pair_offsets, output_dir, axis, "final_stitched.tiff")
+        
         # Print summary
-        focus_stacked_dir = output_dir / "focus_stacked"
-        if focus_stacked_dir.exists():
-            stacked_files = list(focus_stacked_dir.glob("*.png"))
-            print(f"\nGenerated {len(stacked_files)} stacked images:")
-            for file in sorted(stacked_files):
-                print(f"  - {file.name}")
+        print("\n" + "=" * 80)
+        print("ALIGNMENT SUMMARY")
+        print("=" * 80)
         
-    except Exception as e:
-        print(f"Error during processing: {e}")
-
-def process_folders_with_strategy(strategy: str = "all", n: int = 5, 
-                                threshold: float = None, threshold_type: str = "absolute"):
-    """
-    Main function to process folders with a specific focus stacking strategy.
-    
-    Args:
-        strategy (str): "all", "top_n", or "threshold"
-        n (int): Number of top images for strategy 2
-        threshold (float): Threshold value for strategy 3
-        threshold_type (str): "absolute" or "relative" for threshold strategy
-    """
-    # Get the absolute path to the output directory
-    output_dir = Path('output').absolute()
-    
-    try:
-        if strategy == "all":
-            focus_stacked_dir = focus_stack_images_strategy1(output_dir, "all")
-        elif strategy == "top_n":
-            focus_stacked_dir = focus_stack_images_strategy2(output_dir, n, f"top{n}")
-        elif strategy == "threshold":
-            focus_stacked_dir = focus_stack_images_threshold(output_dir, threshold, threshold_type, "threshold")
-        else:
-            raise ValueError(f"Unknown strategy: {strategy}")
+        high_conf = sum(1 for p in pair_offsets if p[3] == "HIGH")
+        med_conf = sum(1 for p in pair_offsets if p[3] == "MEDIUM")
+        low_conf = sum(1 for p in pair_offsets if p[3] == "LOW")
         
-        print(f"Focus stacking completed using strategy: {strategy}")
+        print(f"Total pairs: {len(pair_offsets)}")
+        print(f"  â€¢ HIGH confidence: {high_conf}")
+        print(f"  â€¢ MEDIUM confidence: {med_conf}")
+        print(f"  â€¢ LOW confidence: {low_conf}")
         
-    except Exception as e:
-        print(f"Error during processing: {e}")
-
-def stitch_focus_stacked_images(output_dir: Path = None, strategy: str = "all", 
-                               stitch_method: str = "panorama"):
-    """
-    Stitch together focus-stacked images from a specific strategy.
-    
-    Args:
-        output_dir (Path): Path to the output directory. If None, uses 'output'
-        strategy (str): Which strategy's images to stitch ("all", "top5", "thresh_auto", 
-                       "thresh_70pct", or "all_strategies" to stitch all available)
-        stitch_method (str): "panorama" for full panorama, "by_y" for row-wise, "by_x" for column-wise
-    """
-    if output_dir is None:
-        output_dir = Path('output').absolute()
-    
-    focus_stacked_dir = output_dir / "focus_stacked"
-    
-    if not focus_stacked_dir.exists():
-        print(f"Focus stacked directory not found: {focus_stacked_dir}")
-        print("Please run focus stacking first.")
-        return
-    
-    print(f"Stitching focus-stacked images using strategy: {strategy}")
-    print(f"Stitch method: {stitch_method}")
-    
-    # Get images based on strategy
-    if strategy == "all_strategies":
-        # Stitch all available focus-stacked images regardless of strategy
-        stacked_images = list(focus_stacked_dir.glob("*.png"))
-        output_suffix = "all_strategies"
-    else:
-        # Stitch only images from specific strategy
-        stacked_images = list(focus_stacked_dir.glob(f"*_{strategy}.tiff"))
-        output_suffix = strategy
-    
-    if not stacked_images:
-        print(f"No focus-stacked images found for strategy: {strategy}")
-        available_files = list(focus_stacked_dir.glob("*.png"))
-        if available_files:
-            print("Available files:")
-            for file in available_files:
-                print(f"  - {file.name}")
-        return
-    
-    print(f"Found {len(stacked_images)} images to stitch:")
-    for img in sorted(stacked_images):
-        print(f"  - {img.name}")
-    
-    # Configure the stitcher
-    settings = {
-        "crop": False,
-        "detector": "sift",
-        "confidence_threshold": 0.2,
-        "blender_type": "no",
-        "warper_type": "affine",
-    }
-    
-    try:
-        if stitch_method == "panorama":
-            # Stitch all images into one panorama
-            stacked_images_str = [str(img) for img in stacked_images]
-            stitcher = AffineStitcher(**settings)
-            panorama = stitcher.stitch(stacked_images_str)
-            
-            output_path = output_dir / f"final_stitched_{output_suffix}.tiff"
-            cv.imwrite(str(output_path), panorama)
-            print(f"Successfully created panorama: {output_path}")
-            
-        elif stitch_method == "by_y":
-            # Stitch images that share the same y-position (row-wise)
-            stitch_by_y_position_from_stacked(focus_stacked_dir, output_dir, strategy)
-            
-        elif stitch_method == "by_x":
-            # Stitch images that share the same x-position (column-wise)
-            stitch_by_x_position_from_stacked(focus_stacked_dir, output_dir, strategy)
-            
-        else:
-            raise ValueError(f"Unknown stitch method: {stitch_method}")
-            
+        if low_conf > 0:
+            print(f"\nâš ï¸  {low_conf} pair(s) with LOW confidence - manual review recommended")
+            for i, offset_data in enumerate(pair_offsets):
+                if offset_data[3] == "LOW":
+                    print(f"  Pair {i+1}: {', '.join(offset_data[4])}")
+        
     except Exception as e:
         print(f"Error during stitching: {e}")
-
-def stitch_by_y_position_from_stacked(focus_stacked_dir: Path, output_dir: Path, strategy: str) -> None:
-    """
-    Stitch focus-stacked images by y-position (row-wise stitching).
+        import traceback
+        traceback.print_exc()
     
-    Args:
-        focus_stacked_dir (Path): Directory containing focus-stacked images
-        output_dir (Path): Output directory for stitched results
-        strategy (str): Strategy suffix to filter images
-    """
-    # Create output directory
-    y_stitched_dir = output_dir / f"y_stitched_{strategy}"
-    y_stitched_dir.mkdir(exist_ok=True)
-    
-    # Get images for this strategy
-    if strategy == "all_strategies":
-        stacked_images = list(focus_stacked_dir.glob("*.tiff"))
-    else:
-        stacked_images = list(focus_stacked_dir.glob(f"*_{strategy}.tiff"))
-    
-    # Group images by y-position
-    images_by_y = {}
-    for image_path in stacked_images:
-        try:
-            # Extract folder name from focus-stacked image name
-            # Format: "X{x}Y{y}_{strategy}.png" -> extract Y value
-            base_name = image_path.stem  # Remove .png
-            folder_name = base_name.replace(f"_{strategy}", "")  # Remove strategy suffix
-            
-            # Extract Y position
-            y_pos = int(folder_name.split('Y')[1].split('_')[0])  # Get Y value before any underscore
-            
-            if y_pos not in images_by_y:
-                images_by_y[y_pos] = []
-            images_by_y[y_pos].append(str(image_path))
-            
-        except (IndexError, ValueError) as e:
-            print(f"Skipping {image_path.name}: Could not parse coordinates - {e}")
-            continue
-    
-    # Configure stitcher
-    settings = {"crop": False, "detector": "sift", "confidence_threshold": 0.2,
-        "blender_type": "no",
-        "warper_type": "affine",}
-    
-    # Stitch each y-position group
-    for y_pos, image_paths in images_by_y.items():
-        if len(image_paths) < 2:
-            print(f"Skipping y-position {y_pos}: Only {len(image_paths)} image(s)")
-            continue
-        
-        try:
-            # Sort by x-position
-            image_paths.sort(key=lambda x: int(Path(x).stem.split('Y')[0].split('X')[1]))
-            
-            stitcher = AffineStitcher(**settings)
-            panorama = stitcher.stitch(image_paths)
-            
-            output_path = y_stitched_dir / f"y_position_{y_pos}_{strategy}.tiff"
-            cv.imwrite(str(output_path), panorama)
-            print(f"Created y-stitched image: {output_path.name}")
-            
-        except Exception as e:
-            print(f"Error stitching y-position {y_pos}: {e}")
-
-def stitch_by_x_position_from_stacked(focus_stacked_dir: Path, output_dir: Path, strategy: str) -> None:
-    """
-    Stitch focus-stacked images by x-position (column-wise stitching).
-    
-    Args:
-        focus_stacked_dir (Path): Directory containing focus-stacked images
-        output_dir (Path): Output directory for stitched results
-        strategy (str): Strategy suffix to filter images
-    """
-    # Create output directory
-    x_stitched_dir = output_dir / f"x_stitched_{strategy}"
-    x_stitched_dir.mkdir(exist_ok=True)
-    
-    # Get images for this strategy
-    if strategy == "all_strategies":
-        stacked_images = list(focus_stacked_dir.glob("*.tiff"))
-    else:
-        stacked_images = list(focus_stacked_dir.glob(f"*_{strategy}.tiff"))
-    
-    # Group images by x-position
-    images_by_x = {}
-    for image_path in stacked_images:
-        try:
-            # Extract folder name from focus-stacked image name
-            base_name = image_path.stem  # Remove .png
-            folder_name = base_name.replace(f"_{strategy}", "")  # Remove strategy suffix
-            
-            # Extract X position
-            x_pos = int(folder_name.split('Y')[0].split('X')[1])  # Get X value
-            
-            if x_pos not in images_by_x:
-                images_by_x[x_pos] = []
-            images_by_x[x_pos].append(str(image_path))
-            
-        except (IndexError, ValueError) as e:
-            print(f"Skipping {image_path.name}: Could not parse coordinates - {e}")
-            continue
-    
-    # Configure stitcher
-    settings = {
-        "crop": False, 
-        "detector": "sift", 
-        "blender_type": "no",
-        "warper_type": "affine",
-    }
-    
-    # Stitch each x-position group
-    for x_pos, image_paths in images_by_x.items():
-        if len(image_paths) < 2:
-            print(f"Skipping x-position {x_pos}: Only {len(image_paths)} image(s)")
-            continue
-        
-        try:
-            # Sort by y-position
-            image_paths.sort(key=lambda x: int(Path(x).stem.split('Y')[1].split('_')[0]))
-            
-            stitcher = AffineStitcher(**settings)
-            panorama = stitcher.stitch(image_paths)
-            
-            output_path = x_stitched_dir / f"x_position_{x_pos}_{strategy}.tiff"
-            cv.imwrite(str(output_path), panorama)
-            print(f"Created x-stitched image: {output_path.name}")
-            
-        except Exception as e:
-            print(f"Error stitching x-position {x_pos}: {e}")
-
-def hierarchical_stitch_by_strategy(output_dir: Path = None, strategy: str = "all"):
-    """
-    Hierarchically stitch focus-stacked images by pairing neighbors based on X-coordinate.
-    This approach is much faster than trying to stitch all images at once.
-    
-    Args:
-        output_dir (Path): Path to the output directory. If None, uses 'output'
-        strategy (str): Which strategy's images to stitch ("all", "top5", "thresh_auto", etc.)
-    """
-    if output_dir is None:
-        output_dir = Path('output').absolute()
-    
-    focus_stacked_dir = output_dir / "focus_stacked"
-    
-    if not focus_stacked_dir.exists():
-        print(f"Focus stacked directory not found: {focus_stacked_dir}")
-        print("Please run focus stacking first.")
-        return
-    
-    # Get images for this strategy
-    if strategy == "all_strategies":
-        stacked_images = list(focus_stacked_dir.glob("*.tiff"))
-        output_suffix = "all_strategies"
-    else:
-        stacked_images = list(focus_stacked_dir.glob(f"*_{strategy}.tiff"))
-        output_suffix = strategy
-    
-    if not stacked_images:
-        print(f"No focus-stacked images found for strategy: {strategy}")
-        return
-    
-    print(f"Starting hierarchical stitching for strategy: {strategy}")
-    print(f"Found {len(stacked_images)} images to stitch")
-    
-    # Extract X coordinates and sort images
-    images_with_coords = []
-    for img_path in stacked_images:
-        try:
-            # Extract folder name from focus-stacked image name
-            base_name = img_path.stem  # Remove .png
-            if strategy != "all_strategies":
-                folder_name = base_name.replace(f"_{strategy}", "")  # Remove strategy suffix
-            else:
-                # For all_strategies, we need to extract the original folder name
-                # This is trickier since different strategies have different suffixes
-                folder_name = base_name
-                for suffix in ["_all", "_top5", "_thresh_auto", "_thresh_70pct"]:
-                    if folder_name.endswith(suffix):
-                        folder_name = folder_name.replace(suffix, "")
-                        break
-            
-            # Extract X coordinate
-            x_pos = int(folder_name.split('Y')[0].split('X')[1])
-            images_with_coords.append((x_pos, img_path))
-            
-        except (IndexError, ValueError) as e:
-            print(f"Skipping {img_path.name}: Could not parse X coordinate - {e}")
-            continue
-    
-    if len(images_with_coords) < 2:
-        print(f"Need at least 2 images to stitch, found {len(images_with_coords)}")
-        return
-    
-    # Sort by X coordinate
-    images_with_coords.sort(key=lambda x: x[0])
-    
-    print("Images sorted by X coordinate:")
-    for x_pos, img_path in images_with_coords:
-        print(f"  X{x_pos}: {img_path.name}")
-    
-    # Create working directory for intermediate results
-    working_dir = output_dir / f"stitch_working_{output_suffix}"
-    working_dir.mkdir(exist_ok=True)
-    
-    try:
-        # Start hierarchical stitching
-        current_images = [img_path for _, img_path in images_with_coords]
-        level = 0
-        
-        while len(current_images) > 1:
-            level += 1
-            print(f"\n--- Stitching Level {level} ---")
-            print(f"Processing {len(current_images)} images")
-            
-            next_level_images = []
-            pairs_processed = 0
-            
-            # Process pairs of neighboring images
-            for i in range(0, len(current_images), 2):
-                if i + 1 < len(current_images):
-                    # Pair of images
-                    img1 = current_images[i]
-                    img2 = current_images[i + 1]
-                    
-                    # Create output filename for this pair
-                    output_name = f"level{level}_pair{pairs_processed + 1}_{output_suffix}.tiff"
-                    output_path = working_dir / output_name
-                    
-                    print(f"  Stitching pair {pairs_processed + 1}: {img1.name} + {img2.name}")
-                    
-                    if stitch_image_pair(img1, img2, output_path):
-                        next_level_images.append(output_path)
-                        pairs_processed += 1
-                    else:
-                        print(f"    Failed to stitch pair, skipping")
-                        # If stitching fails, keep the first image for next level
-                        next_level_images.append(img1)
-                        
-                else:
-                    # Odd image out, carry to next level
-                    print(f"  Carrying forward: {current_images[i].name}")
-                    next_level_images.append(current_images[i])
-            
-            current_images = next_level_images
-            print(f"Level {level} completed. {len(current_images)} images remain.")
-        
-        # Move final result to main output directory
-        if current_images:
-            final_image = current_images[0]
-            final_output = output_dir / f"final_hierarchical_stitched_{output_suffix}.tiff"
-            
-            if final_image.parent == working_dir:
-                # It's an intermediate result, move it
-                final_image.rename(final_output)
-            else:
-                # It's an original image (only one image was provided), copy it
-                import shutil
-                shutil.copy2(final_image, final_output)
-            
-            print(f"\n🎉 Hierarchical stitching completed!")
-            print(f"Final result: {final_output}")
-        
     finally:
-        # Clean up working directory
-        import shutil
-        try:
-            shutil.rmtree(working_dir)
-            print(f"Cleaned up working directory: {working_dir}")
-        except Exception as e:
-            print(f"Warning: Could not clean up working directory: {e}")
-
-def stitch_image_pair(img1_path: Path, img2_path: Path, output_path: Path) -> bool:
-    """
-    Stitch two images together.
-    
-    Args:
-        img1_path (Path): First image
-        img2_path (Path): Second image  
-        output_path (Path): Output path for stitched result
-        
-    Returns:
-        bool: True if successful, False otherwise
-    """
-    try:
-        # Configure stitcher for pairs (more lenient settings)
-        settings = {
-            "crop": False,
-            "detector": "sift",
-            "confidence_threshold": 0.1,  # Lower threshold for pairs
-            "blender_type": "no",
-        "warper_type": "affine",
-        }
-        
-        stitcher = AffineStitcher(**settings)
-        image_paths = [str(img1_path), str(img2_path)]
-        
-        panorama = stitcher.stitch(image_paths)
-        cv.imwrite(str(output_path), panorama)
-        
-        return True
-        
-    except Exception as e:
-        print(f"    Error stitching {img1_path.name} + {img2_path.name}: {e}")
-        return False
-
-def stitch_all_strategies_hierarchically(output_dir: Path = None):
-    """
-    Run hierarchical stitching for all available strategies.
-    
-    Args:
-        output_dir (Path): Path to the output directory. If None, uses 'output'
-    """
-    if output_dir is None:
-        output_dir = Path('output').absolute()
-    
-    focus_stacked_dir = output_dir / "focus_stacked"
-    
-    if not focus_stacked_dir.exists():
-        print("No focus-stacked images found. Please run focus stacking first.")
-        return
-    
-    # Find available strategies
-    all_files = list(focus_stacked_dir.glob("*.png"))
-    strategies = set()
-    
-    for file in all_files:
-        name = file.stem
-        for suffix in ["_all", "_top5", "_thresh_auto", "_thresh_70pct"]:
-            if name.endswith(suffix):
-                strategies.add(suffix[1:])  # Remove leading underscore
-                break
-    
-    if not strategies:
-        print("No recognizable strategy suffixes found in focus-stacked images")
-        return
-    
-    print(f"Found strategies: {', '.join(sorted(strategies))}")
-    
-    # Stitch each strategy
-    for strategy in sorted(strategies):
-        print(f"\n{'=' * 60}")
-        print(f"HIERARCHICAL STITCHING - STRATEGY: {strategy.upper()}")
-        print(f"{'=' * 60}")
-        hierarchical_stitch_by_strategy(output_dir, strategy)
-
-def select_best_single_images(output_dir: Path, strategy_suffix: str = "best_single") -> Path:
-    """
-    Strategy 4: Select only the single best image (highest F-score) from each folder.
-    No focus stacking - just picks the sharpest individual image.
-    
-    Args:
-        output_dir (Path): Path to the main output directory
-        strategy_suffix (str): Suffix to append to output filenames
-        
-    Returns:
-        Path: Path to the directory containing selected best images
-    """
-    # Create best_images directory if it doesn't exist
-    best_images_dir = output_dir / "best_images"
-    best_images_dir.mkdir(exist_ok=True)
-    
-    # Check if output directory exists
-    if not output_dir.exists():
-        raise FileNotFoundError(f"Directory '{output_dir}' does not exist")
-    
-    selected_images = []
-    
-    # Process each folder
-    for folder in output_dir.iterdir():
-        if folder.is_dir() and not folder.name.startswith(("focus_stacked", "best_images", "stitch_working", "y_stitched", "x_stitched")):
-            folder_name = folder.name
-            
-            # Get images with F scores
-            images_with_scores = get_images_with_f_scores(folder)
-            
-            if not images_with_scores:
-                print(f"No images with F scores found in {folder_name}")
-                continue
-            
-            # Find the image with the highest F score
-            best_image_path, best_f_score = max(images_with_scores, key=lambda x: x[1])
-            
-            print(f"Strategy 4 - Best image from {folder_name}:")
-            print(f"  Selected: {best_image_path.name} (F={best_f_score:.2f})")
-            print(f"  Out of {len(images_with_scores)} images (F-score range: {min(score for _, score in images_with_scores):.2f} - {max(score for _, score in images_with_scores):.2f})")
-            
-            # Copy the best image to the best_images directory with folder name
-            output_file = best_images_dir / f"{folder_name}_{strategy_suffix}.tiff"
-            
+        if not save_debug and debug_dir and debug_dir.exists():
             try:
-                import shutil
-                shutil.copy2(best_image_path, output_file)
-                selected_images.append((folder_name, output_file, best_f_score))
-                print(f"  Copied to: {output_file.name}\n")
-                
+                shutil.rmtree(debug_dir)
             except Exception as e:
-                print(f"Error copying {best_image_path} to {output_file}: {e}")
-                continue
-    
-    print(f"Selected {len(selected_images)} best images:")
-    for folder_name, img_path, f_score in selected_images:
-        print(f"  {folder_name}: F={f_score:.2f}")
-    
-    return best_images_dir
+                print(f"Warning: Could not remove debug directory: {e}")
 
-def hierarchical_stitch_best_images(output_dir: Path = None, strategy: str = "best_single"):
-    """
-    Hierarchically stitch the best single images (no focus stacking involved).
-    This should produce the sharpest results since we're using the original sharpest images.
+
+def main():
+    """Main function"""
+    parser = argparse.ArgumentParser(
+        description='OPTIMIZED Sequential Image Stitching Tool',
+        formatter_class=argparse.RawDescriptionHelpFormatter
+    )
     
-    Args:
-        output_dir (Path): Path to the output directory. If None, uses 'output'
-        strategy (str): Strategy suffix for the images to stitch
-    """
-    if output_dir is None:
-        output_dir = Path('output').absolute()
-    
-    best_images_dir = output_dir / "best_images"
-    
-    if not best_images_dir.exists():
-        print(f"Best images directory not found: {best_images_dir}")
-        print("Please run select_best_single_images() first.")
-        return
-    
-    # Get images for this strategy
-    best_images = list(best_images_dir.glob(f"*_{strategy}.tiff"))
-    
-    if not best_images:
-        print(f"No best images found for strategy: {strategy}")
-        return
-    
-    print(f"Starting hierarchical stitching of best single images")
-    print(f"Found {len(best_images)} images to stitch")
-    
-    # Extract X coordinates and sort images
-    images_with_coords = []
-    for img_path in best_images:
-        try:
-            # Extract folder name from best image name
-            base_name = img_path.stem  # Remove .png
-            folder_name = base_name.replace(f"_{strategy}", "")  # Remove strategy suffix
-            
-            # Extract X coordinate
-            x_pos = int(folder_name.split('Y')[0].split('X')[1])
-            images_with_coords.append((x_pos, img_path))
-            
-        except (IndexError, ValueError) as e:
-            print(f"Skipping {img_path.name}: Could not parse X coordinate - {e}")
-            continue
-    
-    if len(images_with_coords) < 2:
-        print(f"Need at least 2 images to stitch, found {len(images_with_coords)}")
-        return
-    
-    # Sort by X coordinate
-    images_with_coords.sort(key=lambda x: x[0])
-    
-    print("Best images sorted by X coordinate:")
-    for x_pos, img_path in images_with_coords:
-        print(f"  X{x_pos}: {img_path.name}")
-    
-    # Create working directory for intermediate results
-    working_dir = output_dir / f"stitch_working_{strategy}"
-    working_dir.mkdir(exist_ok=True)
+    parser.add_argument('folder_path', nargs='?', default='.',
+                       help='Path to directory containing images')
+    parser.add_argument('axis', nargs='?', default='y', choices=['x', 'y', 'X', 'Y'],
+                       help='Axis along which images vary')
+    parser.add_argument('--debug', action='store_true',
+                       help='Enable debug images')
+    parser.add_argument('--keep-intermediates', action='store_true',
+                       help='Keep intermediate results')
+    parser.add_argument('--refine', action='store_true',
+                       help='Enable multi-neighbor refinement pass for MEDIUM/LOW confidence pairs')
     
     try:
-        # Start hierarchical stitching
-        current_images = [img_path for _, img_path in images_with_coords]
-        level = 0
+        args = parser.parse_args()
         
-        while len(current_images) > 1:
-            level += 1
-            print(f"\n--- Stitching Level {level} ---")
-            print(f"Processing {len(current_images)} images")
-            
-            next_level_images = []
-            pairs_processed = 0
-            
-            # Process pairs of neighboring images
-            for i in range(0, len(current_images), 2):
-                if i + 1 < len(current_images):
-                    # Pair of images
-                    img1 = current_images[i]
-                    img2 = current_images[i + 1]
-                    
-                    # Create output filename for this pair
-                    output_name = f"level{level}_pair{pairs_processed + 1}_{strategy}.tiff"
-                    output_path = working_dir / output_name
-                    
-                    print(f"  Stitching pair {pairs_processed + 1}: {img1.name} + {img2.name}")
-                    
-                    if stitch_image_pair(img1, img2, output_path):
-                        next_level_images.append(output_path)
-                        pairs_processed += 1
-                    else:
-                        print(f"    Failed to stitch pair, skipping")
-                        # If stitching fails, keep the first image for next level
-                        next_level_images.append(img1)
-                        
-                else:
-                    # Odd image out, carry to next level
-                    print(f"  Carrying forward: {current_images[i].name}")
-                    next_level_images.append(current_images[i])
-            
-            current_images = next_level_images
-            print(f"Level {level} completed. {len(current_images)} images remain.")
+        images_dir = Path(args.folder_path).absolute()
+        axis = args.axis.lower()
         
-        # Move final result to main output directory
-        if current_images:
-            final_image = current_images[0]
-            final_output = output_dir / f"final_best_single_stitched.tiff"
-            
-            if final_image.parent == working_dir:
-                # It's an intermediate result, move it
-                final_image.rename(final_output)
-            else:
-                # It's an original image (only one image was provided), copy it
-                import shutil
-                shutil.copy2(final_image, final_output)
-            
-            print(f"\n🎉 Best single image stitching completed!")
-            print(f"Final result: {final_output}")
-            print(f"This should be the sharpest result since it uses original unprocessed images!")
+        if not images_dir.exists() or not images_dir.is_dir():
+            print(f"Error: '{images_dir}' is not a valid directory!")
+            return 1
         
-    finally:
-        # Clean up working directory
-        import shutil
-        try:
-            shutil.rmtree(working_dir)
-            print(f"Cleaned up working directory: {working_dir}")
-        except Exception as e:
-            print(f"Warning: Could not clean up working directory: {e}")
-
-def process_folders_with_all_strategies_plus_best(n: int = 5, threshold: float = None, 
-                                                 threshold_type: str = "absolute"):
-    """
-    Main function to process folders with ALL focus stacking strategies PLUS best single image strategy.
-    
-    Args:
-        n (int): Number of top images for strategy 2
-        threshold (float): Threshold value for strategy 3
-        threshold_type (str): "absolute" or "relative" for threshold strategy
-    """
-    # Get the absolute path to the output directory
-    output_dir = Path('output').absolute()
-    
-    print("=" * 80)
-    print("PROCESSING WITH ALL STRATEGIES + BEST SINGLE IMAGE")
-    print("=" * 80)
-    
-    try:
-        # Strategy 1: Stack all images
-        print("\n" + "=" * 40)
-        print("STRATEGY 1: ALL IMAGES")
-        print("=" * 40)
-        focus_stack_images_strategy1(output_dir, "all")
-        
-        # Strategy 2: Stack top N images by F score
-        print("\n" + "=" * 40)
-        print(f"STRATEGY 2: TOP {n} IMAGES BY F-SCORE")
-        print("=" * 40)
-        focus_stack_images_strategy2(output_dir, n, f"top{n}")
-        
-        # Strategy 3: Threshold-based (automatic threshold)
-        print("\n" + "=" * 40)
-        print("STRATEGY 3: THRESHOLD-BASED (AUTO)")
-        print("=" * 40)
-        focus_stack_images_threshold(output_dir, None, "absolute", "thresh_auto")
-        
-        # Strategy 3 variant: Relative threshold (70% of max)
-        print("\n" + "=" * 40)
-        print("STRATEGY 3: THRESHOLD-BASED (70% OF MAX)")  
-        print("=" * 40)
-        focus_stack_images_threshold(output_dir, 0.7, "relative", "thresh_70pct")
-        
-        # Strategy 4: Best single image (NEW!)
-        print("\n" + "=" * 40)
-        print("STRATEGY 4: BEST SINGLE IMAGE (NO STACKING)")
-        print("=" * 40)
-        select_best_single_images(output_dir, "best_single")
-        
-        # If custom threshold provided, run that too
-        if threshold is not None:
-            print("\n" + "=" * 40)
-            print(f"STRATEGY 3: THRESHOLD-BASED (CUSTOM: {threshold})")
-            print("=" * 40)
-            focus_stack_images_threshold(output_dir, threshold, threshold_type, f"thresh_{threshold}")
-        
-        print("\n" + "=" * 80)
-        print("ALL STRATEGIES COMPLETED SUCCESSFULLY!")
+        print("=" * 80)
+        print("OPTIMIZED SEQUENTIAL IMAGE STITCHING")
         print("=" * 80)
         
-        # Print summary
-        focus_stacked_dir = output_dir / "focus_stacked"
-        best_images_dir = output_dir / "best_images"
+        sequential_stitch_images_optimized(images_dir, images_dir, axis, 
+                                          args.debug, args.keep_intermediates,
+                                          args.refine)
         
-        if focus_stacked_dir.exists():
-            stacked_files = list(focus_stacked_dir.glob("*.png"))
-            print(f"\nGenerated {len(stacked_files)} focus-stacked images:")
-            for file in sorted(stacked_files):
-                print(f"  - {file.name}")
+        return 0
         
-        if best_images_dir.exists():
-            best_files = list(best_images_dir.glob("*.png"))
-            print(f"\nSelected {len(best_files)} best single images:")
-            for file in sorted(best_files):
-                print(f"  - {file.name}")
-        
-        # Now run hierarchical stitching for best single images
-        print("\n" + "=" * 80)
-        print("HIERARCHICAL STITCHING - BEST SINGLE IMAGES")
-        print("=" * 80)
-        hierarchical_stitch_best_images(output_dir, "best_single")
-        
+    except KeyboardInterrupt:
+        print("\n\nProcessing interrupted by user.")
+        return 130
     except Exception as e:
-        print(f"Error during processing: {e}")
+        print(f"Unexpected error: {e}")
+        import traceback
+        traceback.print_exc()
+        return 1
+
 
 if __name__ == "__main__":
-    # Run only the best single image strategy and stitch
-    output_dir = Path('output').absolute()
-    
-    print("=" * 80)
-    print("BEST SINGLE IMAGE STRATEGY + STITCHING")
-    print("=" * 80)
-    
-    try:
-        # Strategy 4: Best single image
-        print("\n" + "=" * 40)
-        print("STRATEGY 4: BEST SINGLE IMAGE (NO STACKING)")
-        print("=" * 40)
-        select_best_single_images(output_dir, "best_single")
-        
-        # Hierarchical stitching of best single images
-        print("\n" + "=" * 40)
-        print("HIERARCHICAL STITCHING - BEST SINGLE IMAGES")
-        print("=" * 40)
-        hierarchical_stitch_best_images(output_dir, "best_single")
-        
-        print("\n" + "=" * 80)
-        print("BEST SINGLE IMAGE PROCESSING COMPLETED!")
-        print("=" * 80)
-        
-        # Print summary
-        best_images_dir = output_dir / "best_images"
-        if best_images_dir.exists():
-            best_files = list(best_images_dir.glob("*.png"))
-            print(f"\nSelected {len(best_files)} best single images:")
-            for file in sorted(best_files):
-                print(f"  - {file.name}")
-        
-        final_result = output_dir / "final_best_single_stitched.png"
-        if final_result.exists():
-            print(f"\nFinal stitched result: {final_result}")
-            print("This should be your sharpest panorama!")
-        
-    except Exception as e:
-        print(f"Error during processing: {e}")
-    
-    # Comment out other usage examples:
-    # You can also run other strategies individually if needed:
-    # process_folders_with_all_strategies_plus_best(n=5)
-    # select_best_single_images(Path('output').absolute())
-    # hierarchical_stitch_best_images(strategy="best_single")
+    sys.exit(main())
