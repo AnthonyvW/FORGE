@@ -35,12 +35,10 @@ from typing import Tuple, Optional, List
 import cv2 as cv
 import numpy as np
 
-# Import multi-neighbor refinement (if available)
-try:
-    from multi_neighbor_refinement import multi_neighbor_refinement_pass
-    REFINEMENT_AVAILABLE = True
-except ImportError:
-    REFINEMENT_AVAILABLE = False
+from debug_stitching_viz import create_debug_visualization
+
+from multi_neighbor_refinement import multi_neighbor_refinement_pass
+REFINEMENT_AVAILABLE = True
 
 
 class OutlierDetector:
@@ -685,6 +683,11 @@ def create_final_stitched_image(image_paths: list, offsets: list, output_dir: Pa
     print(f"\n   Stitched image created with chromatic aberration correction!")
     print(f"Output: {output_path}")
     print(f"Size: {total_width}x{total_height}")
+    create_debug_visualization(
+        canvas, image_paths, images, image_positions, offsets,
+        output_dir, output_filename, axis, min_y, 
+        total_width, total_height
+    )
 
 
 def sequential_stitch_images_optimized(images_dir: Path, output_dir: Path, axis: str = 'y', 
