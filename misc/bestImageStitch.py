@@ -9,6 +9,11 @@ KEY OPTIMIZATIONS IMPLEMENTED:
 5. Adaptive X-search bounds - narrows to ±100px after initial pairs
 6. Outlier detection - statistical analysis of alignments
 
+NEW FEATURES:
+- Three-level debug system (LOW, MEDIUM, HIGH)
+- Comprehensive timing for all operations
+- JSON export of alignment data for reproducibility
+
 EXPECTED PERFORMANCE:
 - Fast pairs (coarse > 0.98): ~10 seconds
 - Slow pairs (coarse < 0.98): ~8-12 seconds (vs 31s before!)
@@ -20,7 +25,12 @@ This version is optimized for tree core samples with low texture detail.
 No pyramid downsampling is used to preserve fine details.
 
 Usage:
-    python optimizedImageStitch.py [folder_path] [axis] [options]
+    python bestImageStitch_enhanced.py [folder_path] [axis] [options]
+    
+Debug Levels:
+    --debug-level low     Export JSON alignment data only
+    --debug-level medium  Export JSON + annotated final image (default)
+    --debug-level high    Export JSON + annotated image + eval regions
 """
 
 import os
@@ -29,8 +39,10 @@ import shutil
 import re
 import argparse
 import time
+import json
 from pathlib import Path
-from typing import Tuple, Optional, List
+from typing import Tuple, Optional, List, Dict, Any
+from datetime import datetime
 
 import cv2 as cv
 import numpy as np
@@ -39,6 +51,100 @@ from debug_stitching_viz import create_debug_visualization
 
 from multi_neighbor_refinement import multi_neighbor_refinement_pass
 REFINEMENT_AVAILABLE = True
+
+
+class Timer:
+    """Simple timer for tracking operation durations"""
+    
+    def __init__(self, name: str):
+        self.name = name
+        self.start_time = None
+        self.end_time = None
+        self.duration = None
+        
+    def __enter__(self):
+        self.start_time = time.time()
+        return self
+        
+    def __exit__(self, exc_type, exc_val, exc_tb):
+        self.end_time = time.time()
+        self.duration = self.end_time - self.start_time
+        print(f"  ⏱️  {self.name}: {self.duration:.2f}s")
+        return False
+        
+    def get_duration(self) -> float:
+        """Get duration - calculates on the fly if timer is still running"""
+        if self.duration is not None:
+            return self.duration
+        elif self.start_time is not None:
+            # Timer is still running, calculate current duration
+            return time.time() - self.start_time
+        return 0.0
+
+
+class TimingTracker:
+    """Tracks timing for all operations"""
+    
+    def __init__(self):
+        self.timings: Dict[str, List[float]] = {}
+        self.total_start = None
+        self.total_duration = None
+        
+    def start_total(self):
+        """Start tracking total time"""
+        self.total_start = time.time()
+        
+    def end_total(self):
+        """End tracking total time"""
+        if self.total_start:
+            self.total_duration = time.time() - self.total_start
+            
+    def add_timing(self, category: str, duration: float):
+        """Add a timing measurement"""
+        if category not in self.timings:
+            self.timings[category] = []
+        self.timings[category].append(duration)
+        
+    def get_summary(self) -> Dict[str, Any]:
+        """Get summary of all timings"""
+        summary = {
+            'total_duration': self.total_duration,
+            'categories': {}
+        }
+        
+        for category, durations in self.timings.items():
+            summary['categories'][category] = {
+                'count': len(durations),
+                'total': sum(durations),
+                'average': sum(durations) / len(durations) if durations else 0,
+                'min': min(durations) if durations else 0,
+                'max': max(durations) if durations else 0
+            }
+            
+        return summary
+        
+    def print_summary(self):
+        """Print timing summary"""
+        print("\n" + "=" * 80)
+        print("TIMING SUMMARY")
+        print("=" * 80)
+        
+        if self.total_duration:
+            print(f"Total execution time: {self.total_duration:.2f}s ({self.total_duration/60:.1f}m)")
+            print()
+        
+        for category, durations in sorted(self.timings.items()):
+            total = sum(durations)
+            avg = total / len(durations) if durations else 0
+            print(f"{category}:")
+            print(f"  Count: {len(durations)}")
+            print(f"  Total: {total:.2f}s")
+            print(f"  Average: {avg:.2f}s")
+            print(f"  Range: {min(durations):.2f}s - {max(durations):.2f}s")
+            if self.total_duration and total > 0:
+                pct = (total / self.total_duration) * 100
+                print(f"  Percentage of total: {pct:.1f}%")
+            print()
 
 
 class OutlierDetector:
@@ -356,184 +462,341 @@ def graduated_fine_search(gray1_eval: np.ndarray, gray2_eval: np.ndarray,
 def find_alignment_optimized(img1_path: Path, img2_path: Path, 
                             rotate_images: bool = False, 
                             pair_info: str = "", 
-                            save_debug: bool = False, 
+                            debug_level: str = "none", 
                             debug_dir: Optional[Path] = None,
                             adaptive_searcher: Optional[AdaptiveSearcher] = None,
                             outlier_detector: Optional[OutlierDetector] = None,
                             min_overlap_fraction: float = 0.3,
                             max_overlap_fraction: float = 0.95,
                             min_acceptable_score: float = 0.7,
-                            rotate_180: bool = False) -> Optional[Tuple[int, int, float, str, List[str]]]:
+                            rotate_180: bool = False,
+                            timing_tracker: Optional[TimingTracker] = None) -> Optional[Tuple[int, int, float, str, List[str]]]:
     """
     OPTIMIZED: Find alignment between two images with adaptive search and pyramid optimization
     
     Returns:
         Tuple of (x_overlap, y_offset, score, confidence, outlier_flags) if alignment found, None otherwise
     """
+    timer = Timer(f"Pair alignment ({pair_info})")
+    timer.__enter__()
+    
     try:
-        img1 = cv.imread(str(img1_path))
-        img2 = cv.imread(str(img2_path))
-        
-        if img1 is None or img2 is None:
-            print(f"    ERROR: Failed to load images")
-            return None
-        
-        if rotate_images:
-            img1 = cv.rotate(img1, cv.ROTATE_90_COUNTERCLOCKWISE)
-            img2 = cv.rotate(img2, cv.ROTATE_90_COUNTERCLOCKWISE)
-        
-        if rotate_180:
-            img1 = cv.rotate(img1, cv.ROTATE_180)
-            img2 = cv.rotate(img2, cv.ROTATE_180)
-        
-        h1, w1 = img1.shape[:2]
-        h2, w2 = img2.shape[:2]
-        
-        # Calculate edge regions for evaluation
-        max_expected_overlap = int(w1 * max_overlap_fraction)
-        
-        img1_eval_width = min(max_expected_overlap, w1)
-        img1_eval_start = w1 - img1_eval_width
-        img1_eval_region = img1[:, img1_eval_start:]
-        
-        img2_eval_width = min(max_expected_overlap, w2)
-        img2_eval_start = 0
-        img2_eval_region = img2[:, img2_eval_start:img2_eval_start + img2_eval_width]
-        
-        # Save debug images if requested
-        if save_debug and debug_dir:
-            debug_dir.mkdir(exist_ok=True)
-            prefix = f"{pair_info}_" if pair_info else ""
+            img1 = cv.imread(str(img1_path))
+            img2 = cv.imread(str(img2_path))
             
-            img1_debug = img1.copy()
-            cv.rectangle(img1_debug, (img1_eval_start, 0), (w1-1, h1-1), (0, 255, 0), 3)
-            cv.putText(img1_debug, f"IMG1: {img1_path.name}", (10, 30), 
-                      cv.FONT_HERSHEY_SIMPLEX, 0.7, (0, 255, 0), 2)
-            cv.imwrite(str(debug_dir / f"{prefix}img1_eval_region.jpg"), img1_debug)
+            if img1 is None or img2 is None:
+                print(f"    ERROR: Failed to load images")
+                return None
             
-            img2_debug = img2.copy()
-            cv.rectangle(img2_debug, (0, 0), (img2_eval_width-1, h2-1), (0, 0, 255), 3)
-            cv.putText(img2_debug, f"IMG2: {img2_path.name}", (10, 30), 
-                      cv.FONT_HERSHEY_SIMPLEX, 0.7, (0, 0, 255), 2)
-            cv.imwrite(str(debug_dir / f"{prefix}img2_eval_region.jpg"), img2_debug)
-        
-        # Convert to grayscale
-        gray1_eval = cv.cvtColor(img1_eval_region, cv.COLOR_BGR2GRAY)
-        gray2_eval = cv.cvtColor(img2_eval_region, cv.COLOR_BGR2GRAY)
-        
-        # OPTIMIZATION 1: Adaptive search bounds
-        default_min = int(min(img1_eval_width, img2_eval_width) * min_overlap_fraction)
-        default_max = int(min(img1_eval_width, img2_eval_width) * max_overlap_fraction)
-        
-        if adaptive_searcher:
-            min_eval_overlap, max_eval_overlap = adaptive_searcher.get_search_bounds(default_min, default_max)
-            print(f"    Adaptive bounds: {min_eval_overlap} to {max_eval_overlap} (default: {default_min} to {default_max})")
-        else:
-            min_eval_overlap = default_min
-            max_eval_overlap = default_max
-        
-        # OPTIMIZATION 2: Intelligent step sizing
-        search_range = max_eval_overlap - min_eval_overlap
-        adaptive_step = max(10, search_range // 40)  # Aim for ~40 iterations
-        
-        print(f"    Stage 1: Pyramid coarse search (step={adaptive_step})")
-        
-        # Use center strips for coarse search
-        eval_height = min(gray1_eval.shape[0], gray2_eval.shape[0])
-        y1_start = (gray1_eval.shape[0] - eval_height) // 2
-        y2_start = (gray2_eval.shape[0] - eval_height) // 2
-        gray1_strip = gray1_eval[y1_start:y1_start + eval_height, :]
-        gray2_strip = gray2_eval[y2_start:y2_start + eval_height, :]
-        
-        # OPTIMIZATION 3: Optimized coarse search (no pyramid for tree cores)
-        best_coarse_overlap, best_coarse_score = coarse_search_optimized(
-            gray1_strip, gray2_strip, min_eval_overlap, max_eval_overlap, adaptive_step
-        )
-        
-        print(f"    Coarse result: eval_overlap {best_coarse_overlap}, score {best_coarse_score:.4f}")
-        
-        # PHASE 1 OPTIMIZATION: Get predicted Y and adaptive range
-        if adaptive_searcher:
-            predicted_y, y_range = adaptive_searcher.get_predicted_y_search(best_coarse_score)
-            print(f"    Y prediction: center={predicted_y}, range=±{y_range}")
-        else:
-            predicted_y = 0
-            y_range = 5 if best_coarse_score > 0.98 else 15
-        
-        # Stage 2: GRADUATED fine search (KEY PHASE 1 OPTIMIZATION!)
-        x_range = 30
-        x_min = max(min_eval_overlap, best_coarse_overlap - x_range)
-        x_max = min(max_eval_overlap, best_coarse_overlap + x_range)
-        
-        print(f"    Stage 2: Graduated fine search (x_range=±{x_range}, y_center={predicted_y}±{y_range})")
-        
-        best_eval_x_overlap, best_y_offset, best_xy_score = graduated_fine_search(
-            gray1_eval, gray2_eval,
-            best_coarse_overlap, x_min, x_max,
-            predicted_y, y_range,
-            img1_eval_width, img2_eval_width
-        )
-        
-        actual_x_overlap = best_eval_x_overlap
-        
-        print(f"    Fine alignment: eval_x_overlap={best_eval_x_overlap}, actual_x_overlap={actual_x_overlap}, Y_offset={best_y_offset}, score={best_xy_score:.4f}")
-        
-        # OPTIMIZATION 5: Outlier detection
-        outlier_flags = []
-        confidence = "HIGH"
-        
-        if outlier_detector:
-            outlier_flags, confidence = outlier_detector.is_outlier(
-                actual_x_overlap, best_xy_score, best_coarse_score
+            if rotate_images:
+                img1 = cv.rotate(img1, cv.ROTATE_90_COUNTERCLOCKWISE)
+                img2 = cv.rotate(img2, cv.ROTATE_90_COUNTERCLOCKWISE)
+            
+            if rotate_180:
+                img1 = cv.rotate(img1, cv.ROTATE_180)
+                img2 = cv.rotate(img2, cv.ROTATE_180)
+            
+            h1, w1 = img1.shape[:2]
+            h2, w2 = img2.shape[:2]
+            
+            # Calculate edge regions for evaluation
+            max_expected_overlap = int(w1 * max_overlap_fraction)
+            
+            img1_eval_width = min(max_expected_overlap, w1)
+            img1_eval_start = w1 - img1_eval_width
+            img1_eval_region = img1[:, img1_eval_start:]
+            
+            img2_eval_width = min(max_expected_overlap, w2)
+            img2_eval_start = 0
+            img2_eval_region = img2[:, img2_eval_start:img2_eval_start + img2_eval_width]
+            
+            # Save debug images if requested (HIGH level only)
+            if debug_level == "high" and debug_dir:
+                debug_dir.mkdir(exist_ok=True)
+                prefix = f"{pair_info}_" if pair_info else ""
+                
+                img1_debug = img1.copy()
+                cv.rectangle(img1_debug, (img1_eval_start, 0), (w1-1, h1-1), (0, 255, 0), 3)
+                cv.putText(img1_debug, f"IMG1: {img1_path.name}", (10, 30), 
+                          cv.FONT_HERSHEY_SIMPLEX, 0.7, (0, 255, 0), 2)
+                cv.imwrite(str(debug_dir / f"{prefix}img1_eval_region.jpg"), img1_debug)
+                
+                img2_debug = img2.copy()
+                cv.rectangle(img2_debug, (0, 0), (img2_eval_width-1, h2-1), (0, 0, 255), 3)
+                cv.putText(img2_debug, f"IMG2: {img2_path.name}", (10, 30), 
+                          cv.FONT_HERSHEY_SIMPLEX, 0.7, (0, 0, 255), 2)
+                cv.imwrite(str(debug_dir / f"{prefix}img2_eval_region.jpg"), img2_debug)
+            
+            # Convert to grayscale
+            gray1_eval = cv.cvtColor(img1_eval_region, cv.COLOR_BGR2GRAY)
+            gray2_eval = cv.cvtColor(img2_eval_region, cv.COLOR_BGR2GRAY)
+            
+            # OPTIMIZATION 1: Adaptive search bounds
+            default_min = int(min(img1_eval_width, img2_eval_width) * min_overlap_fraction)
+            default_max = int(min(img1_eval_width, img2_eval_width) * max_overlap_fraction)
+            
+            if adaptive_searcher:
+                min_eval_overlap, max_eval_overlap = adaptive_searcher.get_search_bounds(default_min, default_max)
+                print(f"    Adaptive bounds: {min_eval_overlap} to {max_eval_overlap} (default: {default_min} to {default_max})")
+            else:
+                min_eval_overlap = default_min
+                max_eval_overlap = default_max
+            
+            # OPTIMIZATION 2: Intelligent step sizing
+            search_range = max_eval_overlap - min_eval_overlap
+            adaptive_step = max(10, search_range // 40)  # Aim for ~40 iterations
+            
+            print(f"    Stage 1: Pyramid coarse search (step={adaptive_step})")
+            
+            # Use center strips for coarse search
+            eval_height = min(gray1_eval.shape[0], gray2_eval.shape[0])
+            y1_start = (gray1_eval.shape[0] - eval_height) // 2
+            y2_start = (gray2_eval.shape[0] - eval_height) // 2
+            gray1_strip = gray1_eval[y1_start:y1_start + eval_height, :]
+            gray2_strip = gray2_eval[y2_start:y2_start + eval_height, :]
+            
+            # OPTIMIZATION 3: Optimized coarse search (no pyramid for tree cores)
+            best_coarse_overlap, best_coarse_score = coarse_search_optimized(
+                gray1_strip, gray2_strip, min_eval_overlap, max_eval_overlap, adaptive_step
             )
             
-            if outlier_flags:
-                print(f"    ⚠  OUTLIER DETECTED: {', '.join(outlier_flags)}")
-                print(f"    Confidence: {confidence}")
-        
-        # Save matched comparison if debug enabled
-        if save_debug and debug_dir:
-            if best_y_offset >= 0:
-                compare_height = min(gray1_eval.shape[0] - best_y_offset, gray2_eval.shape[0])
-                matched_region1 = img1_eval_region[best_y_offset:best_y_offset + compare_height, -actual_x_overlap:]
-                matched_region2 = img2_eval_region[:compare_height, :actual_x_overlap]
+            print(f"    Coarse result: eval_overlap {best_coarse_overlap}, score {best_coarse_score:.4f}")
+            
+            # PHASE 1 OPTIMIZATION: Get predicted Y and adaptive range
+            if adaptive_searcher:
+                predicted_y, y_range = adaptive_searcher.get_predicted_y_search(best_coarse_score)
+                print(f"    Y prediction: center={predicted_y}, range=±{y_range}")
             else:
-                compare_height = min(gray1_eval.shape[0], gray2_eval.shape[0] + best_y_offset)
-                matched_region1 = img1_eval_region[:compare_height, -actual_x_overlap:]
-                matched_region2 = img2_eval_region[-best_y_offset:-best_y_offset + compare_height, :actual_x_overlap]
+                predicted_y = 0
+                y_range = 5 if best_coarse_score > 0.98 else 15
             
-            comparison = np.hstack([matched_region1, matched_region2])
-            font = cv.FONT_HERSHEY_SIMPLEX
-            cv.putText(comparison, "IMG1 RIGHT edge", (10, 30), font, 0.8, (0, 255, 0), 2)
-            cv.putText(comparison, "IMG2 LEFT edge", (matched_region1.shape[1] + 10, 30), font, 0.8, (0, 0, 255), 2)
-            cv.putText(comparison, f"Score: {best_xy_score:.4f} | Confidence: {confidence}", (10, 60), font, 0.8, (255, 255, 255), 2)
-            cv.line(comparison, (matched_region1.shape[1], 0), (matched_region1.shape[1], comparison.shape[0]), (0, 255, 255), 2)
+            # Stage 2: GRADUATED fine search (KEY PHASE 1 OPTIMIZATION!)
+            x_range = 30
+            x_min = max(min_eval_overlap, best_coarse_overlap - x_range)
+            x_max = min(max_eval_overlap, best_coarse_overlap + x_range)
             
-            prefix = f"{pair_info}_" if pair_info else ""
-            cv.imwrite(str(debug_dir / f"{prefix}matched_comparison.jpg"), comparison)
-        
-        # Update adaptive searcher
-        if adaptive_searcher and best_xy_score > min_acceptable_score:
-            adaptive_searcher.add_result(actual_x_overlap, best_y_offset)
-        
-        # Return alignment if acceptable
-        if best_xy_score > min_acceptable_score:
-            status = "✓" if confidence == "HIGH" else ("⚠" if confidence == "MEDIUM" else "X")
-            print(f"    {status} Alignment: overlap={actual_x_overlap}px, y_offset={best_y_offset}px, score={best_xy_score:.4f}, confidence={confidence}")
-            return (actual_x_overlap, best_y_offset, best_xy_score, confidence, outlier_flags)
-        else:
-            print(f"    X No acceptable alignment (score {best_xy_score:.4f} < {min_acceptable_score:.2f})")
-            return None
-        
+            print(f"    Stage 2: Graduated fine search (x_range=±{x_range}, y_center={predicted_y}±{y_range})")
+            
+            best_eval_x_overlap, best_y_offset, best_xy_score = graduated_fine_search(
+                gray1_eval, gray2_eval,
+                best_coarse_overlap, x_min, x_max,
+                predicted_y, y_range,
+                img1_eval_width, img2_eval_width
+            )
+            
+            actual_x_overlap = best_eval_x_overlap
+            
+            print(f"    Fine alignment: eval_x_overlap={best_eval_x_overlap}, actual_x_overlap={actual_x_overlap}, Y_offset={best_y_offset}, score={best_xy_score:.4f}")
+            
+            # OPTIMIZATION 5: Outlier detection
+            outlier_flags = []
+            confidence = "HIGH"
+            
+            if outlier_detector:
+                outlier_flags, confidence = outlier_detector.is_outlier(
+                    actual_x_overlap, best_xy_score, best_coarse_score
+                )
+                
+                if outlier_flags:
+                    print(f"    ⚠️  OUTLIER DETECTED: {', '.join(outlier_flags)}")
+                    print(f"    Confidence: {confidence}")
+            
+            # Save matched comparison if debug enabled (MEDIUM or HIGH)
+            if debug_level in ["medium", "high"] and debug_dir:
+                if best_y_offset >= 0:
+                    compare_height = min(gray1_eval.shape[0] - best_y_offset, gray2_eval.shape[0])
+                    matched_region1 = img1_eval_region[best_y_offset:best_y_offset + compare_height, -actual_x_overlap:]
+                    matched_region2 = img2_eval_region[:compare_height, :actual_x_overlap]
+                else:
+                    compare_height = min(gray1_eval.shape[0], gray2_eval.shape[0] + best_y_offset)
+                    matched_region1 = img1_eval_region[:compare_height, -actual_x_overlap:]
+                    matched_region2 = img2_eval_region[-best_y_offset:-best_y_offset + compare_height, :actual_x_overlap]
+                
+                comparison = np.hstack([matched_region1, matched_region2])
+                font = cv.FONT_HERSHEY_SIMPLEX
+                cv.putText(comparison, "IMG1 RIGHT edge", (10, 30), font, 0.8, (0, 255, 0), 2)
+                cv.putText(comparison, "IMG2 LEFT edge", (matched_region1.shape[1] + 10, 30), font, 0.8, (0, 0, 255), 2)
+                cv.putText(comparison, f"Score: {best_xy_score:.4f} | Confidence: {confidence}", (10, 60), font, 0.8, (255, 255, 255), 2)
+                cv.line(comparison, (matched_region1.shape[1], 0), (matched_region1.shape[1], comparison.shape[0]), (0, 255, 255), 2)
+                
+                prefix = f"{pair_info}_" if pair_info else ""
+                cv.imwrite(str(debug_dir / f"{prefix}matched_comparison.jpg"), comparison)
+            
+            # Update adaptive searcher
+            if adaptive_searcher and best_xy_score > min_acceptable_score:
+                adaptive_searcher.add_result(actual_x_overlap, best_y_offset)
+            
+            # Return alignment if acceptable
+            if best_xy_score > min_acceptable_score:
+                status = "✓" if confidence == "HIGH" else ("⚠" if confidence == "MEDIUM" else "X")
+                print(f"    {status} Alignment: overlap={actual_x_overlap}px, y_offset={best_y_offset}px, score={best_xy_score:.4f}, confidence={confidence}")
+                
+                timer.__exit__(None, None, None)
+                if timing_tracker:
+                    timing_tracker.add_timing("pair_alignment", timer.get_duration())
+                
+                return (actual_x_overlap, best_y_offset, best_xy_score, confidence, outlier_flags)
+            else:
+                print(f"    X No acceptable alignment (score {best_xy_score:.4f} < {min_acceptable_score:.2f})")
+                
+                timer.__exit__(None, None, None)
+                if timing_tracker:
+                    timing_tracker.add_timing("pair_alignment_failed", timer.get_duration())
+                
+                return None
+            
     except Exception as e:
         print(f"Alignment error: {e}")
         import traceback
         traceback.print_exc()
+        timer.__exit__(None, None, None)
         return None
 
 
+def convert_to_native_types(obj):
+    """Convert NumPy types to Python native types for JSON serialization"""
+    if isinstance(obj, np.integer):
+        return int(obj)
+    elif isinstance(obj, np.floating):
+        return float(obj)
+    elif isinstance(obj, np.ndarray):
+        return obj.tolist()
+    elif isinstance(obj, dict):
+        return {key: convert_to_native_types(value) for key, value in obj.items()}
+    elif isinstance(obj, list):
+        return [convert_to_native_types(item) for item in obj]
+    return obj
+
+
+def export_alignment_json(image_paths: list, offsets: list, output_dir: Path, 
+                          axis: str, rotate_180: bool, timing_summary: Dict[str, Any],
+                          metadata: Dict[str, Any]):
+    """
+    Export alignment data to JSON format (LOW, MEDIUM, HIGH debug levels)
+    
+    This file contains all information needed to recreate the final stitched image
+    from the original input images.
+    """
+    print(f"\n📄 Exporting alignment data to JSON...")
+    
+    alignment_data = {
+        "metadata": {
+            "created": datetime.now().isoformat(),
+            "version": "1.0",
+            "tool": "bestImageStitch_enhanced.py",
+            **metadata
+        },
+        "parameters": {
+            "axis": axis,
+            "rotate_180": rotate_180,
+            "num_images": len(image_paths)
+        },
+        "timing": timing_summary,
+        "images": [],
+        "alignment_pairs": []
+    }
+    
+    # Add image information
+    for i, img_path in enumerate(image_paths):
+        img = cv.imread(str(img_path))
+        if img is not None:
+            h, w = img.shape[:2]
+            
+            # After rotations
+            if axis == 'y':
+                w, h = h, w  # Rotated 90° CCW
+            if rotate_180:
+                pass  # Size doesn't change with 180° rotation
+            
+            # Resolve path to absolute normalized path (removes .. and .)
+            normalized_path = str(img_path.resolve())
+            
+            alignment_data["images"].append({
+                "index": i,
+                "filename": img_path.name,
+                "path": normalized_path,
+                "width": w,
+                "height": h
+            })
+    
+    # Add alignment pair information
+    for i, offset_data in enumerate(offsets):
+        x_overlap = int(offset_data[0]) if isinstance(offset_data[0], (np.integer, np.floating)) else offset_data[0]
+        y_offset = int(offset_data[1]) if isinstance(offset_data[1], (np.integer, np.floating)) else offset_data[1]
+        score = float(offset_data[2]) if len(offset_data) > 2 else 0.0
+        confidence = offset_data[3] if len(offset_data) > 3 else "UNKNOWN"
+        flags = [str(f) for f in offset_data[4]] if len(offset_data) > 4 else []
+        
+        alignment_data["alignment_pairs"].append({
+            "pair_index": i,
+            "image1_index": i,
+            "image2_index": i + 1,
+            "image1_filename": image_paths[i].name,
+            "image2_filename": image_paths[i + 1].name,
+            "x_overlap": x_overlap,
+            "y_offset": y_offset,
+            "score": score,
+            "confidence": confidence,
+            "outlier_flags": flags
+        })
+    
+    # Calculate final positions
+    image_positions = [(0, 0)]
+    current_x = 0
+    
+    for i, offset_data in enumerate(offsets):
+        x_overlap = offset_data[0]
+        y_offset = offset_data[1]
+        
+        img = cv.imread(str(image_paths[i]))
+        if img is not None:
+            h, w = img.shape[:2]
+            if axis == 'y':
+                w, h = h, w
+            
+            current_x = current_x + w - x_overlap
+            image_positions.append((current_x, y_offset))
+    
+    # Add final positions
+    for i, (x_pos, y_pos) in enumerate(image_positions):
+        alignment_data["images"][i]["final_x_position"] = x_pos
+        alignment_data["images"][i]["final_y_position"] = y_pos
+    
+    # Calculate canvas dimensions
+    total_width = 0
+    for i, (x_pos, y_offset) in enumerate(image_positions):
+        img_width = alignment_data["images"][i]["width"]
+        right_edge = x_pos + img_width
+        total_width = max(total_width, right_edge)
+    
+    min_y = min(y_pos for _, y_pos in image_positions)
+    max_y = max(y_pos + alignment_data["images"][i]["height"] 
+                for i, (_, y_pos) in enumerate(image_positions))
+    total_height = max_y - min_y
+    
+    alignment_data["final_canvas"] = {
+        "width": total_width,
+        "height": total_height,
+        "min_y_offset": min_y
+    }
+    
+    # Save JSON (convert all NumPy types to native Python types)
+    json_path = output_dir / "alignment_data.json"
+    alignment_data = convert_to_native_types(alignment_data)
+    
+    with open(json_path, 'w') as f:
+        json.dump(alignment_data, f, indent=2)
+    
+    print(f"📄 Alignment data exported: {json_path}")
+    print(f"   Contains {len(alignment_data['images'])} images and {len(alignment_data['alignment_pairs'])} alignment pairs")
+    
+    return json_path
+
+
 def create_final_stitched_image(image_paths: list, offsets: list, output_dir: Path, 
-                                axis: str, output_filename: str, rotate_180: bool = False):
+                                axis: str, output_filename: str, rotate_180: bool = False,
+                                timing_tracker: Optional[TimingTracker] = None,
+                                save_uncorrected: bool = False):
     """
     Create final stitched image from a list of images and their pairwise offsets.
     
@@ -544,9 +807,14 @@ def create_final_stitched_image(image_paths: list, offsets: list, output_dir: Pa
         axis: 'x' or 'y'
         output_filename: Name for the output file
         rotate_180: Whether to rotate images 180 degrees
+        timing_tracker: Optional timing tracker
+        save_uncorrected: If True, save version without chromatic aberration correction
     """
-    print(f"\nAssembling {len(image_paths)} images...")
+    timer = Timer("Final image assembly")
+    timer.__enter__()
     
+    print(f"\nAssembling {len(image_paths)} images...")
+        
     # Load all images
     images = []
     for img_path in image_paths:
@@ -600,98 +868,109 @@ def create_final_stitched_image(image_paths: list, offsets: list, output_dir: Pa
     # to avoid edge distortion in overlap regions
     
     # First pass: Place all images to establish full coverage
-    for i, (x_pos, y_offset) in enumerate(image_positions):
-        img = images[i]
-        h, w = img.shape[:2]
-        y_pos = y_offset - min_y
-        
-        canvas[y_pos:y_pos + h, x_pos:x_pos + w] = img
+    with Timer("First pass - place all images"):
+        for i, (x_pos, y_offset) in enumerate(image_positions):
+            img = images[i]
+            h, w = img.shape[:2]
+            y_pos = y_offset - min_y
+            
+            canvas[y_pos:y_pos + h, x_pos:x_pos + w] = img
+    
+    # Save uncorrected version if requested (for medium debug)
+    if save_uncorrected:
+        uncorrected_filename = output_filename.replace('.tiff', '_uncorrected.tiff').replace('.tif', '_uncorrected.tif')
+        uncorrected_path = output_dir / uncorrected_filename
+        cv.imwrite(str(uncorrected_path), canvas)
+        print(f"\n📄 Uncorrected version saved: {uncorrected_path}")
     
     # Second pass: Fix overlap regions using center-closest selection
     print(f"\nApplying chromatic aberration correction in overlap regions...")
-    for i in range(len(images) - 1):
-        x_overlap = offsets[i][0]
-        
-        if x_overlap <= 0:
-            continue
-        
-        # Get positions and images
-        img1 = images[i]
-        img2 = images[i + 1]
-        x1_pos, y1_offset = image_positions[i]
-        x2_pos, y2_offset = image_positions[i + 1]
-        
-        # Overlap region in canvas coordinates
-        overlap_start_x = x2_pos
-        overlap_end_x = x1_pos + img1.shape[1]
-        
-        if overlap_start_x >= overlap_end_x:
-            continue
+    with Timer("Second pass - chromatic aberration correction"):
+        for i in range(len(images) - 1):
+            x_overlap = offsets[i][0]
             
-        # Image centers in canvas coordinates
-        img1_center_x = x1_pos + img1.shape[1] // 2
-        img2_center_x = x2_pos + img2.shape[1] // 2
-        
-        # For each column in overlap, use pixels from image whose center is closer
-        for canvas_x in range(overlap_start_x, overlap_end_x):
-            # Distance from this column to each image center
-            dist1 = abs(canvas_x - img1_center_x)
-            dist2 = abs(canvas_x - img2_center_x)
-            
-            # Calculate positions in source images
-            img1_x = canvas_x - x1_pos
-            img2_x = canvas_x - x2_pos
-            
-            # Check bounds
-            if img1_x < 0 or img1_x >= img1.shape[1]:
-                continue
-            if img2_x < 0 or img2_x >= img2.shape[1]:
+            if x_overlap <= 0:
                 continue
             
-            # Use image whose center is closest (less chromatic aberration)
-            if dist1 < dist2:
-                # Use image 1
-                y_start = y1_offset - min_y
-                y_end = y_start + img1.shape[0]
+            # Get positions and images
+            img1 = images[i]
+            img2 = images[i + 1]
+            x1_pos, y1_offset = image_positions[i]
+            x2_pos, y2_offset = image_positions[i + 1]
+            
+            # Overlap region in canvas coordinates
+            overlap_start_x = x2_pos
+            overlap_end_x = x1_pos + img1.shape[1]
+            
+            if overlap_start_x >= overlap_end_x:
+                continue
                 
-                if y_start < total_height and y_end > 0:
-                    y_start_canvas = max(0, y_start)
-                    y_end_canvas = min(total_height, y_end)
-                    y_start_img = y_start_canvas - y_start
-                    y_end_img = y_start_img + (y_end_canvas - y_start_canvas)
-                    
-                    canvas[y_start_canvas:y_end_canvas, canvas_x] = img1[y_start_img:y_end_img, img1_x]
-            else:
-                # Use image 2
-                y_start = y2_offset - min_y
-                y_end = y_start + img2.shape[0]
+            # Image centers in canvas coordinates
+            img1_center_x = x1_pos + img1.shape[1] // 2
+            img2_center_x = x2_pos + img2.shape[1] // 2
+            
+            # For each column in overlap, use pixels from image whose center is closer
+            for canvas_x in range(overlap_start_x, overlap_end_x):
+                # Distance from this column to each image center
+                dist1 = abs(canvas_x - img1_center_x)
+                dist2 = abs(canvas_x - img2_center_x)
                 
-                if y_start < total_height and y_end > 0:
-                    y_start_canvas = max(0, y_start)
-                    y_end_canvas = min(total_height, y_end)
-                    y_start_img = y_start_canvas - y_start
-                    y_end_img = y_start_img + (y_end_canvas - y_start_canvas)
+                # Calculate positions in source images
+                img1_x = canvas_x - x1_pos
+                img2_x = canvas_x - x2_pos
+                
+                # Check bounds
+                if img1_x < 0 or img1_x >= img1.shape[1]:
+                    continue
+                if img2_x < 0 or img2_x >= img2.shape[1]:
+                    continue
+                
+                # Use image whose center is closest (less chromatic aberration)
+                if dist1 < dist2:
+                    # Use image 1
+                    y_start = y1_offset - min_y
+                    y_end = y_start + img1.shape[0]
                     
-                    canvas[y_start_canvas:y_end_canvas, canvas_x] = img2[y_start_img:y_end_img, img2_x]
-        
-        print(f"  Corrected overlap {i}-{i+1}: x={overlap_start_x} to {overlap_end_x}")
+                    if y_start < total_height and y_end > 0:
+                        y_start_canvas = max(0, y_start)
+                        y_end_canvas = min(total_height, y_end)
+                        y_start_img = y_start_canvas - y_start
+                        y_end_img = y_start_img + (y_end_canvas - y_start_canvas)
+                        
+                        canvas[y_start_canvas:y_end_canvas, canvas_x] = img1[y_start_img:y_end_img, img1_x]
+                else:
+                    # Use image 2
+                    y_start = y2_offset - min_y
+                    y_end = y_start + img2.shape[0]
+                    
+                    if y_start < total_height and y_end > 0:
+                        y_start_canvas = max(0, y_start)
+                        y_end_canvas = min(total_height, y_end)
+                        y_start_img = y_start_canvas - y_start
+                        y_end_img = y_start_img + (y_end_canvas - y_start_canvas)
+                        
+                        canvas[y_start_canvas:y_end_canvas, canvas_x] = img2[y_start_img:y_end_img, img2_x]
+            
+            print(f"  Corrected overlap {i}-{i+1}: x={overlap_start_x} to {overlap_end_x}")
     
     # Save result
-    output_path = output_dir / output_filename
-    cv.imwrite(str(output_path), canvas)
+    with Timer("Save final image"):
+        output_path = output_dir / output_filename
+        cv.imwrite(str(output_path), canvas)
     
-    print(f"\n   Stitched image created with chromatic aberration correction!")
+    print(f"\n✅ Stitched image created with chromatic aberration correction!")
     print(f"Output: {output_path}")
     print(f"Size: {total_width}x{total_height}")
-    create_debug_visualization(
-        canvas, image_paths, images, image_positions, offsets,
-        output_dir, output_filename, axis, min_y, 
-        total_width, total_height
-    )
+    
+    timer.__exit__(None, None, None)
+    if timing_tracker:
+        timing_tracker.add_timing("final_assembly", timer.get_duration())
+    
+    return canvas, image_positions, min_y, total_width, total_height
 
 
 def sequential_stitch_images_optimized(images_dir: Path, output_dir: Path, axis: str = 'y', 
-                                      save_debug: bool = False, keep_intermediates: bool = False,
+                                      debug_level: str = "none", keep_intermediates: bool = False,
                                       enable_refinement: bool = False,
                                       min_overlap_fraction: float = 0.3,
                                       max_overlap_fraction: float = 0.95,
@@ -699,62 +978,77 @@ def sequential_stitch_images_optimized(images_dir: Path, output_dir: Path, axis:
                                       rotate_180: bool = False):
     """
     OPTIMIZED: Sequentially stitch images with adaptive search and outlier detection
+    
+    Args:
+        debug_level: "none", "low", "medium", or "high"
+            - none: No debug output
+            - low: Export JSON alignment data only
+            - medium: JSON + annotated final image
+            - high: JSON + annotated image + eval regions
     """
+    # Initialize timing tracker
+    timing_tracker = TimingTracker()
+    timing_tracker.start_total()
+    
     if not images_dir.exists():
         print(f"Images directory not found: {images_dir}")
         return
     
     # Get all image files
-    image_files = []
-    for ext in ['*.tiff', '*.tif', '*.jpg', '*.jpeg', '*.png']:
-        image_files.extend(list(images_dir.glob(ext)))
-        image_files.extend(list(images_dir.glob(ext.upper())))
-    
-    # Remove duplicates
-    unique_images = []
-    seen_paths = set()
-    for img_path in image_files:
-        normalized = str(img_path.resolve())
-        if normalized not in seen_paths:
-            seen_paths.add(normalized)
-            unique_images.append(img_path)
+    with Timer("Image discovery"):
+        image_files = []
+        for ext in ['*.tiff', '*.tif', '*.jpg', '*.jpeg', '*.png']:
+            image_files.extend(list(images_dir.glob(ext)))
+            image_files.extend(list(images_dir.glob(ext.upper())))
+        
+        # Remove duplicates
+        unique_images = []
+        seen_paths = set()
+        for img_path in image_files:
+            normalized = str(img_path.resolve())
+            if normalized not in seen_paths:
+                seen_paths.add(normalized)
+                unique_images.append(img_path)
     
     if not unique_images:
         print(f"No images found in directory")
         return
     
     print(f"Starting OPTIMIZED sequential stitching along {axis.upper()} axis")
+    print(f"Debug level: {debug_level.upper()}")
     print(f"Found {len(unique_images)} unique images to stitch")
     
     # Extract coordinates and sort
-    images_with_coords = []
-    coord_letter = axis.upper()
-    
-    for img_path in unique_images:
-        try:
-            filename = img_path.stem
-            coord_match = re.search(rf'{coord_letter}(\d+)', filename, re.IGNORECASE)
-            
-            if coord_match:
-                coord_pos = int(coord_match.group(1))
-                images_with_coords.append((coord_pos, img_path))
-        except (IndexError, ValueError):
-            continue
-    
-    if len(images_with_coords) < 2:
-        print(f"Need at least 2 images, found {len(images_with_coords)}")
-        return
-    
-    images_with_coords.sort(key=lambda x: x[0])
-    sorted_images = [img_path for _, img_path in images_with_coords]
+    with Timer("Sort images by coordinate"):
+        images_with_coords = []
+        coord_letter = axis.upper()
+        
+        for img_path in unique_images:
+            try:
+                filename = img_path.stem
+                coord_match = re.search(rf'{coord_letter}(\d+)', filename, re.IGNORECASE)
+                
+                if coord_match:
+                    coord_pos = int(coord_match.group(1))
+                    images_with_coords.append((coord_pos, img_path))
+            except (IndexError, ValueError):
+                continue
+        
+        if len(images_with_coords) < 2:
+            print(f"Need at least 2 images, found {len(images_with_coords)}")
+            return
+        
+        images_with_coords.sort(key=lambda x: x[0])
+        sorted_images = [img_path for _, img_path in images_with_coords]
     
     print(f"\nImages sorted by {coord_letter} coordinate:")
     for i, (coord_pos, img_path) in enumerate(images_with_coords):
         print(f"  [{i}] {coord_letter}{coord_pos}: {img_path.name}")
     
     # Setup directories
-    debug_dir = output_dir / "eval_regions" if save_debug else None
-    if debug_dir:
+    debug_dir = None
+    if debug_level == "high":
+        debug_dir = output_dir / "eval_regions"
         debug_dir.mkdir(exist_ok=True)
     
     # Initialize optimizers
@@ -768,65 +1062,89 @@ def sequential_stitch_images_optimized(images_dir: Path, output_dir: Path, axis:
         print("=" * 80)
         
         pair_offsets = []
-        total_time = 0
+        
+        phase1_timer = Timer("Phase 1 - All alignments")
+        phase1_timer.__enter__()
         
         for i in range(len(sorted_images) - 1):
-            img1_path = sorted_images[i]
-            img2_path = sorted_images[i + 1]
-            pair_info = f"pair{i+1}"
-            
-            print(f"\nPair {i+1}/{len(sorted_images)-1}: {img1_path.name} + {img2_path.name}")
-            
-            pair_start = time.time()
-            
-            alignment = find_alignment_optimized(
-                img1_path, img2_path,
-                rotate_images=(axis == 'y'),
-                pair_info=pair_info,
-                save_debug=save_debug,
-                debug_dir=debug_dir,
-                adaptive_searcher=adaptive_searcher,
-                outlier_detector=outlier_detector,
-                min_overlap_fraction=min_overlap_fraction,
-                max_overlap_fraction=max_overlap_fraction,
-                min_acceptable_score=min_acceptable_score,
-                rotate_180=rotate_180
-            )
-            
-            pair_elapsed = time.time() - pair_start
-            total_time += pair_elapsed
-            
-            if alignment:
-                pair_offsets.append(alignment)
-                print(f"  Time: {pair_elapsed:.1f}s (avg: {total_time/(i+1):.1f}s/pair)")
-            else:
-                print(f"  X Alignment failed ({pair_elapsed:.1f}s)")
-                print(f"\n⚠  STOPPING: Failed to align pair {i+1}")
+                img1_path = sorted_images[i]
+                img2_path = sorted_images[i + 1]
+                pair_info = f"pair{i+1}"
                 
-                if pair_offsets and i > 0:
-                    print("\n" + "=" * 80)
-                    print(f"CREATING PARTIAL RESULT ({i+1} images)")
-                    print("=" * 80)
-                    create_final_stitched_image(
-                        sorted_images[:i+1], pair_offsets, output_dir, axis,
-                        f"partial_stitched_{i+1}_images.tiff", rotate_180
-                    )
-                return
+                print(f"\nPair {i+1}/{len(sorted_images)-1}: {img1_path.name} + {img2_path.name}")
+                
+                alignment = find_alignment_optimized(
+                    img1_path, img2_path,
+                    rotate_images=(axis == 'y'),
+                    pair_info=pair_info,
+                    debug_level=debug_level,
+                    debug_dir=debug_dir,
+                    adaptive_searcher=adaptive_searcher,
+                    outlier_detector=outlier_detector,
+                    min_overlap_fraction=min_overlap_fraction,
+                    max_overlap_fraction=max_overlap_fraction,
+                    min_acceptable_score=min_acceptable_score,
+                    rotate_180=rotate_180,
+                    timing_tracker=timing_tracker
+                )
+                
+                if alignment:
+                    pair_offsets.append(alignment)
+                else:
+                    print(f"  X Alignment failed")
+                    print(f"\n⚠️  STOPPING: Failed to align pair {i+1}")
+                    
+                    phase1_timer.__exit__(None, None, None)
+                    
+                    if pair_offsets and i > 0:
+                        print("\n" + "=" * 80)
+                        print(f"CREATING PARTIAL RESULT ({i+1} images)")
+                        print("=" * 80)
+                        
+                        canvas, image_positions, min_y, total_width, total_height = create_final_stitched_image(
+                            sorted_images[:i+1], pair_offsets, output_dir, axis,
+                            f"partial_stitched_{i+1}_images.tiff", rotate_180, timing_tracker,
+                            save_uncorrected=(debug_level in ["medium", "high"])
+                        )
+                        
+                        # Export JSON for partial result if debug enabled
+                        if debug_level in ["low", "medium", "high"]:
+                            metadata = {
+                                "status": "partial",
+                                "failed_at_pair": i+1,
+                                "reason": "alignment_failed"
+                            }
+                            export_alignment_json(
+                                sorted_images[:i+1], pair_offsets, output_dir,
+                                axis, rotate_180, timing_tracker.get_summary(), metadata
+                            )
+                    
+                    timing_tracker.end_total()
+                    timing_tracker.print_summary()
+                    return
         
-        print(f"\n✓ All {len(sorted_images)-1} pairs aligned successfully!")
-        print(f"Total alignment time: {total_time:.1f}s (avg: {total_time/(len(sorted_images)-1):.1f}s/pair)")
+        phase1_timer.__exit__(None, None, None)
+        timing_tracker.add_timing("phase1_total", phase1_timer.get_duration())
+        
+        print(f"\n✅ All {len(sorted_images)-1} pairs aligned successfully!")
         
         # Phase 1.5: Multi-neighbor refinement (optional)
         if enable_refinement and REFINEMENT_AVAILABLE:
             try:
+                refine_timer = Timer("Multi-neighbor refinement")
+                refine_timer.__enter__()
+                
                 pair_offsets = multi_neighbor_refinement_pass(
                     sorted_images, pair_offsets, axis, confidence_threshold="MEDIUM"
                 )
+                
+                refine_timer.__exit__(None, None, None)
+                timing_tracker.add_timing("refinement", refine_timer.get_duration())
             except Exception as e:
-                print(f"\n⚠  Refinement pass failed: {e}")
+                print(f"\n⚠️  Refinement pass failed: {e}")
                 print("Continuing with initial alignments...")
         elif enable_refinement and not REFINEMENT_AVAILABLE:
-            print("\n⚠  Refinement requested but multi_neighbor_refinement.py not found")
+            print("\n⚠️  Refinement requested but multi_neighbor_refinement.py not found")
             print("Continuing without refinement...")
         
         # Phase 2: Create final image
@@ -834,7 +1152,54 @@ def sequential_stitch_images_optimized(images_dir: Path, output_dir: Path, axis:
         print("PHASE 2: Creating Final Stitched Image")
         print("=" * 80)
         
-        create_final_stitched_image(sorted_images, pair_offsets, output_dir, axis, "final_stitched.tiff", rotate_180)
+        canvas, image_positions, min_y, total_width, total_height = create_final_stitched_image(
+            sorted_images, pair_offsets, output_dir, axis, "final_stitched.tiff", 
+            rotate_180, timing_tracker,
+            save_uncorrected=(debug_level in ["medium", "high"])
+        )
+        
+        # Phase 3: Debug output based on level
+        print("\n" + "=" * 80)
+        print(f"PHASE 3: Debug Output (Level: {debug_level.upper()})")
+        print("=" * 80)
+        
+        if debug_level in ["low", "medium", "high"]:
+            # LOW: Export JSON
+            with Timer("Export alignment JSON"):
+                metadata = {
+                    "status": "complete",
+                    "min_overlap_fraction": min_overlap_fraction,
+                    "max_overlap_fraction": max_overlap_fraction,
+                    "min_acceptable_score": min_acceptable_score,
+                    "refinement_enabled": enable_refinement
+                }
+                export_alignment_json(
+                    sorted_images, pair_offsets, output_dir,
+                    axis, rotate_180, timing_tracker.get_summary(), metadata
+                )
+        
+        if debug_level in ["medium", "high"]:
+            # MEDIUM: Create annotated debug visualization
+            with Timer("Create debug visualization"):
+                # Load images in correct orientation
+                images = []
+                for img_path in sorted_images:
+                    img = cv.imread(str(img_path))
+                    if axis == 'y':
+                        img = cv.rotate(img, cv.ROTATE_90_COUNTERCLOCKWISE)
+                    if rotate_180:
+                        img = cv.rotate(img, cv.ROTATE_180)
+                    images.append(img)
+                
+                create_debug_visualization(
+                    canvas, sorted_images, images, image_positions, pair_offsets,
+                    output_dir, "final_stitched.tiff", axis, min_y, 
+                    total_width, total_height
+                )
+        
+        # HIGH: eval regions already saved during alignment
+        if debug_level == "high":
+            print(f"📁 Eval regions saved to: {debug_dir}")
         
         # Print summary
         print("\n" + "=" * 80)
@@ -846,23 +1211,30 @@ def sequential_stitch_images_optimized(images_dir: Path, output_dir: Path, axis:
         low_conf = sum(1 for p in pair_offsets if p[3] == "LOW")
         
         print(f"Total pairs: {len(pair_offsets)}")
-        print(f"  * HIGH confidence: {high_conf}")
-        print(f"  * MEDIUM confidence: {med_conf}")
-        print(f"  * LOW confidence: {low_conf}")
+        print(f"  ✓ HIGH confidence: {high_conf}")
+        print(f"  ⚠ MEDIUM confidence: {med_conf}")
+        print(f"  ✗ LOW confidence: {low_conf}")
         
         if low_conf > 0:
-            print(f"\n⚠  {low_conf} pair(s) with LOW confidence - manual review recommended")
+            print(f"\n⚠️  {low_conf} pair(s) with LOW confidence - manual review recommended")
             for i, offset_data in enumerate(pair_offsets):
                 if offset_data[3] == "LOW":
                     print(f"  Pair {i+1}: {', '.join(offset_data[4])}")
+        
+        # End timing and print summary
+        timing_tracker.end_total()
+        timing_tracker.print_summary()
         
     except Exception as e:
         print(f"Error during stitching: {e}")
         import traceback
         traceback.print_exc()
+        
+        timing_tracker.end_total()
+        timing_tracker.print_summary()
     
     finally:
-        if not save_debug and debug_dir and debug_dir.exists():
+        if not keep_intermediates and debug_level != "high" and debug_dir and debug_dir.exists():
             try:
                 shutil.rmtree(debug_dir)
             except Exception as e:
@@ -872,16 +1244,27 @@ def sequential_stitch_images_optimized(images_dir: Path, output_dir: Path, axis:
 def main():
     """Main function"""
     parser = argparse.ArgumentParser(
-        description='OPTIMIZED Sequential Image Stitching Tool',
-        formatter_class=argparse.RawDescriptionHelpFormatter
+        description='OPTIMIZED Sequential Image Stitching Tool with Debug Levels',
+        formatter_class=argparse.RawDescriptionHelpFormatter,
+        epilog="""
+Debug Levels:
+  none     No debug output (fastest)
+  low      Export JSON alignment data only
+  medium   Export JSON + annotated final image (default)
+  high     Export JSON + annotated image + eval regions (slowest)
+
+The JSON file contains all alignment information needed to recreate
+the final stitched image from the original input images.
+        """
     )
     
     parser.add_argument('folder_path', nargs='?', default='.',
                        help='Path to directory containing images')
     parser.add_argument('axis', nargs='?', default='y', choices=['x', 'y', 'X', 'Y'],
                        help='Axis along which images vary')
-    parser.add_argument('--debug', action='store_true',
-                       help='Enable debug images')
+    parser.add_argument('--debug-level', choices=['none', 'low', 'medium', 'high'], 
+                       default='medium',
+                       help='Debug output level (default: medium)')
     parser.add_argument('--keep-intermediates', action='store_true',
                        help='Keep intermediate results')
     parser.add_argument('--refine', action='store_true',
@@ -928,12 +1311,13 @@ def main():
         print("=" * 80)
         print(f"Overlap range: {args.min_overlap:.1%} to {args.max_overlap:.1%}")
         print(f"Minimum acceptable score: {args.min_score:.2f}")
+        print(f"Debug level: {args.debug_level.upper()}")
         if args.rotate_180:
             print(f"180° rotation: ENABLED")
         
         sequential_stitch_images_optimized(
             images_dir, images_dir, axis, 
-            args.debug, args.keep_intermediates,
+            args.debug_level, args.keep_intermediates,
             args.refine, args.min_overlap, args.max_overlap, args.min_score,
             args.rotate_180
         )
