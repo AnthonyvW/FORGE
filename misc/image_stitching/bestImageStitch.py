@@ -470,6 +470,8 @@ def find_alignment_optimized(img1_path: Path, img2_path: Path,
                             max_overlap_fraction: float = 0.95,
                             min_acceptable_score: float = 0.7,
                             rotate_180: bool = False,
+                            rotate_90: bool = False,
+                            rotate_270: bool = False,
                             timing_tracker: Optional[TimingTracker] = None) -> Optional[Tuple[int, int, float, str, List[str]]]:
     """
     OPTIMIZED: Find alignment between two images with adaptive search and pyramid optimization
@@ -492,9 +494,16 @@ def find_alignment_optimized(img1_path: Path, img2_path: Path,
                 img1 = cv.rotate(img1, cv.ROTATE_90_COUNTERCLOCKWISE)
                 img2 = cv.rotate(img2, cv.ROTATE_90_COUNTERCLOCKWISE)
             
+            # Apply additional rotation if specified
             if rotate_180:
                 img1 = cv.rotate(img1, cv.ROTATE_180)
                 img2 = cv.rotate(img2, cv.ROTATE_180)
+            elif rotate_90:
+                img1 = cv.rotate(img1, cv.ROTATE_90_CLOCKWISE)
+                img2 = cv.rotate(img2, cv.ROTATE_90_CLOCKWISE)
+            elif rotate_270:
+                img1 = cv.rotate(img1, cv.ROTATE_90_COUNTERCLOCKWISE)
+                img2 = cv.rotate(img2, cv.ROTATE_90_COUNTERCLOCKWISE)
             
             h1, w1 = img1.shape[:2]
             h2, w2 = img2.shape[:2]
@@ -780,8 +789,8 @@ def generate_gap_report(sequence_gaps: List[Dict], image_paths: List[Path],
 
 
 def export_alignment_json(image_paths: list, offsets: list, output_dir: Path, 
-                          axis: str, rotate_180: bool, timing_summary: Dict[str, Any],
-                          metadata: Dict[str, Any]):
+                          axis: str, rotate_180: bool, rotate_90: bool, rotate_270: bool,
+                          timing_summary: Dict[str, Any], metadata: Dict[str, Any]):
     """
     Export alignment data to JSON format (LOW, MEDIUM, HIGH debug levels)
     
@@ -800,6 +809,8 @@ def export_alignment_json(image_paths: list, offsets: list, output_dir: Path,
         "parameters": {
             "axis": axis,
             "rotate_180": rotate_180,
+            "rotate_90": rotate_90,
+            "rotate_270": rotate_270,
             "num_images": len(image_paths)
         },
         "timing": timing_summary,
@@ -815,9 +826,8 @@ def export_alignment_json(image_paths: list, offsets: list, output_dir: Path,
             
             # After rotations
             if axis == 'y':
-                w, h = h, w  # Rotated 90Â° CCW
-            if rotate_180:
-                pass  # Size doesn't change with 180Â° rotation
+                w, h = h, w  # Rotated 90 CCW
+            # rotate_180, rotate_90, rotate_270 don't change dimensions
             
             # Resolve path to absolute normalized path (removes .. and .)
             normalized_path = str(img_path.resolve())
@@ -906,6 +916,7 @@ def export_alignment_json(image_paths: list, offsets: list, output_dir: Path,
 
 def create_final_stitched_image(image_paths: list, offsets: list, output_dir: Path, 
                                 axis: str, output_filename: str, rotate_180: bool = False,
+                                rotate_90: bool = False, rotate_270: bool = False,
                                 timing_tracker: Optional[TimingTracker] = None,
                                 save_uncorrected: bool = False):
     """
@@ -937,8 +948,13 @@ def create_final_stitched_image(image_paths: list, offsets: list, output_dir: Pa
         if axis == 'y':
             img = cv.rotate(img, cv.ROTATE_90_COUNTERCLOCKWISE)
         
+        # Apply additional rotation if specified
         if rotate_180:
             img = cv.rotate(img, cv.ROTATE_180)
+        elif rotate_90:
+            img = cv.rotate(img, cv.ROTATE_90_CLOCKWISE)
+        elif rotate_270:
+            img = cv.rotate(img, cv.ROTATE_90_COUNTERCLOCKWISE)
         
         images.append(img)
         print(f"  Loaded: {img_path.name} -> {img.shape[1]}x{img.shape[0]}")
@@ -1086,6 +1102,8 @@ def sequential_stitch_images_optimized(images_dir: Path, output_dir: Path, axis:
                                       max_overlap_fraction: float = 0.95,
                                       min_acceptable_score: float = 0.7,
                                       rotate_180: bool = False,
+                                      rotate_90: bool = False,
+                                      rotate_270: bool = False,
                                       output_name: Optional[str] = None,
                                       max_sequence_gap: int = 2):
     """
@@ -1230,6 +1248,8 @@ def sequential_stitch_images_optimized(images_dir: Path, output_dir: Path, axis:
                     max_overlap_fraction=max_overlap_fraction,
                     min_acceptable_score=min_acceptable_score,
                     rotate_180=rotate_180,
+                    rotate_90=rotate_90,
+                    rotate_270=rotate_270,
                     timing_tracker=timing_tracker
                 )
                 
@@ -1254,7 +1274,8 @@ def sequential_stitch_images_optimized(images_dir: Path, output_dir: Path, axis:
                         
                         canvas, image_positions, min_y, total_width, total_height = create_final_stitched_image(
                             sorted_images[:i+1], pair_offsets, output_dir, axis,
-                            final_filename, rotate_180, timing_tracker,
+                            final_filename, rotate_180, rotate_90, rotate_270,
+                            timing_tracker,
                             save_uncorrected=(debug_level in ["medium", "high"])
                         )
                         
@@ -1267,7 +1288,8 @@ def sequential_stitch_images_optimized(images_dir: Path, output_dir: Path, axis:
                             }
                             export_alignment_json(
                                 sorted_images[:i+1], pair_offsets, output_dir,
-                                axis, rotate_180, timing_tracker.get_summary(), metadata
+                                axis, rotate_180, rotate_90, rotate_270,
+                                timing_tracker.get_summary(), metadata
                             )
                     
                     timing_tracker.end_total()
@@ -1311,7 +1333,7 @@ def sequential_stitch_images_optimized(images_dir: Path, output_dir: Path, axis:
         
         canvas, image_positions, min_y, total_width, total_height = create_final_stitched_image(
             sorted_images, pair_offsets, output_dir, axis, final_filename, 
-            rotate_180, timing_tracker,
+            rotate_180, rotate_90, rotate_270, timing_tracker,
             save_uncorrected=(debug_level in ["medium", "high"])
         )
         
@@ -1332,7 +1354,8 @@ def sequential_stitch_images_optimized(images_dir: Path, output_dir: Path, axis:
                 }
                 export_alignment_json(
                     sorted_images, pair_offsets, output_dir,
-                    axis, rotate_180, timing_tracker.get_summary(), metadata
+                    axis, rotate_180, rotate_90, rotate_270,
+                    timing_tracker.get_summary(), metadata
                 )
         
         if debug_level in ["medium", "high"]:
@@ -1344,8 +1367,13 @@ def sequential_stitch_images_optimized(images_dir: Path, output_dir: Path, axis:
                     img = cv.imread(str(img_path))
                     if axis == 'y':
                         img = cv.rotate(img, cv.ROTATE_90_COUNTERCLOCKWISE)
+                    # Apply additional rotation if specified
                     if rotate_180:
                         img = cv.rotate(img, cv.ROTATE_180)
+                    elif rotate_90:
+                        img = cv.rotate(img, cv.ROTATE_90_CLOCKWISE)
+                    elif rotate_270:
+                        img = cv.rotate(img, cv.ROTATE_90_COUNTERCLOCKWISE)
                     images.append(img)
                 
                 create_debug_visualization(
@@ -1439,6 +1467,10 @@ the final stitched image from the original input images.
                        help='Minimum acceptable alignment score (default: 0.7)')
     parser.add_argument('--rotate-180', action='store_true',
                        help='Rotate images 180 degrees before stitching (useful for reversed scan direction)')
+    parser.add_argument('--rotate-90', action='store_true',
+                       help='Rotate images 90 degrees clockwise before stitching')
+    parser.add_argument('--rotate-270', action='store_true',
+                       help='Rotate images 270 degrees clockwise (90 counter-clockwise) before stitching')
     
     try:
         args = parser.parse_args()
@@ -1468,6 +1500,12 @@ the final stitched image from the original input images.
             print(f"Error: --min-score must be between 0 and 1, got {args.min_score}")
             return 1
         
+        # Validate rotation arguments (only one at a time)
+        rotation_flags = sum([args.rotate_180, args.rotate_90, args.rotate_270])
+        if rotation_flags > 1:
+            print(f"Error: Only one rotation flag can be used at a time")
+            return 1
+        
         print("=" * 80)
         print("OPTIMIZED SEQUENTIAL IMAGE STITCHING")
         print("=" * 80)
@@ -1475,13 +1513,18 @@ the final stitched image from the original input images.
         print(f"Minimum acceptable score: {args.min_score:.2f}")
         print(f"Debug level: {args.debug_level.upper()}")
         if args.rotate_180:
-            print(f"180Â° rotation: ENABLED")
+            print(f"Rotation: 180 degrees")
+        elif args.rotate_90:
+            print(f"Rotation: 90 degrees clockwise")
+        elif args.rotate_270:
+            print(f"Rotation: 270 degrees clockwise (90 CCW)")
         
         sequential_stitch_images_optimized(
             images_dir, images_dir, axis, 
             args.debug_level, args.keep_intermediates,
             args.min_overlap, args.max_overlap, args.min_score,
-            args.rotate_180, args.output_name, args.max_sequence_gap
+            args.rotate_180, args.rotate_90, args.rotate_270,
+            args.output_name, args.max_sequence_gap
         )
         
         return 0
