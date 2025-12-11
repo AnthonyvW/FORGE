@@ -1160,7 +1160,12 @@ def sequential_stitch_images_optimized(images_dir: Path, output_dir: Path, axis:
                 
                 if coord_match:
                     coord_pos = int(coord_match.group(1))
-                    images_with_coords.append((coord_pos, img_path))
+                    
+                    # Extract F number if present
+                    f_match = re.search(r'F(\d+)', filename, re.IGNORECASE)
+                    f_number = int(f_match.group(1)) if f_match else 0
+                    
+                    images_with_coords.append((coord_pos, f_number, img_path))
             except (IndexError, ValueError):
                 continue
         
@@ -1168,14 +1173,38 @@ def sequential_stitch_images_optimized(images_dir: Path, output_dir: Path, axis:
             print(f"Need at least 2 images, found {len(images_with_coords)}")
             return
         
-        images_with_coords.sort(key=lambda x: x[0])
-        sorted_images = [img_path for _, img_path in images_with_coords]
+        # Filter duplicates: keep highest F number for each coordinate
+        from collections import defaultdict
+        coord_groups = defaultdict(list)
+        for coord_pos, f_number, img_path in images_with_coords:
+            coord_groups[coord_pos].append((f_number, img_path))
+        
+        # Select image with highest F number for each coordinate
+        filtered_images = []
+        duplicates_removed = 0
+        for coord_pos in sorted(coord_groups.keys()):
+            images_at_coord = coord_groups[coord_pos]
+            if len(images_at_coord) > 1:
+                duplicates_removed += len(images_at_coord) - 1
+                # Sort by F number descending and take the first (highest)
+                images_at_coord.sort(key=lambda x: x[0], reverse=True)
+                selected = images_at_coord[0]
+                rejected = images_at_coord[1:]
+                print(f"  {coord_letter}{coord_pos}: Found {len(images_at_coord)} images, selected F{selected[0]} (rejected: {', '.join(f'F{f}' for f, _ in rejected)})")
+            else:
+                selected = images_at_coord[0]
+            filtered_images.append((coord_pos, selected[1]))
+        
+        if duplicates_removed > 0:
+            print(f"\nRemoved {duplicates_removed} duplicate(s) (kept highest F number for each coordinate)")
+        
+        sorted_images = [img_path for _, img_path in filtered_images]
     
     # Check for gaps in sequence
     sequence_gaps = []
-    for i in range(len(images_with_coords) - 1):
-        current_coord = images_with_coords[i][0]
-        next_coord = images_with_coords[i + 1][0]
+    for i in range(len(filtered_images) - 1):
+        current_coord = filtered_images[i][0]
+        next_coord = filtered_images[i + 1][0]
         gap = next_coord - current_coord - 1
         if gap > 0:
             sequence_gaps.append({
@@ -1205,7 +1234,7 @@ def sequential_stitch_images_optimized(images_dir: Path, output_dir: Path, axis:
             return
     
     print(f"\nImages sorted by {coord_letter} coordinate:")
-    for i, (coord_pos, img_path) in enumerate(images_with_coords):
+    for i, (coord_pos, img_path) in enumerate(filtered_images):
         print(f"  [{i}] {coord_letter}{coord_pos}: {img_path.name}")
     
     # Setup directories
@@ -1451,7 +1480,7 @@ the final stitched image from the original input images.
     parser.add_argument('axis', nargs='?', default='y', choices=['x', 'y', 'X', 'Y'],
                        help='Axis along which images vary')
     parser.add_argument('--debug-level', choices=['none', 'low', 'medium', 'high'], 
-                       default='medium',
+                       default='low',
                        help='Debug output level (default: medium)')
     parser.add_argument('--keep-intermediates', action='store_true',
                        help='Keep intermediate results')

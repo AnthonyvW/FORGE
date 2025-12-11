@@ -1,6 +1,5 @@
 # Forge - Low Cost Gigapixel Scanner
 
-![Pre-release in progress](https://img.shields.io/badge/Pre--release-in%20progress-yellow)
 [![Windows](https://custom-icon-badges.demolab.com/badge/Windows-0078D6?logo=windows11&logoColor=white)](#)
 [![Linux](https://img.shields.io/badge/Linux-FCC624?logo=linux&logoColor=black)](#)
 ![Python](https://img.shields.io/badge/Python-3.12-blue?logo=python&logoColor=white)
