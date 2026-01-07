@@ -1,10 +1,10 @@
 import time
 from typing import Callable, Optional, List, Tuple
 import math 
+from pathlib import Path
 
 from .models import Position, FocusScore
 from .base_controller import BasePrinterController
-from image_processing.analyzers import ImageAnalyzer
 from image_processing.machine_vision import MachineVision
 
 from UI.list_frame import ListFrame
@@ -15,8 +15,16 @@ from UI.input.text_field import TextField
 from forgeConfig import (
     ForgeSettings,
 )
+from .automation_config import (
+    AutomationSettings,
+    AutomationSettingsManager,
+    ACTIVE_FILENAME as AUTO_ACTIVE_FILENAME,
+    DEFAULT_FILENAME as AUTO_DEFAULT_FILENAME,
+)
 
 from .base_controller import command
+from camera.image_name_formatter import ImageNameFormatter
+from .automation_config import AutomationSettings, AutomationSettingsManager
 
 
 def _scan_bounds_plotter(proc_queue, y_min: float, y_max: float):
@@ -167,13 +175,38 @@ _AF_ZFLOOR = 0        # 0.00 mm -> 0 ticks
 
 class AutomatedPrinter(BasePrinterController):
     """Extended printer controller with automation capabilities"""
+    AUTOMATION_CONFIG_SUBDIR = ""
     def __init__(self, forgeConfig: ForgeSettings, camera):
         super().__init__(forgeConfig)
+
+        AutomationSettingsManager.scope_dir(self.AUTOMATION_CONFIG_SUBDIR)
+        self.automation_settings: AutomationSettings = AutomationSettingsManager.load(self.AUTOMATION_CONFIG_SUBDIR)
         
         # Initialize printer configurations
         self.camera = camera
-        self.machine_vision = MachineVision(camera, tile_size=48, stride=48, top_percent=0.15, min_score=50.0, soft_min_score=35.0)
+        s = self.automation_settings
+        self.machine_vision = MachineVision(
+            camera,
+            tile_size=s.tile_size,
+            stride=s.stride,
+            top_percent=s.top_percent,
+            min_score=s.min_score,
+            soft_min_score=s.soft_min_score,
+            inset_left_pct=s.inset_left_pct,
+            inset_top_pct=s.inset_top_pct,
+            inset_right_pct=s.inset_right_pct,
+            inset_bottom_pct=s.inset_bottom_pct,
+            scale_factor= s.scale_factor
+        )
         self.is_automated = False
+        
+        self.image_formatter = ImageNameFormatter(
+            controller=self,
+            pad_positions=self.automation_settings.zero_pad,
+            position_decimals=0,
+            delimiter=self.automation_settings.delimiter,
+            template=self.automation_settings.image_name_template,
+        )
 
         self.sample_list: ListFrame | None = None
         self.current_sample_index = 1
@@ -187,6 +220,113 @@ class AutomatedPrinter(BasePrinterController):
         
         # Automation Routines
         self.register_handler("SCAN_SAMPLE_BOUNDS", self.scan_sample_bounds)
+
+    def get_automation_config_dir(self) -> Path:
+        """Return the resolved config directory Path for automation settings."""
+        scope = self.AUTOMATION_CONFIG_SUBDIR
+        return AutomationSettingsManager.scope_dir(scope)
+
+    def load_and_apply_automation_settings(self, filename: str = AUTO_ACTIVE_FILENAME):
+        """
+        Load automation settings from YAML and apply to live objects (MachineVision, ImageNameFormatter).
+        If the active file is missing, fall back to default_settings.yaml, else built-ins.
+        """
+        scope = self.AUTOMATION_CONFIG_SUBDIR
+        loaded = AutomationSettingsManager.load(scope)
+        self.automation_settings = loaded
+        self._apply_automation_settings(self.automation_settings)
+
+    def _apply_automation_settings(self, settings: AutomationSettings):
+        """
+        Apply settings to runtime objects. Reuse existing instances if present; otherwise create them.
+        This mirrors BaseCamera.apply_settings(...) calling a hardware hook.
+        """
+        mv = self.machine_vision
+        mv.tile_size       = settings.tile_size
+        mv.stride          = settings.stride
+        mv.top_percent     = settings.top_percent
+        mv.min_score       = settings.min_score
+        mv.soft_min_score  = settings.soft_min_score
+        mv.edge_left_pct   = settings.inset_left_pct
+        mv.edge_top_pct    = settings.inset_top_pct
+        mv.edge_right_pct  = settings.inset_right_pct
+        mv.edge_bottom_pct = settings.inset_bottom_pct
+        mv.scale_factor    = settings.scale_factor
+
+        self.image_formatter.set_template(settings.image_name_template)
+
+    def save_automation_settings(self):
+        """
+        Persist current automation settings to YAML in the scoped folder.
+        Old version is backed up; most recent N backups are kept (per manager policy).
+        """
+        scope = self.AUTOMATION_CONFIG_SUBDIR
+        AutomationSettingsManager.save(scope, self.automation_settings)
+
+    def set_automation_settings(
+        self,
+        settings: AutomationSettings,
+        persist: bool = False,
+    ):
+        """
+        Replace entire automation settings object, apply immediately, optionally persist to disk.
+        """
+        self.automation_settings = settings
+        self._apply_automation_settings(self.automation_settings)
+        if persist:
+            self.save_automation_settings()
+
+    def update_automation_settings(
+        self,
+        persist: bool = False,
+        **updates,
+    ):
+        """
+        Update one or more attributes on the current automation settings, apply immediately,
+        and optionally persist to disk. Unknown keys raise AttributeError (avoids silent typos).
+        """
+        #self.load_and_apply_automation_settings(filename=filename)
+
+        for k, v in updates.items():
+            if hasattr(self.automation_settings, k):
+                setattr(self.automation_settings, k, v)
+            else:
+                raise AttributeError(f"Unknown automation setting '{k}'")
+
+        self._apply_automation_settings(self.automation_settings)
+        if persist:
+            self.save_automation_settings()
+
+    # ----- Defaults helpers (parity with camera) -----
+    def get_automation_default_config_path(self) -> Path:
+        return self.get_automation_config_dir() / AUTO_DEFAULT_FILENAME
+
+    def write_default_automation_settings(self, settings: AutomationSettings | None = None) -> Path:
+        """Write default_settings.yaml for automation (or built-ins if None)."""
+        scope = self.AUTOMATION_CONFIG_SUBDIR
+        return AutomationSettingsManager.write_defaults(scope, settings)
+
+    def load_default_automation_settings(self) -> AutomationSettings:
+        """
+        Load defaults from default_settings.yaml (or built-ins if missing),
+        apply but do NOT persist to active.
+        """
+        scope = self.AUTOMATION_CONFIG_SUBDIR
+        defaults = AutomationSettingsManager.load_defaults(scope)
+        self.set_automation_settings(defaults, persist=False)
+        return defaults
+
+    def restore_default_automation_settings(self, persist: bool = True) -> AutomationSettings:
+        """
+        Restore defaults into the active automation file (backup the current one),
+        apply, and optionally persist.
+        """
+        scope = self.AUTOMATION_CONFIG_SUBDIR
+        restored = AutomationSettingsManager.restore_defaults_into_active(scope)
+        self.set_automation_settings(restored, persist=False)
+        if persist:
+            self.save_automation_settings()
+        return restored
 
 
     def get_sample_position(self, index: int) -> Position:
@@ -244,11 +384,11 @@ class AutomatedPrinter(BasePrinterController):
         self.camera.capture_image()
         while self.camera.is_taking_image:
             time.sleep(0.01)
-        img = self.camera.get_last_frame(prefer="still", wait_for_still=False)
-        if img is None or ImageAnalyzer.is_black(img):
+        if self.machine_vision.is_black(source="still"):
             return float("-inf")
         try:
-            res = ImageAnalyzer.analyze_focus(img)
+            img = self.camera.get_last_frame(prefer="still", wait_for_still=False)
+            res = self.machine_vision.analyze_focus()
             return float(getattr(res, "focus_score", float("-inf")))
         except Exception:
             return float("-inf")
@@ -257,11 +397,11 @@ class AutomatedPrinter(BasePrinterController):
         """Score the live preview/stream (no still capture). Much faster."""
         self._exec_gcode("M400", wait=True)
         time.sleep(0.05)  # tiny settle is enough for stream
-        img = self.camera.get_last_frame(prefer="stream", wait_for_still=False)
-        if img is None or ImageAnalyzer.is_black(img):
+        if self.machine_vision.is_black(source="stream"):
             return float("-inf")
         try:
-            res = ImageAnalyzer.analyze_focus(img)
+            img = self.camera.get_last_frame(prefer="stream", wait_for_still=False)
+            res = self.machine_vision.analyze_focus()
             return float(getattr(res, "focus_score", float("-inf")))
         except Exception:
             return float("-inf")
@@ -401,24 +541,24 @@ class AutomatedPrinter(BasePrinterController):
             self.camera.capture_image()
             while self.camera.is_taking_image:
                 time.sleep(0.01)
-            img = self.camera.get_last_frame(prefer="still", wait_for_still=False)
-            if img is None or ImageAnalyzer.is_black(img):
+            if self.machine_vision.is_black(source="still"):
                 return float("-inf")
             try:
-                res = ImageAnalyzer.analyze_focus(img)
-                return float(getattr(res, "focus_score", float("-inf")))
+                img = self.camera.get_last_frame(prefer="still", wait_for_still=False)
+                res = self.machine_vision.analyze_focus()
+                return float(res.focus_score)
             except Exception:
                 return float("-inf")
 
         def score_preview_lambda(_z, _c, _b) -> float:
             self._exec_gcode("M400", wait=True)
             if SETTLE_PREVIEW_S > 0: time.sleep(SETTLE_PREVIEW_S)
-            img = self.camera.get_last_frame(prefer="stream", wait_for_still=False)
-            if img is None or ImageAnalyzer.is_black(img):
+            if self.machine_vision.is_black(source="stream"):
                 return float("-inf")
             try:
-                res = ImageAnalyzer.analyze_focus(img)
-                return float(getattr(res, "focus_score", float("-inf")))
+                img = self.camera.get_last_frame(prefer="stream", wait_for_still=False)
+                res = self.machine_vision.analyze_focus()
+                return float(res.focus_score)
             except Exception:
                 return float("-inf")
 
@@ -654,19 +794,19 @@ class AutomatedPrinter(BasePrinterController):
             self.camera.capture_image()
             while self.camera.is_taking_image:
                 time.sleep(0.01)
-            img = self.camera.get_last_frame(prefer="still", wait_for_still=False)
-            if img is None or ImageAnalyzer.is_black(img):
+            if self.machine_vision.is_black(source="still"):
                 return float("-inf")
-            res = ImageAnalyzer.analyze_focus(img)
+            img = self.camera.get_last_frame(prefer="still", wait_for_still=False)
+            res = self.machine_vision.analyze_focus()
             return float(res.focus_score)
 
         def score_preview() -> float:
             self._exec_gcode("M400", wait=True)
             if SETTLE_PREVIEW_S > 0: time.sleep(SETTLE_PREVIEW_S)
-            img = self.camera.get_last_frame(prefer="stream", wait_for_still=False)
-            if img is None or ImageAnalyzer.is_black(img):
+            if self.machine_vision.is_black(source="stream"):
                 return float("-inf")
-            res = ImageAnalyzer.analyze_focus(img)
+            img = self.camera.get_last_frame(prefer="stream", wait_for_still=False)
+            res = self.machine_vision.analyze_focus()
             return float(res.focus_score)
 
         def score_at(zt: int, cache: dict, scorer) -> float:
@@ -926,16 +1066,10 @@ class AutomatedPrinter(BasePrinterController):
                     # _af_score_still() captures a still internally, so we can save that same image.
                     focus_score = self._af_score_still()
                     try:
-                        # Build filename from current printer position (in mm, rounded to integers)
-                        pos = self.get_position()
-                        x_mm = int(round(pos.x / 100.0))
-                        y_mm = int(round(pos.y / 100.0))
-                        z_mm = int(round(pos.z / 100.0))
-                        f_int = int(round(focus_score)) if math.isfinite(focus_score) else -1
-                        filename = f"X{x_mm} Y{y_mm} Z{z_mm} F{f_int}"
-
+                        
                         # Save into the sample folder
-                        self.camera.save_image(False, sample_folder, filename)
+                        filename = self.image_formatter.get_formatted_string(focus_score=focus_score)
+                        self.camera.save_image(sample_folder, filename)
                         report(f"[SCAN_SAMPLE_BOUNDS] Saved image: {sample_folder}/{filename}", True)
                     except Exception as e_save:
                         report(f"[SCAN_SAMPLE_BOUNDS] Image save failed: {e_save}", True)

@@ -1,4 +1,5 @@
 import numpy as np
+import math
 import cv2
 from dataclasses import dataclass
 from typing import List, Tuple, Dict, Optional
@@ -31,51 +32,77 @@ class ImageAnalyzer:
     def analyze_focus(
         image: np.ndarray,
         kernel_size: int = 7,
-        threshold: float = 100
+        edge_left_pct: float = 0.0,
+        edge_right_pct: float = 0.0,
+        edge_top_pct: float = 0.0,
+        edge_bottom_pct: float = 0.0,
+        scale_factor: float = 1.0,
     ) -> FocusAnalysisResult:
         """
-        Analyze focus quality across image quadrants.
-        
+        Analyze focus quality across image quadrants, ignoring edges by percentage.
+
         Args:
             image: numpy array of the image
             kernel_size: Size of the Laplacian kernel
-            threshold: Threshold for determining if quadrant is in focus
-            
+            edge_left_pct: Fraction (0–1) of width to ignore from left edge
+            edge_right_pct: Fraction (0–1) of width to ignore from right edge
+            edge_top_pct: Fraction (0–1) of height to ignore from top edge
+            edge_bottom_pct: Fraction (0–1) of height to ignore from bottom edge
+            scale_factor: optional down/up scale before scoring (<=1.0 recommended)
+
         Returns:
             FocusAnalysisResult containing analysis details
         """
         height, width = image.shape[:2]
+
+        # --- Crop edges based on percentages ---
+        x_start = int(width * edge_left_pct)
+        x_end = int(width * (1.0 - edge_right_pct))
+        y_start = int(height * edge_top_pct)
+        y_end = int(height * (1.0 - edge_bottom_pct))
+
+        # Ensure valid crop
+        if x_end <= x_start or y_end <= y_start:
+            raise ValueError("Invalid edge crop percentages — resulting region is empty.")
+
+        cropped = image[y_start:y_end, x_start:x_end]
+
+        sf = float(scale_factor) if scale_factor is not None else 1.0
+        if sf <= 0:
+            sf = 1.0
+        if not math.isclose(sf, 1.0):
+            interp = cv2.INTER_AREA if sf < 1.0 else cv2.INTER_LINEAR
+            cropped = cv2.resize(cropped, dsize=None, fx=sf, fy=sf, interpolation=interp)
+
+        height, width = cropped.shape[:2]
         mid_h, mid_w = height // 2, width // 2
-        
-        # Define quadrants
+
+        # Define quadrants within the cropped region
         quadrants = {
-            'Top Left': image[0:mid_h, 0:mid_w],
-            'Top Right': image[0:mid_h, mid_w:],
-            'Bottom Left': image[mid_h:, 0:mid_w],
-            'Bottom Right': image[mid_h:, mid_w:]
+            'Top Left': cropped[0:mid_h, 0:mid_w],
+            'Top Right': cropped[0:mid_h, mid_w:],
+            'Bottom Left': cropped[mid_h:, 0:mid_w],
+            'Bottom Right': cropped[mid_h:, mid_w:]
         }
-        
+
         quadrant_scores = {}
-        
         for name, quad in quadrants.items():
-            # Convert to grayscale if needed
             if len(quad.shape) == 3:
                 quad = cv2.cvtColor(quad, cv2.COLOR_BGR2GRAY)
-                
+
             blurred = cv2.GaussianBlur(quad, (3, 3), 0)
             laplacian = cv2.Laplacian(blurred, cv2.CV_64F, ksize=kernel_size)
             abs_laplacian = np.absolute(laplacian)
-            
-            # Calculate focus metrics
+
             variance = np.var(abs_laplacian)
             percentile_90 = np.percentile(abs_laplacian, 90)
             focus_score = (variance + percentile_90) / 2
-            
+
             quadrant_scores[name] = focus_score
-        
+
         best_quadrant = max(quadrant_scores.items(), key=lambda x: x[1])
         overall_score = sum(quadrant_scores.values()) / len(quadrant_scores)
-        
+
         return FocusAnalysisResult(
             focus_score=overall_score,
             quadrant_scores=quadrant_scores,
@@ -99,50 +126,66 @@ def find_focused_areas(
     laplacian_ksize: int = 3,
     blur_ksize: int = 3,
     top_percent: float = 0.15,
-    min_score: Optional[float] = None,       # absolute threshold (hard)
-    soft_min_score: Optional[float] = None,  # soft band lower bound
+    min_score: Optional[float] = None,
+    soft_min_score: Optional[float] = None,
+    *,
+    scale_factor: float = 1.0,
 ) -> List[FocusTile]:
     """
     Return rectangles where the image is relatively 'in focus' using a Laplacian-based score.
-
-    Selection priority:
-      1) If min_score (and optionally soft_min_score) provided:
-         - 'hard' band: score >= min_score
-         - 'soft' band: soft_min_score <= score < min_score (if soft_min_score is not None)
-      2) Else: keep top `top_percent` by score (band='hard').
-
-    Notes:
-      - If soft_min_score > min_score, it will be clamped down to min_score.
+    If scale_factor != 1.0, the image is analyzed at that scale, but returned tile rects
+    are mapped back to ORIGINAL image coordinates.
     """
     if image is None or image.size == 0:
         return []
 
-    # grayscale + denoise
     gray = image if image.ndim == 2 else cv2.cvtColor(image, cv2.COLOR_BGR2GRAY)
     if blur_ksize and blur_ksize > 0:
         gray = cv2.GaussianBlur(gray, (blur_ksize, blur_ksize), 0)
 
-    H, W = gray.shape[:2]
+    sf = float(scale_factor) if scale_factor is not None else 1.0
+    if sf <= 0:
+        sf = 1.0
+
+    # Work image and local tile geometry (in the scaled space)
+    if not math.isclose(sf, 1.0):
+        interp = cv2.INTER_AREA if sf < 1.0 else cv2.INTER_LINEAR
+        gray_work = cv2.resize(gray, dsize=None, fx=sf, fy=sf, interpolation=interp)
+        local_tile = max(1, int(round(tile_size * sf)))
+        local_stride = max(1, int(round(stride * sf)))
+        inv_sf = 1.0 / sf
+    else:
+        gray_work = gray
+        local_tile = int(tile_size)
+        local_stride = int(stride)
+        inv_sf = 1.0
+
+    H, W = gray_work.shape[:2]
     tiles: List[FocusTile] = []
-    for y in range(0, max(1, H - tile_size + 1), max(1, stride)):
-        for x in range(0, max(1, W - tile_size + 1), max(1, stride)):
-            roi = gray[y:y + tile_size, x:x + tile_size]
+    for y in range(0, max(1, H - local_tile + 1), max(1, local_stride)):
+        for x in range(0, max(1, W - local_tile + 1), max(1, local_stride)):
+            roi = gray_work[y:y + local_tile, x:x + local_tile]
             lap = cv2.Laplacian(roi, cv2.CV_64F, ksize=laplacian_ksize)
             abs_lap = np.abs(lap)
             variance = float(np.var(abs_lap))
             pct90 = float(np.percentile(abs_lap, 90))
             score = 0.5 * (variance + pct90)
-            tiles.append(FocusTile(x=x, y=y, w=tile_size, h=tile_size, score=score))
+
+            # Map rect back to ORIGINAL coords
+            tiles.append(FocusTile(
+                x=int(round(x * inv_sf)),
+                y=int(round(y * inv_sf)),
+                w=int(round(local_tile * inv_sf)),
+                h=int(round(local_tile * inv_sf)),
+                score=score
+            ))
 
     if not tiles:
         return []
 
-    # --- Selection logic ---
     if min_score is not None:
-        # clamp soft_min_score if provided
         if soft_min_score is not None and soft_min_score > min_score:
             soft_min_score = min_score
-
         selected: List[FocusTile] = []
         for t in tiles:
             if t.score >= min_score:
@@ -151,12 +194,9 @@ def find_focused_areas(
             elif soft_min_score is not None and t.score >= soft_min_score:
                 t.band = "soft"
                 selected.append(t)
-
-        # Sort so highest scores draw last (on top)
         selected.sort(key=lambda t: t.score, reverse=True)
         return selected
 
-    # Fallback: top-percent mode
     tiles.sort(key=lambda t: t.score, reverse=True)
     keep = max(1, int(round(len(tiles) * top_percent)))
     for i in range(keep):

@@ -26,6 +26,9 @@ class Section(Frame):
         self.collapsible = collapsible
         self.collapsed = False
 
+        self._header_buttons: list[Frame] = []
+        self.header_action_gap: int = 0
+
         body_padding = kwargs.pop("padding", (0, 0, 0, 0))
 
         super().__init__(
@@ -75,7 +78,7 @@ class Section(Frame):
             self.toggle_btn = Button(
                 self.toggle_collapse,
                 x=0, y=0,
-                width=header_height, height=header_height,
+                width=(header_height / 3) * 2, height=header_height,
                 text="-",
                 parent=self.header,
                 x_align="right", y_align="top",
@@ -107,6 +110,30 @@ class Section(Frame):
         )
 
         self._initializing = False
+        self._layout_header_actions()
+
+    def _layout_header_actions(self):
+        """
+        Packs the collapse toggle (if any) at the far right, then the custom
+        header buttons to its left with a fixed gap.
+        """
+        offset = 0
+
+        # Keep collapse toggle pinned at the far right
+        if self.toggle_btn is not None:
+            self.toggle_btn.x_align = "right"
+            self.toggle_btn.y_align = "top"
+            self.toggle_btn.x = 0  # zero offset from the right edge
+            self.toggle_btn.y = 0  # it already fills header height
+            offset = self.toggle_btn.width + self.header_action_gap
+
+        # Pack custom buttons right-to-left in insertion order
+        for btn in self._header_buttons:
+            # x is an offset from the right edge because x_align="right"
+            btn.x = offset
+            # re-center vertically in case header height changed
+            btn.y = max(0, (self.header.height - btn.height) // 2)
+            offset += btn.width + self.header_action_gap
 
     # --- public helper (optional) ---
     def set_collapsed(self, value: bool):
@@ -140,6 +167,36 @@ class Section(Frame):
             # Unhide the body subtree
             self._for_each_in_body(lambda f: f.remove_hidden_reason("COLLAPSED"))
 
+        self._layout_header_actions()
+
+    def add_header_button(self, button: Frame):
+        """
+        Add a control to the header, aligned to the right. Items are packed
+        right-to-left with self.header_action_gap spacing.
+        """
+        # Ensure the button lives under the header
+        button.parent = self.header
+        # Horizontal alignment from the right, we'll position via x offset
+        button.x_align = "right"
+        # Vertically center in the header
+        button.y_align = "top"
+        button.y = max(0, (self.header.height - button.height) // 2)
+
+        # Make sure it's tracked and rendered above header background
+        if button not in self._header_buttons:
+            self._header_buttons.append(button)
+
+        self._layout_header_actions()
+
+    def add_to_header(self, child):
+        # Keep existing API working; route through right-side packer if it's a button-like thing
+        # Otherwise, just drop it in at (0,0) and let caller manage it.
+        try:
+            return self.add_header_button(child)
+        except Exception:
+            self.header.add_child(child)
+
+
     def toggle_collapse(self):
         self.set_collapsed(not self.collapsed)
 
@@ -156,7 +213,10 @@ class Section(Frame):
             stack.extend(node.children)
 
     def add_to_header(self, child):
-        self.header.add_child(child)
+        try:
+            return self.add_header_button(child)
+        except Exception:
+            self.header.add_child(child)
 
     def get_content_geometry(self):
         # Use the section's outer rect (no header offset). Padding lives on body now.
@@ -176,6 +236,7 @@ class Section(Frame):
         # With the section height now clamped to header.height when collapsed,
         # this naturally becomes 0. Otherwise, it's the remaining space.
         self.body.height = max(0, sec_h - self.header.height)
+        self._layout_header_actions()
 
     def draw(self, surface: pygame.Surface) -> None:
         self._layout()

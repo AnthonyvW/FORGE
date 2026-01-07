@@ -5,7 +5,7 @@ from typing import Iterable, Set, Tuple, Dict, Optional, Sequence
 import numpy as np
 import pygame
 
-from image_processing.analyzers import find_focused_areas
+from image_processing.analyzers import find_focused_areas, ImageAnalyzer, FocusAnalysisResult
 
 
 class MachineVision:
@@ -28,6 +28,11 @@ class MachineVision:
         top_percent: float = 0.15,
         min_score: float | None = None,
         soft_min_score: float | None = None,
+        inset_left_pct: float = 0.10,
+        inset_top_pct: float = 0.0,
+        inset_right_pct: float = 0.10,
+        inset_bottom_pct: float = 0.0,
+        scale_factor: float = 1.0,
     ):
         self.camera = camera
 
@@ -38,8 +43,19 @@ class MachineVision:
         self.min_score = min_score
         self.soft_min_score = soft_min_score
 
+        self._scale_factor: float = float(scale_factor) if scale_factor is not None else 1.0
+        if self._scale_factor <= 0:
+            self._scale_factor = 1.0
+
         # Hot-pixel / invalid tiles as grid indices
         self._invalid_maps: Dict[Tuple[int, int], Set[Tuple[int, int]]] = {}
+
+        # Edge distances as percentages of the frame (0.0..1.0)
+        self._edge_left_pct: float = inset_left_pct
+        self._edge_right_pct: float = inset_right_pct
+        self._edge_top_pct: float = inset_top_pct
+        self._edge_bottom_pct: float = inset_bottom_pct
+
 
     # ---------------- internal helpers ----------------
     def _key_for_shape(self, arr: np.ndarray | None) -> Optional[Tuple[int, int]]:
@@ -58,6 +74,95 @@ class MachineVision:
         return None
 
     # --------------- public properties ---------------
+    @property
+    def scale_factor(self) -> float:
+        return self._scale_factor
+
+    @scale_factor.setter
+    def scale_factor(self, v: float) -> None:
+        try:
+            f = float(v)
+        except Exception:
+            f = 1.0
+        # Recommend <= 1.0 (downscale). Allow >1.0 but clamp to a sane range.
+        if f <= 0:
+            f = 1.0
+        self._scale_factor = f
+
+    @staticmethod
+    def _clamp01(v: float) -> float:
+        try:
+            vf = float(v)
+        except Exception:
+            return 0.0
+        if vf < 0.0: return 0.0
+        if vf > 1.0: return 1.0
+        return vf
+
+    # Left
+    @property
+    def edge_left_pct(self) -> float:
+        return self._edge_left_pct
+    @edge_left_pct.setter
+    def edge_left_pct(self, v: float) -> None:
+        self._edge_left_pct = self._clamp01(v)
+
+    # Right
+    @property
+    def edge_right_pct(self) -> float:
+        return self._edge_right_pct
+    @edge_right_pct.setter
+    def edge_right_pct(self, v: float) -> None:
+        self._edge_right_pct = self._clamp01(v)
+
+    # Top
+    @property
+    def edge_top_pct(self) -> float:
+        return self._edge_top_pct
+    @edge_top_pct.setter
+    def edge_top_pct(self, v: float) -> None:
+        self._edge_top_pct = self._clamp01(v)
+
+    # Bottom
+    @property
+    def edge_bottom_pct(self) -> float:
+        return self._edge_bottom_pct
+    @edge_bottom_pct.setter
+    def edge_bottom_pct(self, v: float) -> None:
+        self._edge_bottom_pct = self._clamp01(v)
+
+    def set_edge_margins(
+        self,
+        *,
+        left: float | None = None,
+        right: float | None = None,
+        top: float | None = None,
+        bottom: float | None = None,
+    ) -> None:
+        """Set any subset of edge percentages (0..1)."""
+        if left   is not None: self.edge_left_pct   = left
+        if right  is not None: self.edge_right_pct  = right
+        if top    is not None: self.edge_top_pct    = top
+        if bottom is not None: self.edge_bottom_pct = bottom
+
+    def get_edge_margins(self) -> tuple[float, float, float, float]:
+        """Return (left, right, top, bottom) as 0..1 floats."""
+        return (self._edge_left_pct, self._edge_right_pct, self._edge_top_pct, self._edge_bottom_pct)
+    
+    
+    def get_interior_rect_pixels(self, img_w: int, img_h: int) -> pygame.Rect:
+        """Return the interior (non-edge) rect in RAW pixel coords."""
+        l_pct, r_pct, t_pct, b_pct = self.get_edge_margins()
+        left   = int(round(img_w * max(0.0, min(1.0, l_pct))))
+        right  = int(round(img_w * max(0.0, min(1.0, r_pct))))
+        top    = int(round(img_h * max(0.0, min(1.0, t_pct))))
+        bottom = int(round(img_h * max(0.0, min(1.0, b_pct))))
+        x = left
+        y = top
+        w = max(0, img_w - left - right)
+        h = max(0, img_h - top - bottom)
+        return pygame.Rect(x, y, w, h)
+    
     @property
     def invalid_tiles(self) -> Set[Tuple[int, int]]:
         """
@@ -126,6 +231,32 @@ class MachineVision:
         # 3) Ensure contiguous
         return arr if arr.flags.c_contiguous else np.ascontiguousarray(arr)
 
+    def get_interior_cropped_frame(
+        self,
+        *,
+        color: str = "bgr",
+        source: str = "latest",
+        return_rect: bool = False
+    ) -> np.ndarray | tuple[np.ndarray, pygame.Rect] | None:
+        """
+        Return the current frame cropped to the interior (respects edge_*_pct).
+        If return_rect=True, also return the pygame.Rect used for cropping.
+        """
+        img = self.capture_current_frame(color=color, source=source)
+        if img is None:
+            return None
+
+        h_raw, w_raw = img.shape[:2]
+        interior = self.get_interior_rect_pixels(w_raw, h_raw)  # uses edge margins
+        if interior.w <= 0 or interior.h <= 0:
+            return None
+
+        y0, y1 = int(interior.top), int(interior.bottom)
+        x0, x1 = int(interior.left), int(interior.right)
+        cropped = img[y0:y1, x0:x1]  # raw pixels
+
+        return (cropped, interior) if return_rect else cropped
+
     # --------------- tile helpers ---------------
     def tile_index_from_xy(self, x: int, y: int) -> Tuple[int, int]:
         col = max(0, int(x) // self.stride)
@@ -193,6 +324,7 @@ class MachineVision:
         include_soft: bool = True,
         filter_invalid: bool = True,
         source: str = "latest",
+        restrict_to_interior: bool = True,
     ) -> dict:
         """
         Returns a dict with lists of tiles for the requested source/frame grid.
@@ -210,7 +342,21 @@ class MachineVision:
             top_percent=self.top_percent,
             min_score=self.min_score,
             soft_min_score=(self.soft_min_score if include_soft else None),
+            scale_factor=self._scale_factor,
         ) or []
+
+        if restrict_to_interior and img_bgr is not None:
+            h_raw, w_raw = img_bgr.shape[:2]
+            interior = self.get_interior_rect_pixels(w_raw, h_raw)
+
+            def _tile_fully_inside(t) -> bool:
+                x0 = int(t.x); y0 = int(t.y)
+                x1 = int(t.x + t.w); y1 = int(t.y + t.h)
+                # Use 'contains' semantics (no edge bleed into red bands)
+                return (x0 >= interior.left and y0 >= interior.top and
+                        x1 <= interior.right and y1 <= interior.bottom)
+
+            tiles_all = [t for t in tiles_all if _tile_fully_inside(t)]
 
         # Split soft/hard
         soft_tiles, hard_tiles = [], []
@@ -252,6 +398,32 @@ class MachineVision:
 
         rects = [pygame.Rect(int(t.x), int(t.y), int(t.w), int(t.h)) for t in tiles]
         return rects
+
+    def analyze_focus(
+        self,
+        *,
+        kernel_size: int = 7,
+        source: str = "latest",
+    ) -> Optional[FocusAnalysisResult]:
+        """
+        Quadrant focus analysis using ImageAnalyzer.analyze_focus on the interior crop.
+        Edge percents come from this MachineVision instance.
+        Returns a FocusAnalysisResult or None if no frame available.
+        """
+        img_bgr = self.capture_current_frame(color="bgr", source=source)
+        if img_bgr is None:
+            return None
+
+        # Hand margins straight through so ImageAnalyzer does the crop internally
+        return ImageAnalyzer.analyze_focus(
+            img_bgr,
+            kernel_size=kernel_size,
+            edge_left_pct=self._edge_left_pct,
+            edge_right_pct=self._edge_right_pct,
+            edge_top_pct=self._edge_top_pct,
+            edge_bottom_pct=self._edge_bottom_pct,
+            scale_factor=self._scale_factor,
+        )
 
     # --------------- hot-pixel sampler ---------------
     def build_hot_pixel_map(
@@ -494,3 +666,12 @@ class MachineVision:
             return (*out3_q, Y_out)
         else:
             return (float(out3[0]), float(out3[1]), float(out3[2]), float(Y_out))
+        
+    def is_black(self, *, threshold: float = 5.0, source: str = "latest") -> bool:
+        """
+        Black-frame check on the *interior-cropped* region.
+        """
+        frame = self.get_interior_cropped_frame(color="bgr", source=source)
+        if frame is None:
+            return True  # treat as black/empty if nothing to analyze
+        return ImageAnalyzer.is_black(frame, threshold=threshold)

@@ -10,10 +10,10 @@ from UI.input.radio import SelectedColors
 def make_button_text_style() -> TextStyle:
     return TextStyle(color=pygame.Color("#5a5a5a"), font_size=20)
 
-def make_display_text_style() -> TextStyle:
+def make_display_text_style(font_size = 18) -> TextStyle:
     return TextStyle(
     color=pygame.Color(32, 32, 32),
-    font_size=18,
+    font_size=font_size,
     font_name="assets/fonts/SofiaSans-Regular.ttf",
 )
 

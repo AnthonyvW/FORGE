@@ -127,11 +127,11 @@ class BasePrinterController:
 
 
         # Initialize serial connection
-        #self._initialize_printer(forgeConfig)
+        self._initialize_printer(forgeConfig)
         
         # Start command processing thread
-        #self._processing_thread = threading.Thread(target=self._process_commands, daemon=True)
-        #self._processing_thread.start()
+        self._processing_thread = threading.Thread(target=self._process_commands, daemon=True)
+        self._processing_thread.start()
 
     def _initialize_printer(self, forgeConfig):
         """Initialize printer serial connection"""
@@ -305,6 +305,18 @@ class BasePrinterController:
         """Get current position as tuple"""
         return self.position
 
+    def get_bed_size(self)-> Position:
+        return Position(self.config.max_x, self.config.max_y, self.config.max_z)
+    
+    def get_max_x(self)-> int:
+        return self.config.max_x // 100
+    
+    def get_max_y(self)-> int:
+        return self.config.max_y // 100
+    
+    def get_max_z(self)-> int:
+        return self.config.max_z // 100
+
     def move_to_position(self, position: Position) -> None:
         """Move to specified position"""
         self.enqueue_printer(f"G0 {position.to_gcode()}", message=f"Moving to {position}", log=False)
@@ -331,6 +343,8 @@ class BasePrinterController:
         self.paused = False
 
     def home(self) -> None:
+        
+        self.enqueue_printer("G90", "Set all Axis to Absolute Positioning")
         self.enqueue_printer("G28", "Homing Printer. . .")
             
     def flush_moves(self) -> None:

@@ -102,6 +102,17 @@ class Slider(Frame):
     def decrement(self, amount: Optional[float] = None):
         self._bump(- (amount if amount is not None else self.step))
 
+    def set_value(self, v: float, *, notify: bool = False) -> None:
+        """
+        Programmatically set the slider's value, clamped to [min_value, max_value].
+        If notify=True, fire on_change if the value actually changed.
+        """
+        v = max(self.min_value, min(self.max_value, float(v)))
+        old = self.value
+        self.value = v
+        if notify and self.on_change and self.value != old:
+            self.on_change(self.value)
+
     # ===== Internal helpers =====
     def _bump(self, delta: float):
         old = self.value
