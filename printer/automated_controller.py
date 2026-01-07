@@ -255,7 +255,7 @@ class AutomatedPrinter(BasePrinterController):
 
         self.image_formatter.set_template(settings.image_name_template)
 
-    def save_automation_settings(self, filename: str = AUTO_ACTIVE_FILENAME):
+    def save_automation_settings(self):
         """
         Persist current automation settings to YAML in the scoped folder.
         Old version is backed up; most recent N backups are kept (per manager policy).
@@ -267,7 +267,6 @@ class AutomatedPrinter(BasePrinterController):
         self,
         settings: AutomationSettings,
         persist: bool = False,
-        filename: str = AUTO_ACTIVE_FILENAME,
     ):
         """
         Replace entire automation settings object, apply immediately, optionally persist to disk.
@@ -275,12 +274,11 @@ class AutomatedPrinter(BasePrinterController):
         self.automation_settings = settings
         self._apply_automation_settings(self.automation_settings)
         if persist:
-            self.save_automation_settings(filename=filename)
+            self.save_automation_settings()
 
     def update_automation_settings(
         self,
         persist: bool = False,
-        filename: str = AUTO_ACTIVE_FILENAME,
         **updates,
     ):
         """
@@ -297,7 +295,7 @@ class AutomatedPrinter(BasePrinterController):
 
         self._apply_automation_settings(self.automation_settings)
         if persist:
-            self.save_automation_settings(filename=filename)
+            self.save_automation_settings()
 
     # ----- Defaults helpers (parity with camera) -----
     def get_automation_default_config_path(self) -> Path:
