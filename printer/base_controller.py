@@ -343,6 +343,8 @@ class BasePrinterController:
         self.paused = False
 
     def home(self) -> None:
+        
+        self.enqueue_printer("G90", "Set all Axis to Absolute Positioning")
         self.enqueue_printer("G28", "Homing Printer. . .")
             
     def flush_moves(self) -> None:
