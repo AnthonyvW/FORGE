@@ -17,6 +17,8 @@ from UI.focus_overlay import FocusOverlay
 from UI.list_frame import ListFrame
 from UI.flex_frame import FlexFrame
 
+from UI.overlays.interactive_camera_overlay import InteractiveCameraOverlay
+
 from UI.input.text_field import TextField
 from UI.input.button import Button, ButtonShape, ButtonColors
 from UI.input.button_icon import ButtonIcon
@@ -82,7 +84,7 @@ def create_control_panel(
         right_margin_px=RIGHT_PANEL_WIDTH # reserve space for the control panel
     )
     machine_vision_overlay = FocusOverlay(camera_view, movementSystem.machine_vision)
-
+    interactive_overlay = InteractiveCameraOverlay(camera_view, movementSystem)
 
     # --- Control Box ---
     control_box = Section(
@@ -104,7 +106,7 @@ def create_control_panel(
     )
     automation_settings_modal = Modal(parent=root_frame, title="Automation Settings", overlay=False, width=500, height=445)
     build_automation_settings_modal(automation_settings_modal, movementSystem)
-    _build_automation_control(automation_box, movementSystem, machine_vision_overlay, automation_settings_modal)
+    _build_automation_control(automation_box, movementSystem, machine_vision_overlay, interactive_overlay, automation_settings_modal)
 
     # --- Camera Settings Modal ---
     camera_settings_modal = Modal(parent=root_frame, title="Camera Settings", overlay=False, width=308, height=660)
@@ -118,7 +120,7 @@ def create_control_panel(
         x=0, y=0, width=1.0, height=163,
         width_is_percent=True
     )
-    _build_camera_control(camera_control, movementSystem, camera, camera_settings_modal)
+    _build_camera_control(camera_control, movementSystem, camera, interactive_overlay, camera_settings_modal)
 
     # --- Sample Box ---
     sample_box = Section(
@@ -322,7 +324,7 @@ def _build_sample_box(sample_box, movementSystem, camera, current_sample_index):
     return go_to_sample_button, decrement_button, increment_button, sample_label#, pos1_display, pos2_display
 
 
-def _build_camera_control(camera_control, movementSystem: AutomatedPrinter, camera, camera_settings_modal):
+def _build_camera_control(camera_control, movementSystem: AutomatedPrinter, camera, interactive_overlay, camera_settings_modal):
 
     # Header Settings Button
     settings = Button(lambda: camera_settings_modal.open(), x=0, y=0, 
@@ -364,6 +366,7 @@ def _build_camera_control(camera_control, movementSystem: AutomatedPrinter, came
     
     Button(lambda: movementSystem.start_autofocus(), 10, 85, 117, 40, "Autofocus", parent=camera_control, text_style=make_button_text_style())
     Button(lambda: movementSystem.start_fine_autofocus(), 132, 85, 167, 40, "Fine Autofocus", parent=camera_control, text_style=make_button_text_style())
+    Button(lambda: interactive_overlay.go_to_calibration_pattern(), 132+167+5, 85, 80, 40, "Cal Pat", parent=camera_control, text_style=make_button_text_style())
     
     def open_capture_folder():
         """Open the capture folder in the system's default file explorer."""
@@ -386,7 +389,7 @@ def _build_camera_control(camera_control, movementSystem: AutomatedPrinter, came
     Button(open_capture_folder,x=254, y=10, width=117, height=40, text="Open Path", parent=camera_control, text_style=make_button_text_style())
     
 
-def _build_automation_control(automation_box, movementSystem, machine_vision_overlay, automation_settings_modal):
+def _build_automation_control(automation_box, movementSystem, machine_vision_overlay, interactive_overlay, automation_settings_modal):
 
     settings = Button(lambda: automation_settings_modal.open(), x=0, y=0, 
         width=automation_box.header.height, 
@@ -429,8 +432,5 @@ def _build_automation_control(automation_box, movementSystem, machine_vision_ove
 
     Button(toggle_overlay,x=132, y=60, width=212, height=40, text="MV Hot Pixel Filter", parent=automation_box, text_style=make_button_text_style())
 
-
-
-
-
-
+    
+    Button(interactive_overlay.run_calibration,x=132+212+5, y=60, width=30, height=40, text="C", parent=automation_box, text_style=make_button_text_style())
