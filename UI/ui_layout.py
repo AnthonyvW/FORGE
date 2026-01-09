@@ -106,7 +106,7 @@ def create_control_panel(
     )
     automation_settings_modal = Modal(parent=root_frame, title="Automation Settings", overlay=False, width=500, height=445)
     build_automation_settings_modal(automation_settings_modal, movementSystem)
-    _build_automation_control(automation_box, movementSystem, machine_vision_overlay, interactive_overlay, automation_settings_modal)
+    _build_automation_control(automation_box, movementSystem, machine_vision_overlay, automation_settings_modal)
 
     # --- Camera Settings Modal ---
     camera_settings_modal = Modal(parent=root_frame, title="Camera Settings", overlay=False, width=308, height=660)
@@ -117,7 +117,7 @@ def create_control_panel(
         parent=control_frame,
         title="Camera Control",
         collapsible=True,
-        x=0, y=0, width=1.0, height=163,
+        x=0, y=0, width=1.0, height=258,
         width_is_percent=True
     )
     _build_camera_control(camera_control, movementSystem, camera, interactive_overlay, camera_settings_modal)
@@ -259,29 +259,8 @@ def _build_sample_box(sample_box, movementSystem, camera, current_sample_index):
 
     increment_button = Button(None, parent=sample_box, 
         x=330, y=10, width=40, height=button_height, text="+", text_style=make_button_text_style())
-
+    
     # 2nd Row
-    """
-    Button(movementSystem.setPosition1, 10 , 60, 150, button_height, "Set Position 1", parent=sample_box, text_style=make_button_text_style())
-
-    pos1_display = Text(
-        text=f"X: {movementSystem.automation_config.x_start/100:.2f} Y: {movementSystem.automation_config.y_start/100:.2f} Z: {movementSystem.automation_config.z_start/100:.2f}",
-        parent=sample_box,
-        x=170, y=75,
-        style=make_display_text_style()
-    )
-
-    # 3rd Row
-    Button(movementSystem.setPosition2, 10, 110, 150, button_height, "Set Position 2", parent=sample_box, text_style=make_button_text_style())
-
-    pos2_display = Text(
-        text=f"X: {movementSystem.automation_config.x_end/100:.2f} Y: {movementSystem.automation_config.y_end/100:.2f} Z: {movementSystem.automation_config.z_end/100:.2f}",
-        parent=sample_box,
-        x=170, y=125,
-        style=make_display_text_style()
-    )
-    """
-    # 4th Row
     def build_row(i: int, parent: Frame) -> None:
         on_overrides = ToggledColors(
             background=pygame.Color("#7ed957"),
@@ -366,7 +345,6 @@ def _build_camera_control(camera_control, movementSystem: AutomatedPrinter, came
     
     Button(lambda: movementSystem.start_autofocus(), 10, 85, 117, 40, "Autofocus", parent=camera_control, text_style=make_button_text_style())
     Button(lambda: movementSystem.start_fine_autofocus(), 132, 85, 167, 40, "Fine Autofocus", parent=camera_control, text_style=make_button_text_style())
-    Button(lambda: interactive_overlay.go_to_calibration_pattern(), 132+167+5, 85, 80, 40, "Cal Pat", parent=camera_control, text_style=make_button_text_style())
     
     def open_capture_folder():
         """Open the capture folder in the system's default file explorer."""
@@ -387,9 +365,15 @@ def _build_camera_control(camera_control, movementSystem: AutomatedPrinter, came
         print("Opened Image Output Folder")
 
     Button(open_capture_folder,x=254, y=10, width=117, height=40, text="Open Path", parent=camera_control, text_style=make_button_text_style())
+    #3rd Row
+    Button(lambda: movementSystem.go_to_calibration_pattern(), 10, 130, 117, 40, "Go to Slide", parent=camera_control, text_style=make_button_text_style())
+    Button(lambda: movementSystem.start_camera_calibration(), 132, 130, 207, 40, "Calibrate Movement", parent=camera_control, text_style=make_button_text_style())
+    #4th row
+    Button(lambda: movementSystem.start_autofocus(), 10, 175, 127, 40, "Sample Cal.", parent=camera_control, text_style=make_button_text_style())
+    Button(lambda: movementSystem.start_autofocus(), 142, 175, 167, 40, "Sample Settings", parent=camera_control, text_style=make_button_text_style())
     
 
-def _build_automation_control(automation_box, movementSystem, machine_vision_overlay, interactive_overlay, automation_settings_modal):
+def _build_automation_control(automation_box, movementSystem, machine_vision_overlay, automation_settings_modal):
 
     settings = Button(lambda: automation_settings_modal.open(), x=0, y=0, 
         width=automation_box.header.height, 
@@ -431,6 +415,3 @@ def _build_automation_control(automation_box, movementSystem, machine_vision_ove
         print(f"Marked {count} hot tiles invalid")
 
     Button(toggle_overlay,x=132, y=60, width=212, height=40, text="MV Hot Pixel Filter", parent=automation_box, text_style=make_button_text_style())
-
-    
-    Button(interactive_overlay.run_calibration,x=132+212+5, y=60, width=30, height=40, text="C", parent=automation_box, text_style=make_button_text_style())

@@ -6,6 +6,7 @@ from pathlib import Path
 from .models import Position, FocusScore
 from .base_controller import BasePrinterController
 from .automation.autofocus_mixin import AutofocusMixin
+from .automation.camera_calibration_mixin import CameraCalibrationMixin
 from image_processing.machine_vision import MachineVision
 
 from UI.list_frame import ListFrame
@@ -28,7 +29,7 @@ from camera.image_name_formatter import ImageNameFormatter
 from .automation_config import AutomationSettings, AutomationSettingsManager
 
 
-class AutomatedPrinter(AutofocusMixin, BasePrinterController):
+class AutomatedPrinter(CameraCalibrationMixin, AutofocusMixin, BasePrinterController):
     """Extended printer controller with automation capabilities"""
     AUTOMATION_CONFIG_SUBDIR = ""
     def __init__(self, forgeConfig: ForgeSettings, camera):
@@ -69,6 +70,9 @@ class AutomatedPrinter(AutofocusMixin, BasePrinterController):
 
         # Initialize autofocus handlers from mixin
         self._init_autofocus_handlers()
+        
+        # Initialize camera calibration handlers from mixin
+        self._init_camera_calibration_handlers()
 
         
         # Automation Routines
@@ -419,17 +423,6 @@ class AutomatedPrinter(AutofocusMixin, BasePrinterController):
         # 4) Enqueue the macro
         self.enqueue_cmd(macro)
 
-    '''
-    def setPosition1(self) -> None:
-        self.automation_config.x_start = self.position.x
-        self.automation_config.y_start = self.position.y
-        self.automation_config.z_start = self.position.z
-
-    def setPosition2(self) -> None:
-        self.automation_config.x_end = self.position.x
-        self.automation_config.y_end = self.position.y
-        self.automation_config.z_end = self.position.z
-    '''
     def _get_range(self, start: int, end: int, step: int) -> range:
         """Get appropriate range based on start and end positions"""
         if start < end:

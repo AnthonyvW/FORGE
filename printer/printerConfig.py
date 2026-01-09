@@ -14,6 +14,10 @@ class PrinterSettings():
         max_z: int = 6000   # Maximum Z dimension in steps
         step_size: int = 4  # minimum distance that can be moved in 0.01mm
         sample_positions: dict[int, dict[str, float]] = field(default_factory=dict)
+        calibration_pattern_position: dict[str, float] = field(default_factory=dict)  # X, Y, Z in mm
+        
+        # Camera calibration data
+        camera_calibration: dict[str, any] = field(default_factory=dict)  # Stores M_est, M_inv, reference position, etc.
     
 
 def make_printer_settings_manager(
