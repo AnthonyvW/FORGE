@@ -11,6 +11,7 @@ from typing import Optional
 
 from UI.frame import Frame
 from UI.camera_view import CameraView
+from UI.text import Text, TextStyle
 from UI.styles import CROSSHAIR_COLOR
 
 class InteractiveCameraOverlay(Frame):
@@ -45,6 +46,10 @@ class InteractiveCameraOverlay(Frame):
         self.controller = controller
         self.visible = visible
         
+        # Separate visibility controls
+        self.crosshair_visible = True
+        self.dpi_display_visible = True
+        
         # Enable click handling
         self.mouse_passthrough = False
 
@@ -58,6 +63,24 @@ class InteractiveCameraOverlay(Frame):
         self._overlay = None
         self._overlay_size = None
 
+        # DPI display text (top-right corner with 10px margin)
+        # Use 100% width minus margin, left aligned
+        self.dpi_text = Text(
+            text="",
+            parent=self,
+            x=0.99, y=10,  # 98% across (leaves ~2% margin)
+            x_is_percent=True,
+            y_is_percent=False,
+            x_align="right",  # Right-align the text at that position
+            y_align="top",
+            style=TextStyle(
+                color=pygame.Color(255, 255, 255),
+                font_size=16
+            )
+        )
+        self.dpi_text.mouse_passthrough = True
+        self._update_dpi_text()
+
     # ==================== Visibility Control ====================
     
     def toggle_overlay(self) -> None:
@@ -67,6 +90,38 @@ class InteractiveCameraOverlay(Frame):
     def set_visible(self, value: bool) -> None:
         """Set visibility of the crosshair overlay."""
         self.visible = bool(value)
+
+    def toggle_crosshair(self) -> None:
+        """Toggle visibility of the crosshair only."""
+        self.crosshair_visible = not self.crosshair_visible
+
+    def set_crosshair_visible(self, value: bool) -> None:
+        """Set visibility of the crosshair."""
+        self.crosshair_visible = bool(value)
+
+    def show_crosshair(self) -> None:
+        """Show the crosshair."""
+        self.crosshair_visible = True
+
+    def hide_crosshair(self) -> None:
+        """Hide the crosshair."""
+        self.crosshair_visible = False
+
+    def toggle_dpi_display(self) -> None:
+        """Toggle visibility of the DPI display text."""
+        self.dpi_display_visible = not self.dpi_display_visible
+
+    def set_dpi_display_visible(self, value: bool) -> None:
+        """Set visibility of the DPI display text."""
+        self.dpi_display_visible = bool(value)
+
+    def show_dpi_display(self) -> None:
+        """Show the DPI display text."""
+        self.dpi_display_visible = True
+
+    def hide_dpi_display(self) -> None:
+        """Hide the DPI display text."""
+        self.dpi_display_visible = False
 
     def set_crosshair_color(self, color: pygame.Color) -> None:
         """Update the crosshair color."""
@@ -88,6 +143,20 @@ class InteractiveCameraOverlay(Frame):
 
     # ==================== Calibration Helpers ====================
     
+    def _update_dpi_text(self) -> None:
+        """Update the DPI display text based on current calibration status."""
+        # Check calibration directly without calling is_calibrated() to avoid recursion
+        if not hasattr(self.controller, 'M_inv') or self.controller.M_inv is None:
+            self.dpi_text.set_text("")
+            return
+        
+        # Get DPI directly from controller
+        dpi = getattr(self.controller, '_cal_dpi', None)
+        if dpi is not None:
+            self.dpi_text.set_text(f"Estimated DPI: {dpi:.1f}")
+        else:
+            self.dpi_text.set_text("")
+    
     def run_calibration(self) -> None:
         """
         Trigger camera calibration through the controller.
@@ -101,6 +170,8 @@ class InteractiveCameraOverlay(Frame):
             return
         
         self.controller.start_camera_calibration()
+        # Update DPI display after calibration
+        self._update_dpi_text()
     
     def is_calibrated(self) -> bool:
         """Check if camera calibration is available."""
@@ -265,47 +336,59 @@ class InteractiveCameraOverlay(Frame):
 
         fx, fy, fw, fh = fr
 
-        # Build/resize overlay and clear it
-        overlay = self._get_overlay(surface.get_size())
-        overlay.fill((0, 0, 0, 0))
+        # Update DPI display
+        if self.dpi_display_visible:
+            self._update_dpi_text()
+        else:
+            self.dpi_text.set_text("")
 
-        # Calculate center point of the camera frame
-        center_x = fx + fw // 2
-        center_y = fy + fh // 2
+        # Only draw crosshair if crosshair_visible is True
+        if self.crosshair_visible:
+            # Build/resize overlay and clear it
+            overlay = self._get_overlay(surface.get_size())
+            overlay.fill((0, 0, 0, 0))
 
-        # Draw crosshair lines with gap in the middle
-        
-        # Horizontal line (left and right segments)
-        pygame.draw.line(
-            overlay,
-            self.crosshair_color,
-            (center_x - self.crosshair_gap - self.crosshair_length, center_y),
-            (center_x - self.crosshair_gap, center_y),
-            self.crosshair_thickness
-        )
-        pygame.draw.line(
-            overlay,
-            self.crosshair_color,
-            (center_x + self.crosshair_gap, center_y),
-            (center_x + self.crosshair_gap + self.crosshair_length, center_y),
-            self.crosshair_thickness
-        )
+            # Calculate center point of the camera frame
+            center_x = fx + fw // 2
+            center_y = fy + fh // 2
 
-        # Vertical line (top and bottom segments)
-        pygame.draw.line(
-            overlay,
-            self.crosshair_color,
-            (center_x, center_y - self.crosshair_gap - self.crosshair_length),
-            (center_x, center_y - self.crosshair_gap),
-            self.crosshair_thickness
-        )
-        pygame.draw.line(
-            overlay,
-            self.crosshair_color,
-            (center_x, center_y + self.crosshair_gap),
-            (center_x, center_y + self.crosshair_gap + self.crosshair_length),
-            self.crosshair_thickness
-        )
+            # Draw crosshair lines with gap in the middle
+            
+            # Horizontal line (left and right segments)
+            pygame.draw.line(
+                overlay,
+                self.crosshair_color,
+                (center_x - self.crosshair_gap - self.crosshair_length, center_y),
+                (center_x - self.crosshair_gap, center_y),
+                self.crosshair_thickness
+            )
+            pygame.draw.line(
+                overlay,
+                self.crosshair_color,
+                (center_x + self.crosshair_gap, center_y),
+                (center_x + self.crosshair_gap + self.crosshair_length, center_y),
+                self.crosshair_thickness
+            )
 
-        # Composite overlay onto the screen surface
-        surface.blit(overlay, (0, 0))
+            # Vertical line (top and bottom segments)
+            pygame.draw.line(
+                overlay,
+                self.crosshair_color,
+                (center_x, center_y - self.crosshair_gap - self.crosshair_length),
+                (center_x, center_y - self.crosshair_gap),
+                self.crosshair_thickness
+            )
+            pygame.draw.line(
+                overlay,
+                self.crosshair_color,
+                (center_x, center_y + self.crosshair_gap),
+                (center_x, center_y + self.crosshair_gap + self.crosshair_length),
+                self.crosshair_thickness
+            )
+
+            # Composite overlay onto the screen surface
+            surface.blit(overlay, (0, 0))
+
+        # Draw children (including DPI text if visible)
+        for child in reversed(self.children):
+            child.draw(surface)

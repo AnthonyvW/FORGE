@@ -76,6 +76,39 @@ def build_sample_settings_modal(modal: Modal, controller: AutomatedPrinter) -> N
     
     y_offset += 90
     
+    # ========== Y Start Offset Section ==========
+    Text(
+        text="Y Start Offset (mm):",
+        parent=content,
+        x=10, y=y_offset,
+        style=make_display_text_style(16)
+    )
+    
+    y_start_field = TextField(
+        parent=content,
+        x=10, y=y_offset + 25,
+        width=200, height=30,
+        placeholder="0.00",
+        border_color=pygame.Color("#b3b4b6"),
+        text_color=pygame.Color("#5a5a5a")
+    )
+    
+    def set_y_start_from_position():
+        """Set Y start field to current Y position"""
+        y_mm = controller.position.y / 100.0
+        y_start_field.set_text(f"{y_mm:.2f}")
+    
+    Button(
+        set_y_start_from_position,
+        x=220, y=y_offset + 25,
+        width=175, height=30,
+        text="Set from Current",
+        parent=content,
+        text_style=make_button_text_style()
+    )
+    
+    y_offset += 70
+    
     # ========== Calibration Y Position Section ==========
     Text(
         text="Calibration Y Position (mm):",
@@ -142,39 +175,6 @@ def build_sample_settings_modal(modal: Modal, controller: AutomatedPrinter) -> N
     
     y_offset += 70
     
-    # ========== Y Start Offset Section ==========
-    Text(
-        text="Y Start Offset (mm):",
-        parent=content,
-        x=10, y=y_offset,
-        style=make_display_text_style(16)
-    )
-    
-    y_start_field = TextField(
-        parent=content,
-        x=10, y=y_offset + 25,
-        width=200, height=30,
-        placeholder="0.00",
-        border_color=pygame.Color("#b3b4b6"),
-        text_color=pygame.Color("#5a5a5a")
-    )
-    
-    def set_y_start_from_position():
-        """Set Y start field to current Y position"""
-        y_mm = controller.position.y / 100.0
-        y_start_field.set_text(f"{y_mm:.2f}")
-    
-    Button(
-        set_y_start_from_position,
-        x=220, y=y_offset + 25,
-        width=175, height=30,
-        text="Set from Current",
-        parent=content,
-        text_style=make_button_text_style()
-    )
-    
-    y_offset += 70
-    
     # ========== Sample X Offsets Section ==========
     Text(
         text="Sample X Offsets:",
@@ -219,6 +219,8 @@ def build_sample_settings_modal(modal: Modal, controller: AutomatedPrinter) -> N
                 cal_y_mm = float(calibration_y_field.text or "220.0")
                 cal_z_mm = float(calibration_z_field.text or "26.0")
                 
+                print(f"Moving to Sample {sample_num} calibration position: X={x_mm:.2f}, Y={cal_y_mm:.2f}, Z={cal_z_mm:.2f}")
+                
                 # Convert to ticks (0.01 mm units)
                 x_ticks = int(x_mm * 100)
                 y_ticks = int(cal_y_mm * 100)
@@ -255,6 +257,7 @@ def build_sample_settings_modal(modal: Modal, controller: AutomatedPrinter) -> N
         def set_x_from_current():
             x_mm = controller.position.x / 100.0
             x_field.set_text(f"{x_mm:.2f}")
+            print(f"Sample {sample_num}: Set X offset to {x_mm:.2f} mm from current position")
         
         Button(
             set_x_from_current,

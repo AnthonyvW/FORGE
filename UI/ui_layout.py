@@ -116,7 +116,7 @@ def create_control_panel(
 
     # --- Camera Settings Modal ---
     camera_settings_modal = Modal(parent=root_frame, title="Camera Settings", overlay=False, width=308, height=660)
-    build_camera_settings_modal(camera_settings_modal, camera)
+    build_camera_settings_modal(camera_settings_modal, camera, interactive_overlay)
 
     # --- Camera Settings ---
     camera_control = Section(

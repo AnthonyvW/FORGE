@@ -40,6 +40,7 @@ class CameraCalibrationMixin:
         self._cal_ref_pos = None  # Position where calibration was performed
         self._cal_image_width = None  # Image width used during calibration
         self._cal_image_height = None  # Image height used during calibration
+        self._cal_dpi = None  # Computed DPI (dots per inch) from calibration
         
         # Calibration parameters (can be overridden)
         self._cal_move_x_ticks = 100  # 1.00mm in 0.01mm units
@@ -67,6 +68,7 @@ class CameraCalibrationMixin:
             'image_height': self._cal_image_height,
             'move_x_ticks': self._cal_move_x_ticks,
             'move_y_ticks': self._cal_move_y_ticks,
+            'dpi': float(self._cal_dpi) if self._cal_dpi is not None else None,
         }
         
         # Save to printer config
@@ -117,7 +119,14 @@ class CameraCalibrationMixin:
             self._cal_move_x_ticks = cal_data.get('move_x_ticks', 100)
             self._cal_move_y_ticks = cal_data.get('move_y_ticks', 100)
             
-            self.status("Camera calibration loaded from config", True)
+            # Load or calculate DPI
+            self._cal_dpi = cal_data.get('dpi')
+            if self._cal_dpi is None:
+                # Calculate DPI if not saved
+                self._calculate_dpi()
+            
+            dpi_str = f" (DPI: {self._cal_dpi:.1f})" if self._cal_dpi is not None else ""
+            self.status(f"Camera calibration loaded from config{dpi_str}", True)
             return True
             
         except Exception as e:
@@ -127,6 +136,7 @@ class CameraCalibrationMixin:
             self._cal_ref_pos = None
             self._cal_image_width = None
             self._cal_image_height = None
+            self._cal_dpi = None
             return False
     
     def clear_camera_calibration(self) -> None:
@@ -136,6 +146,7 @@ class CameraCalibrationMixin:
         self._cal_ref_pos = None
         self._cal_image_width = None
         self._cal_image_height = None
+        self._cal_dpi = None
         
         # Clear from config
         self.config.camera_calibration = {}
@@ -178,6 +189,41 @@ class CameraCalibrationMixin:
         )
         (dx, dy), response = cv2.phaseCorrelate(img_a_f32, img_b_f32, win)
         return float(dx), float(dy), float(response)
+    
+    def _calculate_dpi(self) -> None:
+        """
+        Calculate DPI (dots per inch) from the calibration matrix.
+        DPI represents the average resolution of the camera image.
+        
+        The calculation uses the calibration matrix M_est to determine how many
+        pixels correspond to physical movement. We compute the average scaling
+        factor from both X and Y axes and convert to DPI (pixels per inch).
+        """
+        if self.M_est is None:
+            self._cal_dpi = None
+            return
+        
+        try:
+            # M_est maps world deltas (in 0.01mm ticks) to pixel deltas
+            # M_est[0,0] and M_est[1,1] are the diagonal elements (x->px, y->py)
+            # Extract pixels per tick for both axes
+            px_per_tick_x = abs(self.M_est[0, 0])  # pixels per 0.01mm in X
+            px_per_tick_y = abs(self.M_est[1, 1])  # pixels per 0.01mm in Y
+            
+            # Average the two axes
+            px_per_tick_avg = (px_per_tick_x + px_per_tick_y) / 2.0
+            
+            # Convert to pixels per mm (1 tick = 0.01mm)
+            px_per_mm = px_per_tick_avg * 100.0
+            
+            # Convert to DPI (1 inch = 25.4 mm)
+            dpi = px_per_mm * 25.4
+            
+            self._cal_dpi = dpi
+            
+        except Exception as e:
+            self.status(f"Failed to calculate DPI: {e}", False)
+            self._cal_dpi = None
     
     def _capture_and_process_edges(self) -> Optional[np.ndarray]:
         """Capture a still image and return its edge map."""
@@ -235,7 +281,7 @@ class CameraCalibrationMixin:
         # Step 1: Capture base image at current position
         self.status("Capturing base image...", True)
         self._exec_gcode("M400", wait=True)
-        time.sleep(0.3)  # Settle time
+        time.sleep(0.6)  # Settle time
         
         cal_base_pos = self.get_position()
         edges_base = self._capture_and_process_edges()
@@ -254,7 +300,7 @@ class CameraCalibrationMixin:
         self._exec_gcode(f"G91", wait=True)  # Relative mode
         self._exec_gcode(f"G0 X{dx_mm:.2f}", wait=True)
         self._exec_gcode(f"G90", wait=True)  # Back to absolute
-        time.sleep(0.3)
+        time.sleep(0.6)
         
         edges_x = self._capture_and_process_edges()
         if edges_x is None:
@@ -279,14 +325,14 @@ class CameraCalibrationMixin:
             f"G0 X{cal_base_pos.x/100:.2f} Y{cal_base_pos.y/100:.2f}",
             wait=True
         )
-        time.sleep(0.3)
+        time.sleep(0.6)
         
         dy_mm = self._cal_move_y_ticks / 100.0
         self.status(f"Moving +Y by {dy_mm:.2f}mm...", True)
         self._exec_gcode(f"G91", wait=True)
         self._exec_gcode(f"G0 Y{dy_mm:.2f}", wait=True)
         self._exec_gcode(f"G90", wait=True)
-        time.sleep(0.3)
+        time.sleep(0.6)
         
         edges_y = self._capture_and_process_edges()
         if edges_y is None:
@@ -331,9 +377,13 @@ class CameraCalibrationMixin:
             # Store calibration reference position (center of image at cal_base_pos)
             self._cal_ref_pos = cal_base_pos
             
+            # Calculate DPI from the calibration matrix
+            self._calculate_dpi()
+            
+            dpi_str = f", DPI: {self._cal_dpi:.1f}" if self._cal_dpi is not None else ""
             self.status(
                 f"Calibration complete. Matrix M_est:\n{self.M_est}\n"
-                f"Inverse M_inv:\n{self.M_inv}",
+                f"Inverse M_inv:\n{self.M_inv}{dpi_str}",
                 True
             )
             
@@ -574,6 +624,7 @@ class CameraCalibrationMixin:
             'reference_position': self._cal_ref_pos,
             'matrix_M': self.M_est.tolist() if self.M_est is not None else None,
             'matrix_M_inv': self.M_inv.tolist() if self.M_inv is not None else None,
+            'dpi': self._cal_dpi,
         }
     
     def is_calibrated(self) -> bool:
@@ -586,4 +637,3 @@ class CameraCalibrationMixin:
         return (self.M_est is not None and 
                 self.M_inv is not None and 
                 self._cal_ref_pos is not None)
-        

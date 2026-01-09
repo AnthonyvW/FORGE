@@ -458,6 +458,50 @@ def add_white_balance_gain_setting(modal, camera, settings, *, y: int, x: int = 
     )
 
 
+def add_overlay_controls_section(modal, overlay, *, y: int, x: int = 8) -> None:
+    """Add toggles for crosshair and DPI display visibility."""
+    if overlay is None:
+        return
+    
+    Text("Camera Overlay Controls", parent=modal, x=x, y=y + 8, style=make_settings_text_style())
+    
+    btn_w, btn_h = 135, 28
+    spacing = 12
+    base_y = y + 28
+    
+    # Crosshair toggle
+    def toggle_crosshair():
+        overlay.toggle_crosshair()
+        crosshair_btn.set_text(
+            "Crosshair: ON" if overlay.crosshair_visible else "Crosshair: OFF"
+        )
+    
+    crosshair_btn = Button(
+        toggle_crosshair,
+        x=x, y=base_y, width=btn_w, height=btn_h,
+        text=f"Crosshair: {'ON' if overlay.crosshair_visible else 'OFF'}",
+        parent=modal,
+        colors=BASE_BUTTON_COLORS,
+        text_style=RADIO_TEXT_STYLE,
+    )
+    
+    # DPI display toggle
+    def toggle_dpi():
+        overlay.toggle_dpi_display()
+        dpi_btn.set_text(
+            "DPI Display: ON" if overlay.dpi_display_visible else "DPI Display: OFF"
+        )
+    
+    dpi_btn = Button(
+        toggle_dpi,
+        x=x + (btn_w + spacing), y=base_y, width=btn_w, height=btn_h,
+        text=f"DPI Display: {'ON' if overlay.dpi_display_visible else 'OFF'}",
+        parent=modal,
+        colors=BASE_BUTTON_COLORS,
+        text_style=RADIO_TEXT_STYLE,
+    )
+
+
 def add_save_load_reset_section(modal, camera, *, y: int, x: int = 8) -> None:
     btn_w, btn_h = 88, 28
     spacing = 12
@@ -516,9 +560,14 @@ def add_save_load_reset_section(modal, camera, *, y: int, x: int = 8) -> None:
 # Orchestrator
 # ---------------------------------------------------------------------------
 
-def build_camera_settings_modal(modal, camera) -> None:
+def build_camera_settings_modal(modal, camera, overlay=None) -> None:
     """Populate the provided Modal with camera setting controls.
     This applies values live via camera.update_settings(persist=False).
+
+    Args:
+        modal: The Modal instance to populate with controls
+        camera: Camera instance with settings
+        overlay: Optional InteractiveCameraOverlay instance for overlay controls
 
     Layout is organized into vertically stacked sections. Each section is
     built by a dedicated function to keep this module modular and easy to
@@ -559,6 +608,10 @@ def build_camera_settings_modal(modal, camera) -> None:
     add_level_range_low_setting(scroll_area, camera, settings, y=layout.next_y())
     add_level_range_high_setting(scroll_area, camera, settings, y=layout.next_y())
     add_white_balance_gain_setting(scroll_area, camera, settings, y=layout.next_y())
+
+    # Overlay controls (crosshair and DPI display)
+    if overlay is not None:
+        add_overlay_controls_section(scroll_area, overlay, y=layout.next_y())
 
     add_save_load_reset_section(
         modal, camera,
