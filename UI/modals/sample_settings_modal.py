@@ -76,6 +76,72 @@ def build_sample_settings_modal(modal: Modal, controller: AutomatedPrinter) -> N
     
     y_offset += 90
     
+    # ========== Calibration Y Position Section ==========
+    Text(
+        text="Calibration Y Position (mm):",
+        parent=content,
+        x=10, y=y_offset,
+        style=make_display_text_style(16)
+    )
+    
+    calibration_y_field = TextField(
+        parent=content,
+        x=10, y=y_offset + 25,
+        width=200, height=30,
+        placeholder="220.00",
+        border_color=pygame.Color("#b3b4b6"),
+        text_color=pygame.Color("#5a5a5a")
+    )
+    
+    def set_calibration_y_from_position():
+        """Set calibration Y field to current Y position"""
+        y_mm = controller.position.y / 100.0
+        calibration_y_field.set_text(f"{y_mm:.2f}")
+    
+    Button(
+        set_calibration_y_from_position,
+        x=220, y=y_offset + 25,
+        width=175, height=30,
+        text="Set from Current",
+        parent=content,
+        text_style=make_button_text_style()
+    )
+    
+    y_offset += 70
+    
+    # ========== Calibration Z Position Section ==========
+    Text(
+        text="Calibration Z Position (mm):",
+        parent=content,
+        x=10, y=y_offset,
+        style=make_display_text_style(16)
+    )
+    
+    calibration_z_field = TextField(
+        parent=content,
+        x=10, y=y_offset + 25,
+        width=200, height=30,
+        placeholder="26.00",
+        border_color=pygame.Color("#b3b4b6"),
+        text_color=pygame.Color("#5a5a5a")
+    )
+    
+    def set_calibration_z_from_position():
+        """Set calibration Z field to current Z position"""
+        z_mm = controller.position.z / 100.0
+        calibration_z_field.set_text(f"{z_mm:.2f}")
+    
+    Button(
+        set_calibration_z_from_position,
+        x=220, y=y_offset + 25,
+        width=175, height=30,
+        text="Set from Current",
+        parent=content,
+        text_style=make_button_text_style()
+    )
+    
+    y_offset += 70
+    
     # ========== Y Start Offset Section ==========
     Text(
         text="Y Start Offset (mm):",
@@ -145,11 +211,40 @@ def build_sample_settings_modal(modal: Modal, controller: AutomatedPrinter) -> N
             style=make_display_text_style(14)
         )
         
+        # Go To button (C)
+        def go_to_sample():
+            """Move to this sample's X position using calibration Y and Z"""
+            try:
+                x_mm = float(x_field.text or "0.0")
+                cal_y_mm = float(calibration_y_field.text or "220.0")
+                cal_z_mm = float(calibration_z_field.text or "26.0")
+                
+                # Convert to ticks (0.01 mm units)
+                x_ticks = int(x_mm * 100)
+                y_ticks = int(cal_y_mm * 100)
+                z_ticks = int(cal_z_mm * 100)
+                
+                from printer.models import Position
+                target_pos = Position(x=x_ticks, y=y_ticks, z=z_ticks)
+                controller.move_to_position(target_pos)
+                
+            except ValueError as e:
+                print(f"Error parsing position values: {e}")
+        
+        Button(
+            go_to_sample,
+            x=100, y=5,
+            width=30, height=30,
+            text="C",
+            parent=parent,
+            text_style=TextStyle(font_size=14, color=pygame.Color("#5a5a5a"))
+        )
+        
         # X offset field
         x_field = TextField(
             parent=parent,
-            x=100, y=5,
-            width=150, height=30,
+            x=135, y=5,
+            width=115, height=30,
             placeholder="0.00",
             border_color=pygame.Color("#b3b4b6"),
             text_color=pygame.Color("#5a5a5a")
@@ -188,6 +283,13 @@ def build_sample_settings_modal(modal: Modal, controller: AutomatedPrinter) -> N
     def load_values_from_config():
         """Load current values from printer config"""
         try:
+            # Load calibration positions from proper fields
+            calibration_y = getattr(controller.config, 'calibration_y', 220.0)
+            calibration_z = getattr(controller.config, 'calibration_z', 26.0)
+            
+            calibration_y_field.set_text(f"{calibration_y:.2f}")
+            calibration_z_field.set_text(f"{calibration_z:.2f}")
+            
             # Check if sample_positions exists and is a dict
             if not hasattr(controller.config, 'sample_positions'):
                 print("No sample_positions found in config")
@@ -236,32 +338,38 @@ def build_sample_settings_modal(modal: Modal, controller: AutomatedPrinter) -> N
     def save_settings():
         """Save settings to printer config"""
         try:
-            # Parse camera height and Y start
+            # Parse camera height, Y start, and calibration positions
             camera_z = float(camera_height_field.text or "0.0")
             y_start = float(y_start_field.text or "0.0")
+            calibration_y = float(calibration_y_field.text or "220.0")
+            calibration_z = float(calibration_z_field.text or "26.0")
             
-            # Ensure sample_positions is a dict
-            if not isinstance(controller.config.sample_positions, dict):
-                controller.config.sample_positions = {}
+            # Save calibration positions to proper fields
+            controller.config.calibration_y = calibration_y
+            controller.config.calibration_z = calibration_z
             
-            # Update each sample position
+            # Create a fresh sample_positions dict to prevent accumulation of extra entries
+            new_sample_positions = {}
+            
+            # Update each sample position from the UI fields
             for sample_index, field in sample_fields:
                 x_offset = float(field.text or "0.0")
                 
-                # Ensure the sample position entry exists
-                if sample_index not in controller.config.sample_positions:
-                    controller.config.sample_positions[sample_index] = {}
-                
-                # Update the sample position
-                controller.config.sample_positions[sample_index]["x"] = x_offset
-                controller.config.sample_positions[sample_index]["y"] = y_start
-                controller.config.sample_positions[sample_index]["z"] = camera_z
+                # Create the sample position entry
+                new_sample_positions[sample_index] = {
+                    "x": x_offset,
+                    "y": y_start,
+                    "z": camera_z
+                }
+            
+            # Replace the entire sample_positions dict with our clean version
+            controller.config.sample_positions = new_sample_positions
             
             # Save the config
             from printer.printerConfig import PrinterSettingsManager
             PrinterSettingsManager.save(controller.CONFIG_SUBDIR, controller.config)
             
-            print("Sample settings saved successfully")
+            print(f"Sample settings saved successfully ({len(new_sample_positions)} sample positions)")
             modal.close()
             
         except ValueError as e:

@@ -16,6 +16,10 @@ class PrinterSettings():
         sample_positions: dict[int, dict[str, float]] = field(default_factory=dict)
         calibration_pattern_position: dict[str, float] = field(default_factory=dict)  # X, Y, Z in mm
         
+        # Sample calibration positions (for verifying X positions)
+        calibration_y: float = 220.0  # Y position for calibration checks (mm)
+        calibration_z: float = 26.0   # Z position for calibration checks (mm)
+        
         # Camera calibration data
         camera_calibration: dict[str, any] = field(default_factory=dict)  # Stores M_est, M_inv, reference position, etc.
     

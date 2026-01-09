@@ -18,6 +18,7 @@ from UI.list_frame import ListFrame
 from UI.flex_frame import FlexFrame
 
 from UI.overlays.interactive_camera_overlay import InteractiveCameraOverlay
+from UI.overlays.red_detection_mark_overlay import RedMarkDetectionOverlay
 
 from UI.input.text_field import TextField
 from UI.input.button import Button, ButtonShape, ButtonColors
@@ -86,6 +87,10 @@ def create_control_panel(
     )
     machine_vision_overlay = FocusOverlay(camera_view, movementSystem.machine_vision)
     interactive_overlay = InteractiveCameraOverlay(camera_view, movementSystem)
+    detection_overlay = RedMarkDetectionOverlay(
+        camera_view=camera_view,
+        visible=False
+    )
 
     # --- Control Box ---
     control_box = Section(
@@ -121,7 +126,7 @@ def create_control_panel(
         x=0, y=0, width=1.0, height=258,
         width_is_percent=True
     )
-    _build_camera_control(camera_control, movementSystem, camera, interactive_overlay, camera_settings_modal)
+    _build_camera_control(camera_control, movementSystem, camera, detection_overlay, camera_settings_modal)
 
     # --- Sample Box ---
     sample_box = Section(
@@ -304,7 +309,7 @@ def _build_sample_box(sample_box, movementSystem, camera, current_sample_index):
     return go_to_sample_button, decrement_button, increment_button, sample_label#, pos1_display, pos2_display
 
 
-def _build_camera_control(camera_control, movementSystem: AutomatedPrinter, camera, interactive_overlay, camera_settings_modal):
+def _build_camera_control(camera_control, movementSystem: AutomatedPrinter, camera, detection_overlay, camera_settings_modal):
 
     # Header Settings Button
     settings = Button(lambda: camera_settings_modal.open(), x=0, y=0, 
@@ -377,11 +382,11 @@ def _build_camera_control(camera_control, movementSystem: AutomatedPrinter, came
         title="Sample Position Settings",
         overlay=False,
         width=465,
-        height=640
+        height=780
     )
     build_sample_settings_modal(sample_settings_modal, movementSystem)
     
-    Button(lambda: movementSystem.start_autofocus(), 10, 175, 127, 40, "Sample Cal.", parent=camera_control, text_style=make_button_text_style())
+    Button(lambda: detection_overlay.toggle(), 10, 175, 127, 40, "Sample Cal.", parent=camera_control, text_style=make_button_text_style())
     Button(lambda: sample_settings_modal.open(), 142, 175, 167, 40, "Sample Settings", parent=camera_control, text_style=make_button_text_style())
     
 
