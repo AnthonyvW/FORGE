@@ -31,6 +31,7 @@ from UI.styles import (
 )
 from UI.modals.camera_settings_modal import build_camera_settings_modal
 from UI.modals.automation_settings_modal import build_automation_settings_modal
+from UI.modals.sample_settings_modal import build_sample_settings_modal
 
 RIGHT_PANEL_WIDTH = 400
 
@@ -368,9 +369,20 @@ def _build_camera_control(camera_control, movementSystem: AutomatedPrinter, came
     #3rd Row
     Button(lambda: movementSystem.go_to_calibration_pattern(), 10, 130, 117, 40, "Go to Slide", parent=camera_control, text_style=make_button_text_style())
     Button(lambda: movementSystem.start_camera_calibration(), 132, 130, 207, 40, "Calibrate Movement", parent=camera_control, text_style=make_button_text_style())
+    
     #4th row
+    # Create sample settings modal
+    sample_settings_modal = Modal(
+        parent=camera_control.parent.parent.parent,  # Attach to root (camera_control -> FlexFrame -> Frame -> root)
+        title="Sample Position Settings",
+        overlay=False,
+        width=465,
+        height=640
+    )
+    build_sample_settings_modal(sample_settings_modal, movementSystem)
+    
     Button(lambda: movementSystem.start_autofocus(), 10, 175, 127, 40, "Sample Cal.", parent=camera_control, text_style=make_button_text_style())
-    Button(lambda: movementSystem.start_autofocus(), 142, 175, 167, 40, "Sample Settings", parent=camera_control, text_style=make_button_text_style())
+    Button(lambda: sample_settings_modal.open(), 142, 175, 167, 40, "Sample Settings", parent=camera_control, text_style=make_button_text_style())
     
 
 def _build_automation_control(automation_box, movementSystem, machine_vision_overlay, automation_settings_modal):
