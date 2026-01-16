@@ -54,6 +54,7 @@ class FocusOverlay(Frame):
         self.invalid_fill     = pygame.Color(255, 0, 0, invalid_alpha_fill)
         self.invalid_border   = pygame.Color(255, 0, 0, invalid_alpha_border)
         self.invalid_border_w = invalid_border_w
+        self.mouse_passthrough = True
 
         # Edge margin overlays (translucent red)
         self.draw_edge_margins = True

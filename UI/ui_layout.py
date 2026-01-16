@@ -17,6 +17,9 @@ from UI.focus_overlay import FocusOverlay
 from UI.list_frame import ListFrame
 from UI.flex_frame import FlexFrame
 
+from UI.overlays.interactive_camera_overlay import InteractiveCameraOverlay
+from UI.overlays.red_detection_mark_overlay import RedMarkDetectionOverlay
+
 from UI.input.text_field import TextField
 from UI.input.button import Button, ButtonShape, ButtonColors
 from UI.input.button_icon import ButtonIcon
@@ -29,6 +32,7 @@ from UI.styles import (
 )
 from UI.modals.camera_settings_modal import build_camera_settings_modal
 from UI.modals.automation_settings_modal import build_automation_settings_modal
+from UI.modals.sample_settings_modal import build_sample_settings_modal
 
 RIGHT_PANEL_WIDTH = 400
 
@@ -82,7 +86,11 @@ def create_control_panel(
         right_margin_px=RIGHT_PANEL_WIDTH # reserve space for the control panel
     )
     machine_vision_overlay = FocusOverlay(camera_view, movementSystem.machine_vision)
-
+    interactive_overlay = InteractiveCameraOverlay(camera_view, movementSystem)
+    detection_overlay = RedMarkDetectionOverlay(
+        camera_view=camera_view,
+        visible=False
+    )
 
     # --- Control Box ---
     control_box = Section(
@@ -108,17 +116,17 @@ def create_control_panel(
 
     # --- Camera Settings Modal ---
     camera_settings_modal = Modal(parent=root_frame, title="Camera Settings", overlay=False, width=308, height=660)
-    build_camera_settings_modal(camera_settings_modal, camera)
+    build_camera_settings_modal(camera_settings_modal, camera, interactive_overlay)
 
     # --- Camera Settings ---
     camera_control = Section(
         parent=control_frame,
         title="Camera Control",
         collapsible=True,
-        x=0, y=0, width=1.0, height=163,
+        x=0, y=0, width=1.0, height=258,
         width_is_percent=True
     )
-    _build_camera_control(camera_control, movementSystem, camera, camera_settings_modal)
+    _build_camera_control(camera_control, movementSystem, camera, detection_overlay, camera_settings_modal)
 
     # --- Sample Box ---
     sample_box = Section(
@@ -257,29 +265,8 @@ def _build_sample_box(sample_box, movementSystem, camera, current_sample_index):
 
     increment_button = Button(None, parent=sample_box, 
         x=330, y=10, width=40, height=button_height, text="+", text_style=make_button_text_style())
-
+    
     # 2nd Row
-    """
-    Button(movementSystem.setPosition1, 10 , 60, 150, button_height, "Set Position 1", parent=sample_box, text_style=make_button_text_style())
-
-    pos1_display = Text(
-        text=f"X: {movementSystem.automation_config.x_start/100:.2f} Y: {movementSystem.automation_config.y_start/100:.2f} Z: {movementSystem.automation_config.z_start/100:.2f}",
-        parent=sample_box,
-        x=170, y=75,
-        style=make_display_text_style()
-    )
-
-    # 3rd Row
-    Button(movementSystem.setPosition2, 10, 110, 150, button_height, "Set Position 2", parent=sample_box, text_style=make_button_text_style())
-
-    pos2_display = Text(
-        text=f"X: {movementSystem.automation_config.x_end/100:.2f} Y: {movementSystem.automation_config.y_end/100:.2f} Z: {movementSystem.automation_config.z_end/100:.2f}",
-        parent=sample_box,
-        x=170, y=125,
-        style=make_display_text_style()
-    )
-    """
-    # 4th Row
     def build_row(i: int, parent: Frame) -> None:
         on_overrides = ToggledColors(
             background=pygame.Color("#7ed957"),
@@ -322,7 +309,7 @@ def _build_sample_box(sample_box, movementSystem, camera, current_sample_index):
     return go_to_sample_button, decrement_button, increment_button, sample_label#, pos1_display, pos2_display
 
 
-def _build_camera_control(camera_control, movementSystem: AutomatedPrinter, camera, camera_settings_modal):
+def _build_camera_control(camera_control, movementSystem: AutomatedPrinter, camera, detection_overlay, camera_settings_modal):
 
     # Header Settings Button
     settings = Button(lambda: camera_settings_modal.open(), x=0, y=0, 
@@ -384,6 +371,23 @@ def _build_camera_control(camera_control, movementSystem: AutomatedPrinter, came
         print("Opened Image Output Folder")
 
     Button(open_capture_folder,x=254, y=10, width=117, height=40, text="Open Path", parent=camera_control, text_style=make_button_text_style())
+    #3rd Row
+    Button(lambda: movementSystem.go_to_calibration_pattern(), 10, 130, 117, 40, "Go to Slide", parent=camera_control, text_style=make_button_text_style())
+    Button(lambda: movementSystem.start_camera_calibration(), 132, 130, 207, 40, "Calibrate Movement", parent=camera_control, text_style=make_button_text_style())
+    
+    #4th row
+    # Create sample settings modal
+    sample_settings_modal = Modal(
+        parent=camera_control.parent.parent.parent,  # Attach to root (camera_control -> FlexFrame -> Frame -> root)
+        title="Sample Position Settings",
+        overlay=False,
+        width=465,
+        height=780
+    )
+    build_sample_settings_modal(sample_settings_modal, movementSystem)
+    
+    Button(lambda: detection_overlay.toggle(), 10, 175, 127, 40, "Sample Cal.", parent=camera_control, text_style=make_button_text_style())
+    Button(lambda: sample_settings_modal.open(), 142, 175, 167, 40, "Sample Settings", parent=camera_control, text_style=make_button_text_style())
     
 
 def _build_automation_control(automation_box, movementSystem, machine_vision_overlay, automation_settings_modal):
@@ -428,9 +432,3 @@ def _build_automation_control(automation_box, movementSystem, machine_vision_ove
         print(f"Marked {count} hot tiles invalid")
 
     Button(toggle_overlay,x=132, y=60, width=212, height=40, text="MV Hot Pixel Filter", parent=automation_box, text_style=make_button_text_style())
-
-
-
-
-
-

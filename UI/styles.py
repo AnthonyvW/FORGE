@@ -48,3 +48,12 @@ RADIO_TEXT_STYLE = TextStyle(
     hover_color=pygame.Color("#5a5a5a"),
     disabled_color=pygame.Color("#5a5a5a"),
 )
+
+
+# ---- Crosshair Styling -----------------------------------------------------
+
+# Crosshair visual properties
+CROSSHAIR_COLOR = pygame.Color(64, 64, 64, 200)  # Dark grey with alpha
+CROSSHAIR_LENGTH = 20
+CROSSHAIR_THICKNESS = 2
+CROSSHAIR_GAP = 5
