@@ -1,304 +1,367 @@
+"""
+Base camera class that defines the interface for camera operations.
+All specific camera implementations should inherit from this class.
+"""
+
 from abc import ABC, abstractmethod
-import time
+from typing import Optional, Tuple, Callable, Any
+from dataclasses import dataclass
 from pathlib import Path
-from PIL import Image
-import tkinter as tk
-import numpy as np
-from tkinter import filedialog
 
-from .camera_settings import (
-    CameraSettings,
-    CameraSettingsManager,
-    ACTIVE_FILENAME,
-    DEFAULT_FILENAME
-)
 
-from .image_name_formatter import ImageNameFormatter
+@dataclass
+class CameraResolution:
+    """Represents a camera resolution"""
+    width: int
+    height: int
+    
+    def __str__(self):
+        return f"{self.width}*{self.height}"
+
+
+@dataclass
+class CameraInfo:
+    """Basic camera information"""
+    id: str
+    displayname: str
+    model: Any  # Model-specific information
 
 
 class BaseCamera(ABC):
-    """Abstract base class defining the camera interface."""
-
-    # Subclasses may override to control config subfolder name
-    CONFIG_SUBDIR: str | None = None
-
+    """
+    Abstract base class for camera operations.
+    Defines the interface that all camera implementations must follow.
+    
+    Each camera implementation should handle its own SDK loading in the
+    ensure_sdk_loaded() method. This is typically called once before any
+    camera operations.
+    """
+    
+    # Class-level flag to track if SDK has been loaded
+    _sdk_loaded = False
+    
     def __init__(self):
-        # Public-ish, common state
-        self.name = ""
-        self.is_taking_image = False
-        self.last_image: np.ndarray | None = None   # (H, W, 3) RGB uint8
-        self.last_stream_array: np.ndarray | None = None  # (H, W, 3) RGB uint8
-
-        self.last_image_ts: float = 0.0
-        self.last_stream_ts: float = 0.0
-
-        self.initialized = False
-        # Safe default for save_image() until a subclass loads real settings
-        self.settings = CameraSettings()
-        self._scope = self.get_impl_key()
-        CameraSettingsManager.scope_dir(self._scope)
-
-        # Camera-native dimensions (subclasses may set real values during initialize())
-        self.width = 1280
-        self.height = 720
-
-        # Capture path
-        self.capture_path = "./output/"
-        self.image_name_formatter = ImageNameFormatter(template="{d:%Y%m%d_%H%M%S}")
-
-        # Config roots
-        self._scope = self.get_impl_key()
-        CameraSettingsManager.scope_dir(self._scope)
-        self.impl_config_dir = self.get_config_dir()  # e.g., config/amscope
-        self.impl_config_dir.mkdir(parents=True, exist_ok=True)
-
-        # Allow subclasses to do pre-initialize work (e.g., load SDKs) before initialize()
-        self.pre_initialize()
-        self.initialized = self.initialize()
-
-    # ----- Lifecycle hooks -----
-    def pre_initialize(self):
-        """Optional hook to run before initialize(); subclasses may override."""
-        pass
-
+        self._is_open = False
+        self._callback = None
+        self._callback_context = None
+        
+    @property
+    def is_open(self) -> bool:
+        """Check if camera is currently open"""
+        return self._is_open
+    
+    @classmethod
     @abstractmethod
-    def initialize(self) -> bool:
-        """Initialize camera hardware and settings."""
+    def ensure_sdk_loaded(cls, sdk_path: Optional[Path] = None) -> bool:
+        """
+        Ensure the camera SDK is loaded and ready to use.
+        
+        This method should be called before any camera operations.
+        Implementations should handle:
+        - Loading vendor SDK libraries
+        - Platform-specific initialization
+        - Setting up library search paths
+        - Extracting SDK files if needed
+        
+        Args:
+            sdk_path: Optional path to SDK location. If None, use default location.
+            
+        Returns:
+            True if SDK is loaded successfully, False otherwise
+            
+        Note:
+            This is a class method so it can be called before instantiating cameras.
+            Most implementations should track SDK load state to avoid reloading.
+        """
         pass
-
+    
+    @classmethod
+    def is_sdk_loaded(cls) -> bool:
+        """
+        Check if SDK has been loaded.
+        
+        Returns:
+            True if SDK is loaded, False otherwise
+        """
+        return cls._sdk_loaded
+    
     @abstractmethod
-    def update(self):
-        """Update camera frame."""
+    def open(self, camera_id: str) -> bool:
+        """
+        Open camera connection
+        
+        Args:
+            camera_id: Identifier for the camera to open
+            
+        Returns:
+            True if successful, False otherwise
+        """
         pass
-
+    
     @abstractmethod
-    def capture_image(self):
-        """Capture a still image (subclass must implement)."""
-        pass
-
-    # -------------------------------
-    # Config & settings convenience
-    # -------------------------------
-    def get_impl_key(self) -> str:
-        """
-        Returns the implementation key used for config subfolder naming.
-        Default: lowercased class name with trailing 'camera' removed (e.g., AmscopeCamera -> 'amscope').
-        Subclasses can override by setting CONFIG_SUBDIR.
-        """
-        if isinstance(self.CONFIG_SUBDIR, str) and self.CONFIG_SUBDIR.strip():
-            return self.CONFIG_SUBDIR.strip()
-        cls = self.__class__.__name__
-        return (cls[:-6] if cls.lower().endswith("camera") else cls).lower()
-
-    def get_config_dir(self) -> Path:
-        return CameraSettingsManager.scope_dir(self._scope)
-
-    def load_and_apply_settings(self, filename: str = ACTIVE_FILENAME):
-        """
-        Load settings from YAML and apply to the live camera.
-        If the active file is missing, this falls back to default_settings.yaml, else built-in defaults.
-        """
-        loaded = CameraSettingsManager.load(self._scope)
-        self.settings = loaded
-        self.apply_settings(self.settings)
-
-    def apply_settings(self, settings):
-        """
-        Apply settings to the hardware. By default this calls a subclass hook named _apply_settings
-        if present. Subclasses should implement _apply_settings(settings: CameraSettings).
-        """
-        hook = getattr(self, "_apply_settings", None)
-        if callable(hook):
-            hook(settings)
-        else:
-            raise NotImplementedError(
-                f"{self.__class__.__name__} must implement _apply_settings(settings) or override apply_settings()."
-            )
-
-    def save_settings(self, filename: str = ACTIVE_FILENAME):
-        """
-        Persist current settings to YAML in the per-implementation folder.
-        Automatically creates a timestamped backup of the previous version and keeps the 5 most recent.
-        """
-        CameraSettingsManager.save(self._scope, self.settings)
-
-    def set_settings(self, settings, persist: bool = False, filename: str = ACTIVE_FILENAME):
-        """
-        Replace the entire settings object, apply immediately, optionally persist to disk.
-        """
-        self.settings = settings
-        self.apply_settings(self.settings)
-        if persist:
-            self.save_settings(filename=filename)
-
-    def update_settings(self, persist: bool = False, filename: str = ACTIVE_FILENAME, **updates):
-        """
-        Update one or more attributes on the current settings, apply immediately, and
-        optionally persist to disk. Example:
-
-            camera.update_settings(temp=6500, tint=900, linear=1, persist=True)
-        """
-        # If settings hasn't been loaded yet, attempt to load from disk first.
-        if not hasattr(self.settings, "__dict__"):
-            self.load_and_apply_settings(filename=filename)
-
-        # Apply updates (only for existing attributes to avoid silent typos)
-        for k, v in updates.items():
-            if hasattr(self.settings, k):
-                setattr(self.settings, k, v)
-            else:
-                raise AttributeError(f"Unknown camera setting '{k}'")
-
-        # Push to hardware and optionally persist
-        self.apply_settings(self.settings)
-        if persist:
-            self.save_settings(filename=filename)
-
-    # ----- Defaults helpers -----
-    def get_default_config_path(self) -> Path:
-        return self.get_config_path(DEFAULT_FILENAME)
-
-    def write_default_settings(self, settings: CameraSettings | None = None) -> Path:
-        """
-        Write default_settings.yaml in this camera's config directory.
-        If 'settings' is None, writes built-in defaults.
-        """
-        return CameraSettingsManager.write_defaults(self._scope, settings)
-
-    def load_default_settings(self):
-        """
-        Load defaults from default_settings.yaml (or built-in defaults if file doesn't exist),
-        apply to hardware, but do NOT persist to the active file.
-        """
-        defaults = CameraSettingsManager.load_defaults(self._scope)
-        self.set_settings(defaults, persist=False)
-        return defaults
-
-    def restore_default_settings(self, persist: bool = True):
-        """
-        Restore defaults into the active settings file (backup the current one), apply, and optionally persist.
-        Useful for a "Restore Defaults" button in the UI.
-        """
-        restored = CameraSettingsManager.restore_defaults_into_active(self._scope)
-        self.set_settings(restored, persist=False)
-        if persist:
-            self.save_settings()
-        return restored
-
-    # -------------------------------
-    # Image helpers
-    # -------------------------------
-    def get_last_image(self):
-        """Get the last captured image, waiting if a capture is in progress."""
-        while self.is_taking_image:
-            time.sleep(0.01)
-        return self.last_image
-
-    def get_last_stream_array(self) -> np.ndarray | None:
-        """Return latest live-stream RGB frame as (H, W, 3) uint8, or None."""
-        return self.last_stream_array
-
-    def get_last_frame(self, prefer: str = "latest", wait_for_still: bool = True):
-        """
-        Return the latest RGB frame (H, W, 3) uint8 from either a still or the stream.
-
-        prefer:
-        - "latest" (default): whichever arrived most recently (compares timestamps)
-        - "still"           : still if present, else stream
-        - "stream"          : stream if present, else still
-
-        wait_for_still:
-        - If True, block briefly if a still capture is currently in progress.
-        """
-        if wait_for_still and self.is_taking_image:
-            while self.is_taking_image:
-                time.sleep(0.01)
-
-        # Fast paths for legacy behavior
-        if prefer == "still":
-            return self.last_image if self.last_image is not None else self.last_stream_array
-        if prefer == "stream":
-            return self.last_stream_array if self.last_stream_array is not None else self.last_image
-
-        # "latest" behavior: pick the freshest we’ve seen
-        li, ls = self.last_image, self.last_stream_array
-        ti, ts = self.last_image_ts, self.last_stream_ts
-
-        if li is None and ls is None:
-            return None
-        if li is None:
-            return ls
-        if ls is None:
-            return li
-        return li if ti >= ts else ls
-
-    def capture_and_save(self, filename: str = "", folder: str = ""):
-        self.capture_image()
-        self.save_image(filename, folder)
-
-    def save_image(self, folder: str = "", filename: str = ""):
-        while self.is_taking_image:
-            time.sleep(0.01)
-
-        arr = self.last_image
-        if arr is None:
-            print("No image to save (last_image is None).")
-            return
-
-        try:
-            arr = np.asarray(arr)
-            if arr.ndim == 2:
-                arr = np.stack([arr] * 3, axis=-1)
-            if arr.ndim != 3 or arr.shape[2] not in (3, 4):
-                raise ValueError(f"Unsupported image shape: {arr.shape}")
-            if arr.dtype != np.uint8:
-                arr = np.clip(arr, 0, 255).astype(np.uint8)
-
-            mode = "RGBA" if arr.shape[2] == 4 else "RGB"
-
-            save_path = Path(self.capture_path) / folder
-            save_path.mkdir(parents=True, exist_ok=True)
-
-            if filename:
-                final_filename = filename
-            else:
-                final_filename = self.image_name_formatter.get_formatted_string(
-                    auto_increment_index=True
-                )
-
-            fformat = self.settings.fformat
-            full_path = save_path / f"{final_filename}.{fformat}"
-            print(f"Saving Image: {full_path}")
-            Image.fromarray(arr, mode=mode).save(str(full_path))
-        except Exception as e:
-            print(f"Error saving image: {e}")
-
-    def set_capture_path(self, path: str):
-        """Set path for saving captured images."""
-        self.capture_path = path
-
-    def select_capture_path(self):
-        """Open a folder selection dialog to set the capture path."""
-        root = tk.Tk()
-        root.withdraw()  # Hide the main Tk window
-        selected_folder = filedialog.askdirectory(title="Select Capture Folder")
-        root.destroy()
-
-        if selected_folder:  # User didn't cancel
-            self.set_capture_path(selected_folder)
-            print(f"Capture path set to: {self.capture_path}")
-        return self.capture_path
-
-    # Provide a default close() that gracefully shuts down common SDKs
     def close(self):
-        """Clean up camera resources if possible."""
-        cam = getattr(self, "camera", None)
-        if cam is not None:
-            try:
-                close_fn = getattr(cam, "Close", None)
-                if callable(close_fn):
-                    close_fn()
-            except Exception:
-                pass
-            finally:
-                self.camera = None
+        """Close camera connection and cleanup resources"""
+        pass
+    
+    @abstractmethod
+    def start_capture(self, callback: Callable, context: Any) -> bool:
+        """
+        Start capturing frames
+        
+        Args:
+            callback: Function to call when events occur
+            context: Context object to pass to callback
+            
+        Returns:
+            True if successful, False otherwise
+        """
+        pass
+    
+    @abstractmethod
+    def stop_capture(self):
+        """Stop capturing frames"""
+        pass
+    
+    @abstractmethod
+    def pull_image(self, buffer: bytes, bits_per_pixel: int = 24) -> bool:
+        """
+        Pull the latest image into provided buffer
+        
+        Args:
+            buffer: Pre-allocated buffer to receive image data
+            bits_per_pixel: Bits per pixel (typically 24 for RGB)
+            
+        Returns:
+            True if successful, False otherwise
+        """
+        pass
+    
+    @abstractmethod
+    def snap_image(self, resolution_index: int = 0) -> bool:
+        """
+        Capture a still image at specified resolution
+        
+        Args:
+            resolution_index: Index of resolution to use
+            
+        Returns:
+            True if successful, False otherwise
+        """
+        pass
+    
+    @abstractmethod
+    def get_resolutions(self) -> list[CameraResolution]:
+        """
+        Get available camera resolutions
+        
+        Returns:
+            List of available resolutions
+        """
+        pass
+    
+    @abstractmethod
+    def get_current_resolution(self) -> Tuple[int, int, int]:
+        """
+        Get current resolution
+        
+        Returns:
+            Tuple of (resolution_index, width, height)
+        """
+        pass
+    
+    @abstractmethod
+    def set_resolution(self, resolution_index: int) -> bool:
+        """
+        Set camera resolution
+        
+        Args:
+            resolution_index: Index of resolution to use
+            
+        Returns:
+            True if successful, False otherwise
+        """
+        pass
+    
+    @abstractmethod
+    def get_exposure_range(self) -> Tuple[int, int, int]:
+        """
+        Get exposure time range
+        
+        Returns:
+            Tuple of (min, max, default) values
+        """
+        pass
+    
+    @abstractmethod
+    def get_exposure_time(self) -> int:
+        """
+        Get current exposure time
+        
+        Returns:
+            Current exposure time in microseconds
+        """
+        pass
+    
+    @abstractmethod
+    def set_exposure_time(self, time_us: int) -> bool:
+        """
+        Set exposure time
+        
+        Args:
+            time_us: Exposure time in microseconds
+            
+        Returns:
+            True if successful, False otherwise
+        """
+        pass
+    
+    @abstractmethod
+    def get_gain_range(self) -> Tuple[int, int, int]:
+        """
+        Get gain range
+        
+        Returns:
+            Tuple of (min, max, default) values in percent
+        """
+        pass
+    
+    @abstractmethod
+    def get_gain(self) -> int:
+        """
+        Get current gain
+        
+        Returns:
+            Current gain in percent
+        """
+        pass
+    
+    @abstractmethod
+    def set_gain(self, gain_percent: int) -> bool:
+        """
+        Set gain
+        
+        Args:
+            gain_percent: Gain in percent
+            
+        Returns:
+            True if successful, False otherwise
+        """
+        pass
+    
+    @abstractmethod
+    def get_auto_exposure(self) -> bool:
+        """
+        Get auto exposure state
+        
+        Returns:
+            True if auto exposure is enabled, False otherwise
+        """
+        pass
+    
+    @abstractmethod
+    def set_auto_exposure(self, enabled: bool) -> bool:
+        """
+        Set auto exposure state
+        
+        Args:
+            enabled: True to enable, False to disable
+            
+        Returns:
+            True if successful, False otherwise
+        """
+        pass
+    
+    @abstractmethod
+    def supports_white_balance(self) -> bool:
+        """
+        Check if camera supports white balance
+        
+        Returns:
+            True if white balance is supported, False otherwise
+        """
+        pass
+    
+    @abstractmethod
+    def get_white_balance_range(self) -> Tuple[Tuple[int, int], Tuple[int, int]]:
+        """
+        Get white balance range
+        
+        Returns:
+            Tuple of ((temp_min, temp_max), (tint_min, tint_max))
+        """
+        pass
+    
+    @abstractmethod
+    def get_white_balance(self) -> Tuple[int, int]:
+        """
+        Get current white balance
+        
+        Returns:
+            Tuple of (temperature, tint)
+        """
+        pass
+    
+    @abstractmethod
+    def set_white_balance(self, temperature: int, tint: int) -> bool:
+        """
+        Set white balance
+        
+        Args:
+            temperature: Color temperature value
+            tint: Tint value
+            
+        Returns:
+            True if successful, False otherwise
+        """
+        pass
+    
+    @abstractmethod
+    def auto_white_balance(self) -> bool:
+        """
+        Perform one-time auto white balance
+        
+        Returns:
+            True if successful, False otherwise
+        """
+        pass
+    
+    @abstractmethod
+    def get_frame_rate(self) -> Tuple[int, int, int]:
+        """
+        Get current frame rate information
+        
+        Returns:
+            Tuple of (frames_in_period, time_period_ms, total_frames)
+        """
+        pass
+    
+    @staticmethod
+    @abstractmethod
+    def enumerate_cameras() -> list[CameraInfo]:
+        """
+        Enumerate available cameras
+        
+        Returns:
+            List of available camera information
+        """
+        pass
+    
+    @abstractmethod
+    def supports_still_capture(self) -> bool:
+        """
+        Check if camera supports separate still image capture
+        
+        Returns:
+            True if supported, False otherwise
+        """
+        pass
+    
+    @abstractmethod
+    def get_still_resolutions(self) -> list[CameraResolution]:
+        """
+        Get available still image resolutions
+        
+        Returns:
+            List of available still resolutions
+        """
+        pass
