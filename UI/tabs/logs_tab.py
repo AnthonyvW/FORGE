@@ -3,6 +3,7 @@ from __future__ import annotations
 import subprocess
 import sys
 from pathlib import Path
+from datetime import datetime
 
 from PySide6.QtCore import Qt, QTimer
 from PySide6.QtWidgets import (
@@ -72,9 +73,13 @@ class LogsTab(QWidget):
         Handle incoming log message.
         This is called from the logger for each message.
         """
+        
+        # Get current timestamp
+        timestamp = datetime.now().strftime('%Y-%m-%d %H:%M:%S')
+        
         # Format with color based on level
         color = self._get_level_color(level)
-        formatted = f'<span style="color: {color};">[{level}]</span> {self._escape_html(message)}'
+        formatted = f'<span style="color: #666666;">[{timestamp}]</span> <span style="color: {color};">[{level}]</span> {self._escape_html(message)}'
         
         self._log_display.append(formatted)
         
