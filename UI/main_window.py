@@ -30,7 +30,13 @@ class MainWindow(QMainWindow):
         self.resize(1920, 1080)
 
         self._state = State()
+        
+        # Get app context
+        self.app_context = get_app_context()
+        
+        # Create and register settings dialog
         self.settings_dialog = SettingsDialog(self)
+        self.app_context.register_settings_dialog(self.settings_dialog)
 
         # Header Bar
         self.tabs = QTabWidget()
@@ -114,10 +120,7 @@ class MainWindow(QMainWindow):
         return status_bar
 
     def _open_settings(self, category: str) -> None:
-        self.settings_dialog.open_to(category)
-        self.settings_dialog.show()
-        self.settings_dialog.raise_()
-        self.settings_dialog.activateWindow()
+        self.app_context.open_settings(category)
     
     def _apply_status(self) -> None:
         self.status_line.setText(self._state.format_status_text())

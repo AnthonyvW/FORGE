@@ -16,6 +16,10 @@ from UI.style import RIGHT_SIDEBAR_WIDTH
 from UI.tabs.base_tab import CameraWithSidebarPage
 
 from UI.widgets.camera_preview import CameraPreview
+from UI.widgets.collapsible_section import CollapsibleSection
+from UI.widgets.camera_controls_widget import CameraControlsWidget
+
+from app_context import open_settings
 
 class NavigateTab(CameraWithSidebarPage):
     def __init__(self, parent: QWidget | None = None) -> None:
@@ -36,6 +40,9 @@ class NavigateTab(CameraWithSidebarPage):
 
         # Start Widgets
 
+        camera_controls = CollapsibleSection("Camera Controls", on_settings=lambda: open_settings("Camera"))
+        camera_controls.layout_for_content().addWidget(CameraControlsWidget())
+        content_layout.addWidget(camera_controls)
 
         # End Widgets
 

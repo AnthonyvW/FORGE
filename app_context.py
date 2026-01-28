@@ -3,10 +3,14 @@ Application context for managing shared resources and state.
 Provides a singleton pattern for accessing camera and other shared resources.
 """
 
-from typing import Optional
+from typing import Optional, TYPE_CHECKING
 from camera.base_camera import BaseCamera
 from camera.amscope_camera import AmscopeCamera
 from logger import get_logger
+from forgeConfig import ForgeSettingsManager, ForgeSettings
+
+if TYPE_CHECKING:
+    from UI.settings.settings_main import SettingsDialog
 
 
 class AppContext:
@@ -27,7 +31,13 @@ class AppContext:
             
         self._camera: Optional[BaseCamera] = None
         self._camera_initialized = False
+        self._settings_dialog: Optional['SettingsDialog'] = None
+        self._settings_manager: Optional[ForgeSettingsManager] = None
+        self._settings: Optional[ForgeSettings] = None
         self._initialized = True
+        
+        # Load settings
+        self._load_settings()
     
     @property
     def camera(self) -> Optional[BaseCamera]:
@@ -35,6 +45,46 @@ class AppContext:
         if not self._camera_initialized:
             self._initialize_camera()
         return self._camera
+    
+    @property
+    def settings(self) -> Optional[ForgeSettings]:
+        """Get the Forge settings"""
+        return self._settings
+    
+    @property
+    def settings_dialog(self) -> Optional['SettingsDialog']:
+        """Get the settings dialog instance"""
+        return self._settings_dialog
+    
+    def register_settings_dialog(self, dialog: 'SettingsDialog'):
+        """Register the settings dialog instance"""
+        self._settings_dialog = dialog
+    
+    def open_settings(self, category: str):
+        """
+        Open settings dialog to a specific category.
+        
+        Args:
+            category: Name of the settings category to open to
+        """
+        if self._settings_dialog:
+            self._settings_dialog.open_to(category)
+            self._settings_dialog.show()
+            self._settings_dialog.raise_()
+            self._settings_dialog.activateWindow()
+    
+    def _load_settings(self):
+        """Load Forge application settings"""
+        logger = get_logger()
+        try:
+            self._settings_manager = ForgeSettingsManager()
+            self._settings = self._settings_manager.load()
+            logger.info(f"Forge settings loaded - version: {self._settings.version}")
+        except Exception as e:
+            logger.error(f"Failed to load Forge settings: {e}")
+            # Create default settings if loading fails
+            self._settings = ForgeSettings()
+            logger.warning("Using default Forge settings")
     
     def _initialize_camera(self):
         """Initialize the camera subsystem"""
@@ -65,9 +115,15 @@ class AppContext:
             self._camera.close()
         self._camera = None
         self._camera_initialized = False
+        self._settings_dialog = None
+        self._settings_manager = None
+        self._settings = None
 
 
 # Global instance accessor
 def get_app_context() -> AppContext:
     """Get the global application context"""
     return AppContext()
+
+def open_settings(category: str):
+    AppContext().open_settings(category)

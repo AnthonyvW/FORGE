@@ -1,34 +1,58 @@
 from __future__ import annotations
 
 from dataclasses import dataclass
+from typing import Union
+from pathlib import Path
 
-from generic_config import ConfigManager, DEFAULT_FILENAME, ACTIVE_FILENAME
+from generic_config import ConfigManager
+
 
 @dataclass
-class ForgeSettings():
-    serial_port: str = "COM9"
-    windowWidth: int = 1440
-    windowHeight: int = 810
+class ForgeSettings:
+    """Forge application settings."""
     version: str = "1.1"
+    
+    def validate(self) -> None:
+        """
+        Validate Forge settings.
+        
+        Raises:
+            ValueError: If any setting is invalid
+        """
+        # Add validation logic as needed
+        if not isinstance(self.version, str) or not self.version:
+            raise ValueError("version must be a non-empty string")
 
-def make_forge_settings_manager(
-    *,
-    root_dir: str = "./config/forge",
-    default_filename: str = "default_settings.yaml",
-    backup_dirname: str = "backups",
-    backup_keep: int = 5,
-) -> ConfigManager[ForgeSettings]:
-    return ConfigManager[ForgeSettings](
-        ForgeSettings,
-        root_dir=root_dir,
-        default_filename=default_filename,
-        backup_dirname=backup_dirname,
-        backup_keep=backup_keep,
-    )
 
-ForgeSettingsManager = make_forge_settings_manager(
-    root_dir="./config/forge",
-    default_filename=DEFAULT_FILENAME,
-    backup_dirname="backups",
-    backup_keep=5,
-)
+class ForgeSettingsManager(ConfigManager[ForgeSettings]):
+    """
+    Configuration manager for Forge application settings.
+    
+    Directory structure:
+        config/forge/
+            settings.yaml
+            default_settings.yaml
+            backups/
+    
+    Example usage:
+        >>> forge_mgr = ForgeSettingsManager()
+        >>> settings = forge_mgr.load()
+        >>> settings.version = "1.2"
+        >>> forge_mgr.save(settings)
+    """
+    
+    def __init__(
+        self,
+        *,
+        root_dir: Union[str, Path] = "./config/forge",
+        default_filename: str = "default_settings.yaml",
+        backup_dirname: str = "backups",
+        backup_keep: int = 5,
+    ) -> None:
+        super().__init__(
+            ForgeSettings,
+            root_dir=root_dir,
+            default_filename=default_filename,
+            backup_dirname=backup_dirname,
+            backup_keep=backup_keep,
+        )
