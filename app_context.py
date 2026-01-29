@@ -11,6 +11,7 @@ from forgeConfig import ForgeSettingsManager, ForgeSettings
 
 if TYPE_CHECKING:
     from UI.settings.settings_main import SettingsDialog
+    from UI.widgets.toast_widget import ToastManager
 
 
 class AppContext:
@@ -34,6 +35,8 @@ class AppContext:
         self._settings_dialog: Optional['SettingsDialog'] = None
         self._settings_manager: Optional[ForgeSettingsManager] = None
         self._settings: Optional[ForgeSettings] = None
+        self._toast_manager: Optional['ToastManager'] = None
+        self._main_window = None
         self._initialized = True
         
         # Load settings
@@ -55,6 +58,19 @@ class AppContext:
     def settings_dialog(self) -> Optional['SettingsDialog']:
         """Get the settings dialog instance"""
         return self._settings_dialog
+    
+    @property
+    def toast(self) -> Optional['ToastManager']:
+        """Get the toast manager instance"""
+        return self._toast_manager
+    
+    def register_main_window(self, window):
+        """Register the main window instance"""
+        self._main_window = window
+        # Initialize toast manager when main window is registered
+        if self._toast_manager is None:
+            from UI.widgets.toast_widget import ToastManager
+            self._toast_manager = ToastManager(window)
     
     def register_settings_dialog(self, dialog: 'SettingsDialog'):
         """Register the settings dialog instance"""
@@ -118,6 +134,8 @@ class AppContext:
         self._settings_dialog = None
         self._settings_manager = None
         self._settings = None
+        self._toast_manager = None
+        self._main_window = None
 
 
 # Global instance accessor

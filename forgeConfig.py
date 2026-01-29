@@ -10,7 +10,7 @@ from generic_config import ConfigManager
 @dataclass
 class ForgeSettings:
     """Forge application settings."""
-    version: str = "1.1"
+    version: str = "1.2"
     
     def validate(self) -> None:
         """

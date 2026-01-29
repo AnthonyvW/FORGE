@@ -26,13 +26,21 @@ from app_context import get_app_context
 class MainWindow(QMainWindow):
     def __init__(self) -> None:
         super().__init__()
-        self.setWindowTitle("Forge")
-        self.resize(1920, 1080)
-
-        self._state = State()
         
         # Get app context
         self.app_context = get_app_context()
+        
+        # Register this main window with app context (initializes toast manager)
+        self.app_context.register_main_window(self)
+        
+        # Set window title with version from config
+        version = "Unknown"
+        if self.app_context.settings:
+            version = self.app_context.settings.version
+        self.setWindowTitle(f"Forge - v{version}")
+        self.resize(1920, 1080)
+
+        self._state = State()
         
         # Create and register settings dialog
         self.settings_dialog = SettingsDialog(self)
@@ -54,6 +62,7 @@ class MainWindow(QMainWindow):
 
     def resizeEvent(self, event) -> None:
         super().resizeEvent(event)
+        # Toast manager now tracks moves/resizes via event filter
         
     def _setup_header_right(self) -> None:
         header_edge = QWidget()
