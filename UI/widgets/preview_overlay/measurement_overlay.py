@@ -922,7 +922,15 @@ class MeasurementOverlay(Overlay):
         return self._drag_measurement_index is not None
 
     def hit_test_endpoint(self, pos: QPoint, rect: QRect, widget_rect: QRect) -> tuple[int, int] | None:
-        """Return (measurement index, point index) for the closest placed point within grabbing distance of *pos*, or None."""
+        """
+        Return (measurement index, point index) for the closest placed
+        point within grabbing distance of *pos*, or None. A measurement
+        index of -1 denotes the in-progress manual DPI-calibration line
+        instead of an entry in ``self.measurements`` — it's tracked
+        separately (see ``_calibration_line``) since it's never a real,
+        exportable measurement — but its two endpoints should still be
+        draggable the same way any other placed line's are.
+        """
         if self._zoom_handler is None:
             return None
         best: tuple[int, int] | None = None
@@ -938,6 +946,17 @@ class MeasurementOverlay(Overlay):
                 if dist_sq <= best_dist_sq:
                     best_dist_sq = dist_sq
                     best = (m_index, p_index)
+        if self._calibration_line is not None:
+            for p_index, fraction in enumerate(self._calibration_line):
+                screen = self._zoom_handler.widget_pos_for_rect_point(
+                    self._to_point(rect, fraction), rect, widget_rect
+                )
+                dx = screen.x() - pos.x()
+                dy = screen.y() - pos.y()
+                dist_sq = dx * dx + dy * dy
+                if dist_sq <= best_dist_sq:
+                    best_dist_sq = dist_sq
+                    best = (-1, p_index)
         return best
 
     def begin_endpoint_drag(self, pos: QPoint, rect: QRect, widget_rect: QRect) -> bool:
@@ -953,8 +972,18 @@ class MeasurementOverlay(Overlay):
         point = self._to_fraction(pos, widget_rect)
         if point is None:
             return False
-        self._move_point(self._drag_measurement_index, self._drag_point_index, point)
+        if self._drag_measurement_index == -1:
+            self._move_calibration_point(self._drag_point_index, point)
+        else:
+            self._move_point(self._drag_measurement_index, self._drag_point_index, point)
         return True
+
+    def _move_calibration_point(self, p_index: int, new_point: tuple[float, float]) -> None:
+        if self._calibration_line is None or p_index < 0 or p_index >= len(self._calibration_line):
+            return
+        points = list(self._calibration_line)
+        points[p_index] = new_point
+        self._calibration_line = tuple(points)
 
     def end_endpoint_drag(self) -> None:
         self._drag_measurement_index = None
