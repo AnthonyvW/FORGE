@@ -125,6 +125,14 @@ class MeasurementTab(CameraWithSidebarPage):
         if preview is not None:
             self._mode_token = preview.modes.push(MEASUREMENT_MODE)
             preview.overlays.measurement.set_scalebar_placed_callback(self._on_scalebar_placed)
+            # The overlay's own active_type is separate state from
+            # MeasurementsWidget's selected tile — something else (e.g.
+            # the DPI Calibration wizard's manual-calibration cleanup)
+            # can reset it to None behind this tab's back while it isn't
+            # the one showing the preview. Re-sync it from whatever's
+            # actually still selected here rather than leaving clicks a
+            # no-op until the user deselects/reselects a tile by hand.
+            preview.overlays.measurement.type = self._measurements.selected_measurement()
 
     def hideEvent(self, event: QEvent) -> None:
         super().hideEvent(event)
