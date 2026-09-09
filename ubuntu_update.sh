@@ -3,9 +3,15 @@ set -e
 
 echo "Updating FieldWeave..."
 
-echo "Pulling latest changes from git..."
-if ! git pull; then
-    echo "ERROR: git pull failed. Check your connection or repository status."
+echo "Fetching latest changes from git..."
+if ! git fetch origin main; then
+    echo "ERROR: git fetch failed. Check your connection or repository status."
+    exit 1
+fi
+
+echo "Switching to the main branch..."
+if ! git checkout -B main origin/main; then
+    echo "ERROR: git checkout failed. Check for local changes that would be overwritten."
     exit 1
 fi
 

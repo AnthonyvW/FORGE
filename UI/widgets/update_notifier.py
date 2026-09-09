@@ -1,10 +1,11 @@
 from __future__ import annotations
 
 from PySide6.QtCore import Qt, QTimer
-from PySide6.QtWidgets import QApplication, QMessageBox, QWidget
+from PySide6.QtWidgets import QApplication, QDialog, QMessageBox, QWidget
 
 from common.app_context import get_app_context
 from common.updater import Updater, UpdateStatus, relaunch
+from UI.widgets.update_available_dialog import UpdateAvailableDialog
 
 
 class UpdateNotifier(QWidget):
@@ -49,9 +50,9 @@ class UpdateNotifier(QWidget):
 
         if status == UpdateStatus.UPDATE_AVAILABLE and not self._prompted:
             self._prompted = True
-            # Stop polling before the modal Yes/No prompt below: QMessageBox.question()
-            # runs a nested event loop, and a still-running poll_timer would keep firing
-            # _poll() reentrantly for as long as the user leaves the prompt open.
+            # Stop polling before the modal dialog below: exec() runs a nested
+            # event loop, and a still-running poll_timer would keep firing
+            # _poll() reentrantly for as long as the user leaves the dialog open.
             self._poll_timer.stop()
             self._prompt_update()
 
@@ -63,11 +64,6 @@ class UpdateNotifier(QWidget):
         elif status == UpdateStatus.CHECK_FAILED:
             self._poll_timer.stop()
             self._notify_check_failed()
-            self._manual = False
-
-        elif status == UpdateStatus.NO_UPSTREAM:
-            self._poll_timer.stop()
-            self._notify_no_upstream()
             self._manual = False
 
         elif status == UpdateStatus.UPDATING and self._updating_dialog is None:
@@ -84,17 +80,13 @@ class UpdateNotifier(QWidget):
             self._show_update_failed_message()
 
     def _prompt_update(self) -> None:
-        behind = self._updater.commits_behind
-        plural = "s" if behind != 1 else ""
+        version = self._updater.latest_version
+        title = self._updater.release_title
+        notes = self._updater.release_notes.strip() or "No release notes provided."
 
-        reply = QMessageBox.question(
-            self.parentWidget(),
-            "Update Available",
-            f"FieldWeave is {behind} commit{plural} behind. Update now?",
-            QMessageBox.StandardButton.Yes | QMessageBox.StandardButton.No,
-        )
+        dialog = UpdateAvailableDialog(version, title, notes, self.parentWidget())
 
-        if reply == QMessageBox.StandardButton.Yes:
+        if dialog.exec() == QDialog.DialogCode.Accepted:
             self._updater.start_update()
             self._poll_timer.start()
 
@@ -167,14 +159,6 @@ class UpdateNotifier(QWidget):
             )
         else:
             self._toast_success("FieldWeave is up to date")
-
-    def _notify_no_upstream(self) -> None:
-        if self._manual:
-            QMessageBox.information(
-                self.parentWidget(),
-                "Update Check Skipped",
-                "The current branch is not tracking a remote, so update checking is unavailable.",
-            )
 
     def _notify_check_failed(self) -> None:
         message = f"Failed to check for updates: {self._updater.error_message}"
