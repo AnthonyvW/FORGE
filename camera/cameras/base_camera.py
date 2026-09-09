@@ -339,7 +339,30 @@ class BaseCamera(ABC):
             True if successful, False otherwise.
         """
         pass
-    
+
+    def get_realtime_mode(self) -> int | None:
+        """
+        Return the camera's current frame-buffering mode, or None if this
+        camera doesn't support adjusting it.
+
+        Cameras that buffer/queue frames internally before delivering them
+        (e.g. Amscope's frontend/backend deques) can deliver stale frames -
+        this exposes whatever knob controls that, so callers doing
+        latency-sensitive capture (e.g. right after a stage move) can drop
+        the buffering, then restore whatever this returned when done.
+        """
+        return None
+
+    def set_realtime_mode(self, value: int) -> bool:
+        """
+        Set the camera's frame-buffering mode. No-op for cameras that don't
+        support this.
+
+        Returns:
+            True if the mode was applied, False if unsupported or it failed.
+        """
+        return False
+
     def save_image(
         self,
         image_data: np.ndarray,

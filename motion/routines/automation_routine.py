@@ -39,6 +39,7 @@ from abc import ABC, abstractmethod
 from dataclasses import dataclass, field
 from typing import Any, TYPE_CHECKING, Callable, Generator
 
+from common.app_context import get_app_context
 from common.logger import info, error, warning, debug
 
 if TYPE_CHECKING:
@@ -333,6 +334,34 @@ class AutomationRoutine(ABC):
 
     def _run(self) -> None:
         info(f"[{type(self).__name__}] Starting")
+
+        # Drop the camera's internal frame buffering for the duration of this
+        # routine. Cameras that queue frames before delivering them (e.g.
+        # Amscope's frontend/backend deques) can otherwise hand back a stale
+        # frame - most visible right after a stage move, where a queued frame
+        # from before the move gets saved instead of the current view.
+        # Restored to whatever it was once the routine finishes so normal
+        # interactive preview isn't affected outside of automation.
+        camera = None
+        prior_realtime_mode: int | None = None
+        try:
+            camera = get_app_context().camera
+        except Exception as exc:
+            warning(f"[{type(self).__name__}] Could not access camera for low-latency capture: {exc}")
+
+        if camera is not None:
+            try:
+                _, prior_realtime_mode = camera.get_realtime_mode(wait=True)
+                if prior_realtime_mode is not None:
+                    camera.set_realtime_mode(1, wait=True)
+                    debug(
+                        f"[{type(self).__name__}] Enabled low-latency capture mode"
+                        f" (was {prior_realtime_mode})"
+                    )
+            except Exception as exc:
+                warning(f"[{type(self).__name__}] Failed to enable low-latency capture mode: {exc}")
+                prior_realtime_mode = None
+
         try:
             gen = self.steps()
             while True:
@@ -367,6 +396,13 @@ class AutomationRoutine(ABC):
             import traceback
             error(traceback.format_exc())
         finally:
+            if camera is not None and prior_realtime_mode is not None:
+                try:
+                    camera.set_realtime_mode(prior_realtime_mode, wait=True)
+                    debug(f"[{type(self).__name__}] Restored camera realtime mode to {prior_realtime_mode}")
+                except Exception as exc:
+                    warning(f"[{type(self).__name__}] Failed to restore camera realtime mode: {exc}")
+
             self._running = False
             self._finished.set()
             # Clear activity/progress/ETA on exit so the UI resets cleanly.

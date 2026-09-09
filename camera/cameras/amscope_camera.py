@@ -276,6 +276,25 @@ class AmscopeCamera(BaseCamera):
             error(f"snap_image failed: {_format_hresult(e)}")
             return False
 
+    def get_realtime_mode(self) -> int | None:
+        if not self._hcam:
+            return None
+        try:
+            return self._hcam.get_RealTime()
+        except Exception as e:
+            error(f"Failed to get RealTime mode: {_format_hresult(e)}")
+            return None
+
+    def set_realtime_mode(self, value: int) -> bool:
+        if not self._hcam:
+            return False
+        try:
+            self._hcam.put_RealTime(value)
+            return True
+        except Exception as e:
+            error(f"Failed to set RealTime mode: {_format_hresult(e)}")
+            return False
+
     # -------------------------
     # Resolution Management
     # -------------------------
