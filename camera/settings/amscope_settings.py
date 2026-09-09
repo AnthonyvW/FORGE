@@ -1012,6 +1012,14 @@ class AmscopeSettings(CameraSettings):
             return (0, 0, 0)
 
         r = still_resolutions[index]
+        # Swap to match the actual still buffer's layout for a 90/270
+        # rotation (see the EVENT_STILLIMAGE handler in amscope_camera.py
+        # and get_still_output_dimensions above) - callers use this to
+        # scale live-view measurement fractions into the still capture's
+        # true pixel space, so an unswapped value here would transpose
+        # X/Y length math whenever rotation is active.
+        if self.rotate in (90, 270):
+            return (index, r.height, r.width)
         return (index, r.width, r.height)
     
     def get_exposure_time(self) -> int:
