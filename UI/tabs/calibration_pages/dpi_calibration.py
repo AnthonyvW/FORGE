@@ -46,7 +46,7 @@ _STEP_INFO: dict[str, tuple[str, str]] = {
     ),
     "choose": (
         "Choose Calibration Method",
-        "Automatic runs the calibration slide routine below and measures DPI from the resulting image mosaic — more precise, but takes a few minutes. Manual instead derives DPI from a single reference line you place on the preview yourself — faster, and lets you skip the automatic routine entirely.",
+        "Automatic runs the calibration slide routine below and measures DPI from the resulting image mosaic. Manual derives DPI from a single reference line you place yourself, used as a fallback when the automatic DPI calibration fails.",
     ),
     "tick": (
         "Calibrate tick detection",
@@ -62,7 +62,7 @@ _STEP_INFO: dict[str, tuple[str, str]] = {
     ),
     "manual": (
         "Manual DPI Calibration",
-        "This step is optional — if the DPI value below already looks correct, you can press Finish Calibration right away. Otherwise, click two points on the preview to place a reference line, enter the real-world length it represents, then press Calculate DPI. You can use the zoom tools on the left side of the camera view, or hold Ctrl and scroll the mouse wheel, to zoom in and out for a more precise placement.",
+        "Click two points on the preview to place a reference line, enter the real-world length it represents, then press Calculate DPI. You can use the zoom tools on the left side of the camera view, or hold Ctrl and scroll the mouse wheel, to zoom in and out for a more precise placement.",
     ),
 }
 
@@ -100,7 +100,7 @@ class _ResultsDialog(QDialog):
         output_path: str | None = result.get("output_path")
 
         if success:
-            status_text = "PASS" if qa_pass else "FAIL — QA checks failed"
+            status_text = "PASS" if qa_pass else "FAIL — QA checks failed. Please do the manual DPI calibration instead."
             status_name = "CalScaleStatusPass" if qa_pass else "CalScaleStatusFail"
         else:
             status_text = "Routine did not complete successfully"
