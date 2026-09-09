@@ -700,6 +700,34 @@ def _arc_geometry_radius(points: tuple[Point2D, ...], full_dims: tuple[int, int]
     return (center[0] / full_w, center[1] / full_h), radius, start_deg, sweep
 
 
+def _radius_arc_snap(points: tuple[Point2D, ...], full_dims: tuple[int, int] | None) -> tuple[Point2D, ...]:
+    """
+    Pull the end point onto the circle actually drawn — only its angle
+    from center is used by _arc_geometry_radius, so the raw click stays
+    wherever it landed unless snapped here, leaving its endpoint marker
+    visibly off the end of the drawn arc.
+    """
+    if full_dims is None or len(points) != 3:
+        return points
+    full_w, full_h = full_dims
+    if full_w <= 0 or full_h <= 0:
+        return points
+
+    def to_px(p: Point2D) -> Point2D:
+        return p[0] * full_w, p[1] * full_h
+
+    center, start_pt, end_pt = to_px(points[0]), to_px(points[1]), to_px(points[2])
+    radius = math.hypot(start_pt[0] - center[0], start_pt[1] - center[1])
+    if radius < _DEGENERATE_EPSILON:
+        return points
+    end_deg = math.atan2(end_pt[1] - center[1], end_pt[0] - center[0])
+    snapped = (
+        (center[0] + radius * math.cos(end_deg)) / full_w,
+        (center[1] + radius * math.sin(end_deg)) / full_h,
+    )
+    return points[0], points[1], snapped
+
+
 def _radius_arc_move(points: list[Point2D], index: int, new_point: Point2D) -> list[Point2D]:
     if index != 0 or len(points) != 3:
         return _default_move_point(points, index, new_point)
@@ -1601,6 +1629,7 @@ DEFAULT_REGISTRY.register(MeasurementKind(
     # ignored) — the shorter way round between start and end angle.
     name="Radius Arc", required_points=3, category="arc",
     resolve=_radius_arc_resolve, move_point=_radius_arc_move, arc_geometry=_arc_geometry_radius,
+    snap_points=_radius_arc_snap,
 ))
 DEFAULT_REGISTRY.register(MeasurementKind(
     # Both ends placed first, then a third point shapes a smooth
