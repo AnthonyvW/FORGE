@@ -546,7 +546,7 @@ class InspectionCalibrationScaleWidget(QWidget):
         motion.start_routine(self._routine)
 
         self._last_output_path = output_path
-        self._results_widget.hide_result()
+        self._results_widget.show_folder(output_path)
         self._enter_running_state()
 
     def _on_pause_resume_clicked(self) -> None:
@@ -569,6 +569,7 @@ class InspectionCalibrationScaleWidget(QWidget):
 
     def _enter_running_state(self) -> None:
         self._start_btn.setEnabled(False)
+        self._start_btn.setVisible(False)
         self._output_folder.setEnabled(False)
         self._set_pos_btn.setEnabled(False)
         self._goto_pos_btn.setEnabled(False)
@@ -580,6 +581,7 @@ class InspectionCalibrationScaleWidget(QWidget):
     def _exit_running_state(self) -> None:
         self._poll_timer.stop()
         self._start_btn.setEnabled(self._is_inspection_calibrated())
+        self._start_btn.setVisible(True)
         self._output_folder.setEnabled(True)
         self._set_pos_btn.setEnabled(True)
         self._controls_widget.setVisible(False)

@@ -908,14 +908,11 @@ class DpiCalibrationStepsWidget(QWidget):
 
     def _handle_capture_failure(self) -> None:
         """
-        A failed run, or one that finished but didn't pass QA, still may
-        have written a bogus DPI (StitchAndMeasureRoutine saves whatever
-        number it computed, trustworthy or not, as soon as it has one at
-        all) — restore whatever was on record before this attempt rather
-        than leaving that in place, and skip straight to the manual step
-        instead of a Quality Control step with nothing trustworthy to
-        show, so the user can place a reference line themselves right
-        away.
+        Restore the DPI on record before this attempt (a defensive no-op,
+        since StitchAndMeasureRoutine only saves DPI on a QA pass) and skip
+        straight to the manual step instead of a Quality Control step with
+        nothing trustworthy to show, so the user can place a reference line
+        themselves right away.
         """
         mv = get_app_context().machine_vision
         mv.settings.dpi = self._dpi_before_capture
