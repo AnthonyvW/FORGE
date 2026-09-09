@@ -14,6 +14,7 @@ from common.app_context import get_fieldweave_version, get_app_context
 from UI.widgets.changelog_dialog import ChangelogDialog
 
 WEBSITE_URL = "https://www.fieldweave.com/"
+GITHUB_REPO_URL = "https://github.com/AnthonyvW/FieldWeave"
 CONTACT_URL = "https://www.fieldweave.com/contact"
 SURVEY_URL = "https://forms.gle/kPGoiTHzmh6irCft7"
 ISSUES_URL = "https://github.com/AnthonyvW/FieldWeave/issues/new"
@@ -94,6 +95,7 @@ def about_page() -> QWidget:
         "Created by Anthony van Weel."
     ))
     top_layout.addWidget(_link_label(f'Visit FieldWeave\'s Website at <a href="{WEBSITE_URL}">{WEBSITE_URL}</a>'))
+    top_layout.addWidget(_link_label(f'View the source on <a href="{GITHUB_REPO_URL}">GitHub</a>'))
     top_layout.addWidget(_check_updates_row(w))
     top_layout.addWidget(_changelog_row(w))
     layout.addWidget(top)
