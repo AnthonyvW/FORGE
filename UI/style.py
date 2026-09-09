@@ -509,17 +509,6 @@ def apply_style(app: QApplication) -> None:
             border-radius: 0px;
         }}
 
-        /* Field labels within that popup — Qt stylesheets have no
-           text-transform, so the actual uppercasing happens in Python
-           (see _field_label); this just gives the already-uppercased
-           text a distinct, smaller, section-heading weight instead of
-           reading as regular body text. */
-        QLabel#MeasurementFieldLabel {{
-            font-weight: 600;
-            font-size: 11px;
-            color: rgb(90, 90, 90);
-        }}
-
         /* Area scan — start automation button */
         QPushButton#AreaScanStart {{
             background-color: #f28c28;

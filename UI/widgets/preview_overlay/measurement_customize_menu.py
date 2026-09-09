@@ -61,10 +61,18 @@ from UI.widgets.preview_overlay.measurement_overlay import MEASUREMENT_DASH_PATT
 
 
 def _field_label(text: str) -> QLabel:
-    """Section/field label styled via #MeasurementFieldLabel in style.py — uppercased here since Qt stylesheets have no text-transform of their own."""
-    label = QLabel(text.upper())
-    label.setObjectName("MeasurementFieldLabel")
-    return label
+    """A field row's own label — plain text, matching how the rest of the app labels its form rows (see e.g. area_scan_widget.py, machine_vision_settings.py) rather than this file's old uppercase, stacked-above-the-control treatment."""
+    return QLabel(text)
+
+
+def _labeled_row(label_text: str, control: QWidget) -> QWidget:
+    """Wrap *control* with a row label to its left, in one QWidget so a single setVisible/setEnabled call covers both — the same inline label-left layout this file's other rows already use (Font/Size, Unit/Decimals, Bar Length/Unit, ...) rather than a label stacked above the control."""
+    container = QWidget()
+    row = QHBoxLayout(container)
+    row.setContentsMargins(0, 0, 0, 0)
+    row.addWidget(_field_label(label_text))
+    row.addWidget(control, 1)
+    return container
 
 
 _ICON_SIZE = QSize(48, 16)
@@ -537,7 +545,7 @@ class MeasurementCustomizeMenu(QFrame):
         self._scroll_content = content
         self._outer_layout = outer_layout
 
-        self._title_label = _field_label("Title")
+        self._title_label = _field_label("Title:")
         layout.addWidget(self._title_label)
         self._title_edit = QLineEdit()
         self._title_edit.setObjectName("MeasurementCustomizeTitle")
@@ -558,7 +566,7 @@ class MeasurementCustomizeMenu(QFrame):
         self._text_bold_check.toggled.connect(self._on_live_field_changed)
         layout.addWidget(self._text_bold_check)
 
-        self._description_label = _field_label("Description")
+        self._description_label = _field_label("Description:")
         layout.addWidget(self._description_label)
         self._description_edit = _ResizableDescriptionEdit()
         self._description_edit.setObjectName("MeasurementCustomizeDescription")
@@ -569,14 +577,14 @@ class MeasurementCustomizeMenu(QFrame):
 
         unit_row = QHBoxLayout()
         unit_row.setContentsMargins(0, 0, 0, 0)
-        unit_row.addWidget(_field_label("Unit"))
+        unit_row.addWidget(_field_label("Unit:"))
         self._unit_combo = QComboBox()
         for unit in MeasurementUnit:
             self._unit_combo.addItem(unit.value, unit)
         block_wheel(self._unit_combo)
         self._unit_combo.currentIndexChanged.connect(self._on_live_field_changed)
         unit_row.addWidget(self._unit_combo, 1)
-        unit_row.addWidget(_field_label("Decimals"))
+        unit_row.addWidget(_field_label("Decimals:"))
         self._decimals_spin = QSpinBox()
         self._decimals_spin.setRange(0, 6)
         block_wheel(self._decimals_spin)
@@ -625,27 +633,25 @@ class MeasurementCustomizeMenu(QFrame):
         self._indicator_enabled_check.toggled.connect(self._on_indicator_toggled)
         layout.addWidget(self._indicator_enabled_check)
 
-        self._indicator_color_picker = _ColorPicker("Indicator Color", OVERLAY_LINE_COLOR.name())
+        self._indicator_color_picker = _ColorPicker("Indicator color:", OVERLAY_LINE_COLOR.name())
         self._indicator_color_picker.color_changed.connect(self._on_live_field_changed)
         layout.addWidget(self._indicator_color_picker)
 
         self._indicator_style_picker = _StylePicker(
-            "Indicator Style", [(style, _dash_style_icon(style)) for style in MEASUREMENT_DASH_PATTERNS]
+            "Indicator style:", [(style, _dash_style_icon(style)) for style in MEASUREMENT_DASH_PATTERNS]
         )
         self._indicator_style_picker.value_changed.connect(self._on_live_field_changed)
         layout.addWidget(self._indicator_style_picker)
 
-        self._indicator_opacity_label = _field_label("Indicator Opacity")
-        layout.addWidget(self._indicator_opacity_label)
         self._indicator_opacity_control = _ThicknessControl(0.0, 1.0)
         self._indicator_opacity_control.value_changed.connect(self._on_live_field_changed)
-        layout.addWidget(self._indicator_opacity_control)
+        self._indicator_opacity_row = _labeled_row("Indicator opacity:", self._indicator_opacity_control)
+        layout.addWidget(self._indicator_opacity_row)
 
-        self._opacity_label = _field_label("Opacity")
-        layout.addWidget(self._opacity_label)
         self._opacity_control = _ThicknessControl(0.0, 1.0)
         self._opacity_control.value_changed.connect(self._on_live_field_changed)
-        layout.addWidget(self._opacity_control)
+        self._opacity_row = _labeled_row("Opacity:", self._opacity_control)
+        layout.addWidget(self._opacity_row)
 
         self._build_tag_style_controls(layout)
         self._build_line_style_controls(layout)
@@ -677,11 +683,22 @@ class MeasurementCustomizeMenu(QFrame):
         scroll.setHorizontalScrollBarPolicy(Qt.ScrollBarPolicy.ScrollBarAlwaysOff)
         # Otherwise the scroll area's own Base-colored viewport shows
         # through as a lighter rectangle against #MeasurementCustomizeMenu's
-        # background rather than one continuous panel color.
-        scroll.setStyleSheet("background: transparent;")
-        scroll.viewport().setStyleSheet("background: transparent;")
-        content.setStyleSheet("background: transparent;")
+        # background rather than one continuous panel color. Disabling the
+        # auto-fill rather than setting a "background: transparent"
+        # stylesheet here — a *local* stylesheet on an ancestor of a combo
+        # box corrupts Qt's style-sheet cascade for that combo's own popup,
+        # resolving its palette to a black background regardless of the
+        # app's own (light-only) palette/QSS or the OS's light/dark theme;
+        # this was the real cause of the font combo's dropdown rendering
+        # unreadably dark. setAutoFillBackground achieves the same "let the
+        # panel's own background show through" effect without touching the
+        # style-sheet cascade at all — but it must come *after*
+        # setWidget(), which otherwise re-enables content's auto-fill
+        # itself as part of taking ownership of it.
         scroll.setWidget(content)
+        scroll.setAutoFillBackground(False)
+        scroll.viewport().setAutoFillBackground(False)
+        content.setAutoFillBackground(False)
         outer_layout.addWidget(scroll, 1)
 
         # Footer stays fixed below the scroll area so its buttons are
@@ -711,7 +728,7 @@ class MeasurementCustomizeMenu(QFrame):
         # so the size field lines up with the rest rather than sitting
         # alone as a full-width box.
         font_row = QHBoxLayout()
-        font_row.addWidget(_field_label("Font"))
+        font_row.addWidget(_field_label("Font:"))
         self._font_combo = QFontComboBox()
         # Non-scalable (bitmap) fonts like "Fixedsys" make DirectWrite log a
         # warning to the console whenever they're scrolled past on Windows —
@@ -723,7 +740,7 @@ class MeasurementCustomizeMenu(QFrame):
         block_wheel(self._font_combo)
         self._font_combo.currentFontChanged.connect(self._on_live_field_changed)
         font_row.addWidget(self._font_combo, 1)
-        font_row.addWidget(_field_label("Size"))
+        font_row.addWidget(_field_label("Size:"))
         self._font_size_spin = QSpinBox()
         self._font_size_spin.setRange(6, 96)
         block_wheel(self._font_size_spin)
@@ -731,48 +748,45 @@ class MeasurementCustomizeMenu(QFrame):
         font_row.addWidget(self._font_size_spin)
         layout.addLayout(font_row)
 
-        self._tag_width_label = _field_label("Tag Width (0 = auto)")
-        layout.addWidget(self._tag_width_label)
         self._tag_width_control = _ThicknessControl(0.0, 400.0)
         self._tag_width_control.value_changed.connect(self._on_live_field_changed)
-        layout.addWidget(self._tag_width_control)
+        self._tag_width_row = _labeled_row("Tag width (0 = auto):", self._tag_width_control)
+        layout.addWidget(self._tag_width_row)
 
     def _build_tag_style_controls(self, layout: QVBoxLayout) -> None:
         self._tag_transparent_check = QCheckBox("Transparent tag background")
         self._tag_transparent_check.toggled.connect(self._on_tag_transparent_toggled)
         layout.addWidget(self._tag_transparent_check)
 
-        self._tag_bg_picker = _ColorPicker("Background Color", OVERLAY_LINE_COLOR.name())
+        self._tag_bg_picker = _ColorPicker("Background color:", OVERLAY_LINE_COLOR.name())
         self._tag_bg_picker.color_changed.connect(self._on_live_field_changed)
         layout.addWidget(self._tag_bg_picker)
 
-        self._tag_text_picker = _ColorPicker("Tag Text Color", OVERLAY_OUTLINE_COLOR.name())
+        self._tag_text_picker = _ColorPicker("Tag text color:", OVERLAY_OUTLINE_COLOR.name())
         self._tag_text_picker.color_changed.connect(self._on_live_field_changed)
         layout.addWidget(self._tag_text_picker)
 
         # Text-annotation only: padding around the text. (Its overall
         # opacity is the shared "Opacity" control, which text now honors —
         # see MeasurementOverlay._draw_text_annotation.)
-        self._text_margin_label = _field_label("Text Margin")
-        layout.addWidget(self._text_margin_label)
         self._text_margin_control = _ThicknessControl(0.0, 40.0)
         self._text_margin_control.value_changed.connect(self._on_live_field_changed)
-        layout.addWidget(self._text_margin_control)
+        self._text_margin_row = _labeled_row("Text margin:", self._text_margin_control)
+        layout.addWidget(self._text_margin_row)
 
     def _build_fill_controls(self, layout: QVBoxLayout) -> None:
         self._fill_enabled_check = QCheckBox("Fill interior")
         self._fill_enabled_check.toggled.connect(self._on_fill_toggled)
         layout.addWidget(self._fill_enabled_check)
 
-        self._fill_color_picker = _ColorPicker("Fill Color", "#1a73e8")
+        self._fill_color_picker = _ColorPicker("Fill color:", "#1a73e8")
         self._fill_color_picker.color_changed.connect(self._on_live_field_changed)
         layout.addWidget(self._fill_color_picker)
 
-        self._fill_opacity_label = _field_label("Fill Opacity")
-        layout.addWidget(self._fill_opacity_label)
         self._fill_opacity_control = _ThicknessControl(0.0, 1.0)
         self._fill_opacity_control.value_changed.connect(self._on_live_field_changed)
-        layout.addWidget(self._fill_opacity_control)
+        self._fill_opacity_row = _labeled_row("Fill opacity:", self._fill_opacity_control)
+        layout.addWidget(self._fill_opacity_row)
 
     def _build_scalebar_controls(self, layout: QVBoxLayout) -> None:
         """
@@ -790,7 +804,7 @@ class MeasurementCustomizeMenu(QFrame):
         # (its label always shows the length as entered), so there's no
         # Decimals field to pair it with.
         length_row = QHBoxLayout()
-        self._scalebar_length_label = _field_label("Bar Length")
+        self._scalebar_length_label = _field_label("Bar length:")
         length_row.addWidget(self._scalebar_length_label)
         self._scalebar_length_spin = QDoubleSpinBox()
         self._scalebar_length_spin.setRange(0.001, 1_000_000.0)
@@ -798,7 +812,7 @@ class MeasurementCustomizeMenu(QFrame):
         block_wheel(self._scalebar_length_spin)
         self._scalebar_length_spin.valueChanged.connect(self._on_live_field_changed)
         length_row.addWidget(self._scalebar_length_spin, 1)
-        length_row.addWidget(_field_label("Unit"))
+        length_row.addWidget(_field_label("Unit:"))
         self._scalebar_unit_combo = QComboBox()
         for unit in MeasurementUnit:
             self._scalebar_unit_combo.addItem(unit.value, unit)
@@ -815,7 +829,7 @@ class MeasurementCustomizeMenu(QFrame):
         # Label + spin + Label + combo) — cramming a third field onto that
         # row was forcing the whole sidebar wider than RIGHT_SIDEBAR_WIDTH.
         decimals_row = QHBoxLayout()
-        decimals_row.addWidget(_field_label("Decimals"))
+        decimals_row.addWidget(_field_label("Decimals:"))
         self._scalebar_decimals_spin = QSpinBox()
         self._scalebar_decimals_spin.setRange(0, 6)
         block_wheel(self._scalebar_decimals_spin)
@@ -827,15 +841,14 @@ class MeasurementCustomizeMenu(QFrame):
         layout.addWidget(decimals_container)
         self._scalebar_widgets.append(decimals_container)
 
-        self._scalebar_thickness_label = _field_label("Bar Thickness")
-        layout.addWidget(self._scalebar_thickness_label)
         self._scalebar_thickness_control = _ThicknessControl(1.0, 40.0)
         self._scalebar_thickness_control.value_changed.connect(self._on_live_field_changed)
-        layout.addWidget(self._scalebar_thickness_control)
-        self._scalebar_widgets += [self._scalebar_thickness_label, self._scalebar_thickness_control]
+        self._scalebar_thickness_row = _labeled_row("Bar thickness:", self._scalebar_thickness_control)
+        layout.addWidget(self._scalebar_thickness_row)
+        self._scalebar_widgets.append(self._scalebar_thickness_row)
 
         anchor_row = QHBoxLayout()
-        anchor_row.addWidget(_field_label("Anchor"))
+        anchor_row.addWidget(_field_label("Anchor:"))
         self._scalebar_anchor_combo = QComboBox()
         self._scalebar_anchor_combo.addItem("Preview", True)
         self._scalebar_anchor_combo.addItem("Image", False)
@@ -849,7 +862,7 @@ class MeasurementCustomizeMenu(QFrame):
         self._scalebar_widgets.append(anchor_container)
 
         position_row = QHBoxLayout()
-        position_row.addWidget(_field_label("Position"))
+        position_row.addWidget(_field_label("Position:"))
         self._scalebar_position_combo = QComboBox()
         for label, value in (
             ("Lower Left", "lower_left"), ("Lower Right", "lower_right"),
@@ -869,24 +882,22 @@ class MeasurementCustomizeMenu(QFrame):
         # panel's edge, separate from the corner margin (Bar Margin, shared
         # with text via _text_margin_control) — grouped here with the
         # background toggle since both are about the panel's own look.
-        self._scalebar_padding_label = _field_label("Bar Padding")
-        layout.addWidget(self._scalebar_padding_label)
         self._scalebar_padding_control = _ThicknessControl(0.0, 40.0)
         self._scalebar_padding_control.value_changed.connect(self._on_live_field_changed)
-        layout.addWidget(self._scalebar_padding_control)
-        self._scalebar_widgets += [self._scalebar_padding_label, self._scalebar_padding_control]
+        self._scalebar_padding_row = _labeled_row("Bar padding:", self._scalebar_padding_control)
+        layout.addWidget(self._scalebar_padding_row)
+        self._scalebar_widgets.append(self._scalebar_padding_row)
 
         # Own dedicated control (edits the same shared text_margin field a
         # text annotation's own "Text Margin" control does — see
         # _current_meta) rather than reusing that widget directly, so its
         # position here (just below Bar Padding) doesn't move Text Margin
         # around in a text annotation's own field order.
-        self._scalebar_margin_label = _field_label("Bar Margin")
-        layout.addWidget(self._scalebar_margin_label)
         self._scalebar_margin_control = _ThicknessControl(0.0, 40.0)
         self._scalebar_margin_control.value_changed.connect(self._on_live_field_changed)
-        layout.addWidget(self._scalebar_margin_control)
-        self._scalebar_widgets += [self._scalebar_margin_label, self._scalebar_margin_control]
+        self._scalebar_margin_row = _labeled_row("Bar margin:", self._scalebar_margin_control)
+        layout.addWidget(self._scalebar_margin_row)
+        self._scalebar_widgets.append(self._scalebar_margin_row)
 
         self._scalebar_bg_check = QCheckBox("Scale bar background")
         self._scalebar_bg_check.toggled.connect(self._on_live_field_changed)
@@ -896,7 +907,7 @@ class MeasurementCustomizeMenu(QFrame):
         # Bar Color edits the same line_color field the generic Line Color
         # picker does (see _current_meta) — kept here so Font/Size, built
         # right after this method returns, sit just below the pair of them.
-        self._scalebar_color_picker = _ColorPicker("Bar Color", OVERLAY_LINE_COLOR.name())
+        self._scalebar_color_picker = _ColorPicker("Bar color:", OVERLAY_LINE_COLOR.name())
         self._scalebar_color_picker.color_changed.connect(self._on_live_field_changed)
         layout.addWidget(self._scalebar_color_picker)
         self._scalebar_widgets.append(self._scalebar_color_picker)
@@ -905,31 +916,30 @@ class MeasurementCustomizeMenu(QFrame):
         # field the generic "Background Color" picker below does) so a
         # scale bar's panel color sits right under Bar Color instead of
         # down with the other tags' fields.
-        self._scalebar_bg_picker = _ColorPicker("Background Color", OVERLAY_LINE_COLOR.name())
+        self._scalebar_bg_picker = _ColorPicker("Background color:", OVERLAY_LINE_COLOR.name())
         self._scalebar_bg_picker.color_changed.connect(self._on_live_field_changed)
         layout.addWidget(self._scalebar_bg_picker)
         self._scalebar_widgets.append(self._scalebar_bg_picker)
 
     def _build_line_style_controls(self, layout: QVBoxLayout) -> None:
         self._build_fill_controls(layout)
-        self._line_color_picker = _ColorPicker("Line Color", OVERLAY_LINE_COLOR.name())
+        self._line_color_picker = _ColorPicker("Line color:", OVERLAY_LINE_COLOR.name())
         self._line_color_picker.color_changed.connect(self._on_live_field_changed)
         layout.addWidget(self._line_color_picker)
 
-        self._line_thickness_label = _field_label("Line Thickness")
-        layout.addWidget(self._line_thickness_label)
         self._line_thickness_control = _ThicknessControl(0.5, 12.0)
         self._line_thickness_control.value_changed.connect(self._on_live_field_changed)
-        layout.addWidget(self._line_thickness_control)
+        self._line_thickness_row = _labeled_row("Line thickness:", self._line_thickness_control)
+        layout.addWidget(self._line_thickness_row)
 
         self._line_style_picker = _StylePicker(
-            "Line Style", [(style, _dash_style_icon(style)) for style in MEASUREMENT_DASH_PATTERNS]
+            "Line style:", [(style, _dash_style_icon(style)) for style in MEASUREMENT_DASH_PATTERNS]
         )
         self._line_style_picker.value_changed.connect(self._on_live_field_changed)
         layout.addWidget(self._line_style_picker)
 
         self._midpoint_picker = _StylePicker(
-            "Midpoint", [(style, _midpoint_style_icon(style)) for style in MEASUREMENT_MIDPOINT_STYLES]
+            "Midpoint:", [(style, _midpoint_style_icon(style)) for style in MEASUREMENT_MIDPOINT_STYLES]
         )
         self._midpoint_picker.value_changed.connect(self._on_live_field_changed)
         layout.addWidget(self._midpoint_picker)
@@ -937,7 +947,7 @@ class MeasurementCustomizeMenu(QFrame):
         # "Point" and "Count" — the placed marker's own shape, in place of
         # a line's caps.
         self._point_style_picker = _StylePicker(
-            "Point Style", [(style, _point_style_icon(style)) for style in MEASUREMENT_POINT_STYLES]
+            "Point style:", [(style, _point_style_icon(style)) for style in MEASUREMENT_POINT_STYLES]
         )
         self._point_style_picker.value_changed.connect(self._on_live_field_changed)
         layout.addWidget(self._point_style_picker)
@@ -952,13 +962,13 @@ class MeasurementCustomizeMenu(QFrame):
         # passes start_cap/end_cap when drawing a circle) — open_for
         # hides this pair for any kind whose category isn't "line".
         self._start_cap_picker = _StylePicker(
-            "Start", [(cap, _line_cap_icon(cap)) for cap in MEASUREMENT_LINE_CAPS]
+            "Start:", [(cap, _line_cap_icon(cap)) for cap in MEASUREMENT_LINE_CAPS]
         )
         self._start_cap_picker.value_changed.connect(self._on_live_field_changed)
         layout.addWidget(self._start_cap_picker)
 
         self._end_cap_picker = _StylePicker(
-            "End", [(cap, _line_cap_icon(cap)) for cap in MEASUREMENT_LINE_CAPS]
+            "End:", [(cap, _line_cap_icon(cap)) for cap in MEASUREMENT_LINE_CAPS]
         )
         self._end_cap_picker.value_changed.connect(self._on_live_field_changed)
         layout.addWidget(self._end_cap_picker)
@@ -967,28 +977,26 @@ class MeasurementCustomizeMenu(QFrame):
         # "bracket" caps, rather than a separate control per style —
         # they're all sized off arrow_dims (see lines.py), so one slider
         # scales whichever cap is actually chosen.
-        self._cap_size_label = _field_label("Arrow/Bracket Size")
-        layout.addWidget(self._cap_size_label)
         # A high ceiling is impractical for arrowheads but genuinely
         # useful for brackets, which read fine even quite large (e.g. a
         # dimension-line-style bracket spanning most of a short line).
         self._cap_size_control = _ThicknessControl(0.25, 20.0)
         self._cap_size_control.value_changed.connect(self._on_live_field_changed)
-        layout.addWidget(self._cap_size_control)
+        self._cap_size_row = _labeled_row("Arrow/bracket size:", self._cap_size_control)
+        layout.addWidget(self._cap_size_row)
 
         self._outline_enabled_check = QCheckBox("Enable Outline")
         self._outline_enabled_check.toggled.connect(self._on_outline_enabled_toggled)
         layout.addWidget(self._outline_enabled_check)
 
-        self._outline_color_picker = _ColorPicker("Outline Color", OVERLAY_OUTLINE_COLOR.name())
+        self._outline_color_picker = _ColorPicker("Outline color:", OVERLAY_OUTLINE_COLOR.name())
         self._outline_color_picker.color_changed.connect(self._on_live_field_changed)
         layout.addWidget(self._outline_color_picker)
 
-        self._outline_thickness_label = _field_label("Outline Thickness")
-        layout.addWidget(self._outline_thickness_label)
         self._outline_thickness_control = _ThicknessControl(0.0, 8.0)
         self._outline_thickness_control.value_changed.connect(self._on_live_field_changed)
-        layout.addWidget(self._outline_thickness_control)
+        self._outline_thickness_row = _labeled_row("Outline thickness:", self._outline_thickness_control)
+        layout.addWidget(self._outline_thickness_row)
 
     def wheelEvent(self, event) -> None:
         # Otherwise an ignored wheel event at a child's scroll limit
@@ -1071,8 +1079,7 @@ class MeasurementCustomizeMenu(QFrame):
         self._indicator_style_picker.set_value(meta.indicator_dash_style)
         self._indicator_style_picker.setVisible(show_indicator and indicator_on)
         self._indicator_opacity_control.set_value(meta.indicator_opacity)
-        self._indicator_opacity_label.setVisible(show_indicator and indicator_on)
-        self._indicator_opacity_control.setVisible(show_indicator and indicator_on)
+        self._indicator_opacity_row.setVisible(show_indicator and indicator_on)
         self._opacity_control.set_value(meta.opacity)
         self._tag_transparent_check.setChecked(meta.tag_background_transparent)
         self._tag_bg_picker.setVisible(not meta.tag_background_transparent)
@@ -1111,7 +1118,7 @@ class MeasurementCustomizeMenu(QFrame):
         # A text annotation's title IS its drawn content — a multi-line,
         # optionally-bold editor replaces the single-line title/description;
         # a scale bar has neither a title nor a free-form description tag.
-        self._title_label.setText("Text Contents" if show_text else "Title")
+        self._title_label.setText("Text contents:" if show_text else "Title:")
         self._title_label.setVisible(not show_scalebar and not is_count)
         self._title_edit.setVisible(not no_tag)
         self._text_contents_edit.setVisible(show_text)
@@ -1132,18 +1139,15 @@ class MeasurementCustomizeMenu(QFrame):
         # An auto-sizing tag width is meaningless for a free-drawn text box,
         # a scale bar (each sizes to its own content), or a tagless "count"
         # group.
-        self._tag_width_label.setVisible(not no_tag)
-        self._tag_width_control.setVisible(not no_tag)
+        self._tag_width_row.setVisible(not no_tag)
         # Text's own margin control — a scale bar has its own dedicated
         # "Bar Margin" control up in the scale-bar section instead (see
         # _build_scalebar_controls), so this one is text-only.
         self._text_margin_control.set_value(meta.text_margin)
-        self._text_margin_label.setVisible(show_text)
-        self._text_margin_control.setVisible(show_text)
+        self._text_margin_row.setVisible(show_text)
         # Opacity fades an ordinary measurement or a text annotation; a
         # scale bar is always fully opaque.
-        self._opacity_label.setVisible(not show_scalebar)
-        self._opacity_control.setVisible(not show_scalebar)
+        self._opacity_row.setVisible(not show_scalebar)
         self._line_color_picker.set_color(meta.line_color)
         self._line_thickness_control.set_value(meta.line_thickness or OVERLAY_LINE_WIDTH)
         self._line_style_picker.set_value(meta.line_dash_style)
@@ -1157,8 +1161,7 @@ class MeasurementCustomizeMenu(QFrame):
         # Neither annotation strokes a line the ordinary way, so both hide
         # line thickness/style too.
         is_point = entry is not None and entry.category in ("point", "count")
-        self._line_thickness_label.setVisible(not is_annotation)
-        self._line_thickness_control.setVisible(not is_annotation)
+        self._line_thickness_row.setVisible(not is_annotation)
         self._line_style_picker.setVisible(not is_point and not is_annotation)
         # A text annotation keeps its background color and text color
         # (its box and glyphs) but not the separate transparency toggle —
@@ -1187,16 +1190,14 @@ class MeasurementCustomizeMenu(QFrame):
         self._end_cap_picker.set_value(meta.line_end_cap)
         self._end_cap_picker.setVisible(show_caps)
         self._cap_size_control.set_value(meta.cap_size_scale)
-        self._cap_size_control.setVisible(show_caps)
-        self._cap_size_label.setVisible(show_caps)
+        self._cap_size_row.setVisible(show_caps)
         fill_on = bool(meta.fill_color)
         self._fill_enabled_check.setChecked(fill_on)
         self._fill_enabled_check.setVisible(show_fill)
         self._fill_color_picker.set_color(meta.fill_color)
         self._fill_color_picker.setVisible(show_fill and fill_on)
         self._fill_opacity_control.set_value(meta.fill_opacity)
-        self._fill_opacity_label.setVisible(show_fill and fill_on)
-        self._fill_opacity_control.setVisible(show_fill and fill_on)
+        self._fill_opacity_row.setVisible(show_fill and fill_on)
         # Neither annotation strokes an outline pass, so its whole outline
         # group is hidden.
         self._outline_enabled_check.setChecked(meta.outline_enabled)
@@ -1252,8 +1253,7 @@ class MeasurementCustomizeMenu(QFrame):
 
     def _set_outline_controls_visible(self, visible: bool) -> None:
         self._outline_color_picker.setVisible(visible)
-        self._outline_thickness_label.setVisible(visible)
-        self._outline_thickness_control.setVisible(visible)
+        self._outline_thickness_row.setVisible(visible)
 
     def _on_outline_enabled_toggled(self, enabled: bool) -> None:
         self._set_outline_controls_visible(enabled)
@@ -1274,15 +1274,13 @@ class MeasurementCustomizeMenu(QFrame):
         visible = enabled and self._indicator_enabled_check.isVisible()
         self._indicator_color_picker.setVisible(visible)
         self._indicator_style_picker.setVisible(visible)
-        self._indicator_opacity_label.setVisible(visible)
-        self._indicator_opacity_control.setVisible(visible)
+        self._indicator_opacity_row.setVisible(visible)
         self.adjustSize()
         self._on_live_field_changed()
 
     def _on_fill_toggled(self, enabled: bool) -> None:
         self._fill_color_picker.setVisible(enabled and self._fill_enabled_check.isVisible())
-        self._fill_opacity_label.setVisible(enabled and self._fill_enabled_check.isVisible())
-        self._fill_opacity_control.setVisible(enabled and self._fill_enabled_check.isVisible())
+        self._fill_opacity_row.setVisible(enabled and self._fill_enabled_check.isVisible())
         self.adjustSize()
         self._on_live_field_changed()
 
