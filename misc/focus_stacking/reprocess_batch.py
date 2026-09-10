@@ -1,9 +1,12 @@
 from __future__ import annotations
 
+import queue
 import re
+import shutil
 import subprocess
 import sys
 import tkinter as tk
+from concurrent.futures import ThreadPoolExecutor
 from pathlib import Path
 from tkinter import filedialog, messagebox, ttk
 
@@ -31,6 +34,13 @@ BG_MID = "#1a1a1a"
 BG_SEL = "#2a4a6a"
 BG_PREVIEW = "#0d0d0d"
 BG_LIST_SEL = "#1a4a8a"
+
+MAX_PARALLEL_FOCUSWEAVE_JOBS = 3
+JOB_STATUS_COLORS = {
+    "queued": "#aaaa66",
+    "running": "#66aacc",
+    "error": "#cc5555",
+}
 
 
 def parse_stacked_name(filename: str) -> tuple[int, int] | None:
@@ -322,8 +332,10 @@ class VirtualThumbGrid(tk.Frame):
                                bg=bg, fg="#553333", cursor="hand2", width=14, height=6)
             img_lbl.pack()
 
-        name_lbl = tk.Label(cell, text=entry["label_text"], font=("Courier", 8),
-                            bg=bg, fg=entry["label_fg"], wraplength=cw - 10)
+        label_text = entry["label_text"] + entry.get("status_text", "")
+        label_fg = entry.get("status_fg") or entry["label_fg"]
+        name_lbl = tk.Label(cell, text=label_text, font=("Courier", 8),
+                            bg=bg, fg=label_fg, wraplength=cw - 10)
         name_lbl.pack()
 
         for w in (cell, img_lbl, name_lbl):
@@ -365,6 +377,18 @@ class VirtualThumbGrid(tk.Frame):
                 self._update_visible()
                 return
 
+    def set_status(self, path: Path, status_text: str, status_fg: str | None) -> None:
+        for i, entry in enumerate(self._entries):
+            if entry["path"] == path:
+                entry["status_text"] = status_text
+                entry["status_fg"] = status_fg
+                row_idx = i // self._cols
+                if row_idx in self._rendered:
+                    self._rendered[row_idx].destroy()
+                    del self._rendered[row_idx]
+                self._update_visible()
+                return
+
 
 class SourceImagePanel(tk.Frame):
     """Right panel: source image grid + side-by-side preview area."""
@@ -381,10 +405,18 @@ class SourceImagePanel(tk.Frame):
         self._anchor: int | None = None
         self._show_stacked = tk.BooleanVar(value=True)
         self._on_thumb_reloaded: object | None = None
+        self._on_job_submit: object | None = None
         self._build()
 
     def set_thumb_reload_callback(self, cb: object) -> None:
         self._on_thumb_reloaded = cb
+
+    def set_job_submit_callback(self, cb: object) -> None:
+        self._on_job_submit = cb
+
+    def refresh_if_showing(self, stacked_path: Path) -> None:
+        if self._stacked_path == stacked_path:
+            self._load_stacked_preview()
 
     def _build(self) -> None:
         top = tk.Frame(self, bg=BG_MID)
@@ -587,31 +619,19 @@ class SourceImagePanel(tk.Frame):
             self.load_for(self._stacked_path, self._source_folder, self._root_dir)
 
     def _rerun_focusweave(self) -> None:
-        if self._source_folder is None or self._stacked_path is None:
+        if self._source_folder is None or self._stacked_path is None or self._on_job_submit is None:
+            return
+        if shutil.which("focusweave") is None:
+            messagebox.showerror("focusweave not found",
+                                 "The 'focusweave' command was not found on your PATH.")
             return
         area_scan_settings = MotionSystemSettingsManager().load().z_stack_area_scan
         cmd = [
             "focusweave", str(self._source_folder), "--output", str(self._stacked_path),
             *area_scan_focusweave_args(area_scan_settings),
         ]
-        self._status.configure(text=f"Running: {' '.join(cmd)}")
-        self.update_idletasks()
-        try:
-            result = subprocess.run(cmd, capture_output=True, text=True)
-        except FileNotFoundError:
-            messagebox.showerror("focusweave not found",
-                                 "The 'focusweave' command was not found on your PATH.")
-            self._status.configure(text="focusweave not found")
-            return
-        if result.returncode == 0:
-            self._load_stacked_preview()
-            if self._on_thumb_reloaded:
-                self._on_thumb_reloaded(self._stacked_path)
-            messagebox.showinfo("Done", f"focusweave completed for:\n{self._stacked_path.name}")
-        else:
-            messagebox.showerror("focusweave failed",
-                                 f"Exit code {result.returncode}\n\n{result.stderr[:1000]}")
-        self._status.configure(text=f"Done — {self._stacked_path.name}")
+        self._on_job_submit(self._source_folder, self._stacked_path, cmd)
+        self._status.configure(text=f"Queued: {self._stacked_path.name}")
 
 
 class StackedListPanel(tk.Frame):
@@ -630,6 +650,10 @@ class StackedListPanel(tk.Frame):
 
         tk.Label(top, text="Focus stacked", font=("Courier", 11, "bold"),
                  bg=BG_MID, fg="#888888", anchor="w").pack(side=tk.LEFT, padx=8, pady=6)
+
+        self._jobs_label = tk.Label(top, text="", font=("Courier", 9),
+                                    bg=BG_MID, fg="#66aacc", anchor="w")
+        self._jobs_label.pack(side=tk.LEFT, padx=8, pady=6)
 
         tk.Button(top, text="Open folder", font=("Courier", 10),
                   bg="#1e2a3a", fg="#88aacc", relief=tk.FLAT, padx=10, pady=4,
@@ -673,6 +697,8 @@ class StackedListPanel(tk.Frame):
                 "source_folder": source,
                 "label_text": f.name + ("  [!]" if source is None else ""),
                 "label_fg": "#cc8866" if source is None else "#888888",
+                "status_text": "",
+                "status_fg": None,
             })
         self._entries = entries
         self._grid.load(entries)
@@ -683,6 +709,12 @@ class StackedListPanel(tk.Frame):
     def reload_thumb(self, path: Path) -> None:
         self._grid.reload_thumb(path)
 
+    def set_job_status(self, path: Path, status_text: str, status_fg: str | None) -> None:
+        self._grid.set_status(path, status_text, status_fg)
+
+    def set_jobs_label(self, text: str) -> None:
+        self._jobs_label.configure(text=text)
+
 
 class App(tk.Tk):
     def __init__(self) -> None:
@@ -691,7 +723,13 @@ class App(tk.Tk):
         self.configure(bg=BG_MID)
         self.geometry("1600x1000")
         self.minsize(1000, 600)
+        self._executor = ThreadPoolExecutor(
+            max_workers=MAX_PARALLEL_FOCUSWEAVE_JOBS, thread_name_prefix="focusweave")
+        self._job_results: queue.Queue = queue.Queue()
+        self._job_states: dict[Path, str] = {}
         self._build()
+        self.protocol("WM_DELETE_WINDOW", self._on_close)
+        self.after(150, self._poll_focusweave_jobs)
 
     def _build(self) -> None:
         style = ttk.Style(self)
@@ -707,6 +745,7 @@ class App(tk.Tk):
 
         self._source_panel = SourceImagePanel(pane, bg=BG_MID)
         self._source_panel.set_thumb_reload_callback(self._list_panel.reload_thumb)
+        self._source_panel.set_job_submit_callback(self._submit_focusweave_job)
         pane.add(self._source_panel, minsize=600)
 
     def _on_image_selected(self, stacked_path: Path, source_folder: Path | None,
@@ -717,6 +756,61 @@ class App(tk.Tk):
                                    "Expected: x…_y… folder in root directory.")
             return
         self._source_panel.load_for(stacked_path, source_folder, root_dir)
+
+    # ------------------------------------------------------------------
+    # Background focusweave job queue
+    # ------------------------------------------------------------------
+
+    def _submit_focusweave_job(self, source_folder: Path, stacked_path: Path, cmd: list[str]) -> None:
+        self._job_states[stacked_path] = "queued"
+        self._list_panel.set_job_status(stacked_path, "  [queued]", JOB_STATUS_COLORS["queued"])
+        self._update_jobs_label()
+        self._executor.submit(self._run_focusweave_job, source_folder, stacked_path, cmd)
+
+    def _run_focusweave_job(self, source_folder: Path, stacked_path: Path, cmd: list[str]) -> None:
+        # Runs on a worker thread — must not touch Tk widgets directly.
+        self._job_results.put(("started", stacked_path, None))
+        try:
+            result = subprocess.run(cmd, capture_output=True, text=True)
+        except FileNotFoundError:
+            self._job_results.put(("error", stacked_path, "focusweave not found on PATH"))
+            return
+        if result.returncode == 0:
+            self._job_results.put(("done", stacked_path, None))
+        else:
+            self._job_results.put(
+                ("error", stacked_path, f"exit code {result.returncode}\n\n{result.stderr[:1000]}"))
+
+    def _poll_focusweave_jobs(self) -> None:
+        while True:
+            try:
+                kind, stacked_path, payload = self._job_results.get_nowait()
+            except queue.Empty:
+                break
+            if kind == "started":
+                self._job_states[stacked_path] = "running"
+                self._list_panel.set_job_status(stacked_path, "  [running]", JOB_STATUS_COLORS["running"])
+            elif kind == "done":
+                self._job_states.pop(stacked_path, None)
+                self._list_panel.set_job_status(stacked_path, "", None)
+                self._list_panel.reload_thumb(stacked_path)
+                self._source_panel.refresh_if_showing(stacked_path)
+            elif kind == "error":
+                self._job_states.pop(stacked_path, None)
+                self._list_panel.set_job_status(stacked_path, "  [error]", JOB_STATUS_COLORS["error"])
+                print(f"focusweave failed for {stacked_path.name}: {payload}", file=sys.stderr)
+            self._update_jobs_label()
+        self.after(150, self._poll_focusweave_jobs)
+
+    def _update_jobs_label(self) -> None:
+        running = sum(1 for s in self._job_states.values() if s == "running")
+        queued = sum(1 for s in self._job_states.values() if s == "queued")
+        text = f"{running} running, {queued} queued" if (running or queued) else ""
+        self._list_panel.set_jobs_label(text)
+
+    def _on_close(self) -> None:
+        self._executor.shutdown(wait=False, cancel_futures=True)
+        self.destroy()
 
 
 if __name__ == "__main__":
