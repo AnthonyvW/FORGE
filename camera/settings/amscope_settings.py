@@ -701,21 +701,40 @@ class AmscopeSettings(CameraSettings):
         return len(self.get_still_resolutions()) > 0
 
     def get_camera_metadata(self) -> dict[str, Any]:
-        """Get current camera metadata for image saving."""
-        metadata: dict[str, Any] = {}
+        """Camera metadata for image saving.
 
-        if self._camera is not None:
-            metadata['model'] = self._camera.model
+        Extends the base get_metadata()-driven metadata (which covers every
+        setting declared in get_metadata(): temp, tint, hue, saturation,
+        level ranges, DFC, etc.) with the two things that need Amscope-
+        specific handling: the live hardware exposure time, which lags
+        behind self.exposure_time while auto_exposure is on, and the
+        camera serial number, which isn't a user-facing setting at all.
 
+        Two keys are renamed from the base dict to match UsbCameraSettings:
+        'exposure_time' -> 'exposure_time_us' (both cameras report
+        microseconds, just under different names) and 'fformat' ->
+        'file_format'.
+
+        Also adds 'contrast_direction'/'saturation_direction': a coarse
+        Normal/Low/High code (relative to this class's factory default) that
+        BaseCamera writes to the standard EXIF Contrast/Saturation tags,
+        alongside the exact values.
+        """
+        metadata = super().get_camera_metadata()
+        metadata.pop('exposure_time', None)
         metadata['exposure_time_us'] = self.get_exposure_time()
-        metadata['temperature'] = self.temp
-        metadata['tint'] = self.tint
 
-        try:
-            if self._camera is not None and hasattr(self._camera, '_hcam') and self._camera._hcam:
+        if 'fformat' in metadata:
+            metadata['file_format'] = metadata.pop('fformat')
+
+        metadata['contrast_direction'] = self.direction_code('contrast')
+        metadata['saturation_direction'] = self.direction_code('saturation')
+
+        if self._camera is not None and hasattr(self._camera, '_hcam') and self._camera._hcam:
+            try:
                 metadata['serial'] = self._camera._hcam.SerialNumber()
-        except Exception:
-            pass
+            except Exception:
+                pass
 
         return metadata
 
@@ -979,6 +998,29 @@ class AmscopeSettings(CameraSettings):
         except Exception as e:
             error(f"Failed to get still resolutions: {e}")
             return []
+
+    def get_current_still_resolution(self) -> tuple[int, int, int]:
+        # The SDK has no live "current still index" register - the still slot
+        # is only latched in at capture time - so resolve the stored
+        # still_resolution string against get_still_resolutions() instead.
+        still_resolutions = self.get_still_resolutions()
+        if not still_resolutions:
+            return (0, 0, 0)
+
+        index = self.get_still_resolution_index()
+        if not (0 <= index < len(still_resolutions)):
+            return (0, 0, 0)
+
+        r = still_resolutions[index]
+        # Swap to match the actual still buffer's layout for a 90/270
+        # rotation (see the EVENT_STILLIMAGE handler in amscope_camera.py
+        # and get_still_output_dimensions above) - callers use this to
+        # scale live-view measurement fractions into the still capture's
+        # true pixel space, so an unswapped value here would transpose
+        # X/Y length math whenever rotation is active.
+        if self.rotate in (90, 270):
+            return (index, r.height, r.width)
+        return (index, r.width, r.height)
     
     def get_exposure_time(self) -> int:
         if self._camera is None or not hasattr(self._camera, '_hcam'):

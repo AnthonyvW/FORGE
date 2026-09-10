@@ -39,6 +39,16 @@ def apply_style(app: QApplication) -> None:
 
     corner_status_line_color = "#ffffff"
 
+    load_image_button_color = "#f28c28" # Orange — matches header_bar_active / CalStartCapture
+    load_image_button_border = "#c97020"
+    load_image_button_hover = "#d97a20"
+    load_image_button_pressed = "#bf6a18"
+
+    live_view_button_unselected = "rgb(150, 153, 156)" # Gray — matches LoadImageButton unselected
+
+    measurement_tile_hover = "#f28c28" # Orange — app-standard hover/active accent
+    measurement_tile_pressed = "#d97a20"
+
     app.setStyleSheet(
         f"""
         QTabWidget::pane {{ border: none; }}
@@ -92,6 +102,50 @@ def apply_style(app: QApplication) -> None:
             background-color: #e0e3e6;
             border-color: #d0d3d6;
             color: #a0a3a6;
+        }}
+
+        /* Measurement tab — Live View / Load Image toggle: darkened gray
+           while unselected, app-standard orange while selected. Text stays
+           white and bold in both states so only the background changes. */
+        QPushButton#LiveViewButton, QPushButton#LoadImageButton {{
+            background-color: {live_view_button_unselected};
+            color: white;
+            font-weight: bold;
+        }}
+        QPushButton#LiveViewButton:checked {{
+            background-color: {load_image_button_color};
+        }}
+        QPushButton#LoadImageButton:checked {{
+            background-color: {load_image_button_color};
+            border: 1px solid {load_image_button_border};
+        }}
+        QPushButton#LoadImageButton:hover {{
+            background-color: {load_image_button_hover};
+        }}
+        QPushButton#LoadImageButton:pressed {{
+            background-color: {load_image_button_pressed};
+        }}
+
+        /* Measurement tab — measurement type tiles: transparent and
+           borderless at idle so they sit flush together inside their
+           group box, orange fill on hover/checked like the other
+           accented controls (LoadImageButton, CalStartCapture, etc). */
+        QToolButton#MeasurementTile {{
+            background-color: transparent;
+            border: none;
+            border-radius: 2px;
+            padding: 6px 2px;
+            font-size: 12px;
+            color: #2c2c2c;
+        }}
+        QToolButton#MeasurementTile:hover {{
+            background-color: {measurement_tile_hover};
+        }}
+        QToolButton#MeasurementTile:checked {{
+            background-color: {measurement_tile_hover};
+        }}
+        QToolButton#MeasurementTile:pressed {{
+            background-color: {measurement_tile_pressed};
         }}
 
         
@@ -292,6 +346,29 @@ def apply_style(app: QApplication) -> None:
             font-weight: normal;
         }}
 
+        /* Measurement tab — capture widget's image-load / drag-drop overlay.
+           Background matches NavigationWidget's darkened "unavailable" tint. */
+        QWidget#CaptureImageOverlay {{
+            background: rgba(0, 0, 0, 100);
+        }}
+        QWidget#CaptureImageOverlayFrame {{
+            background: transparent;
+            border: none;
+        }}
+        QWidget#CaptureImageOverlayFrame[dragHint="true"] {{
+            border: 4px dashed rgba(255, 255, 255, 200);
+            border-radius: 0px;
+        }}
+        QLabel#CaptureImageOverlayLabel {{
+            color: white;
+            font-size: 13px;
+            font-weight: 600;
+            background: transparent;
+        }}
+        QLabel#CaptureImageOverlayLabel[dragHint="true"] {{
+            font-size: 20px;
+        }}
+
         /* Machine vision flyout menu checkboxes */
         QFrame#MachineVisionMenu QCheckBox {{
             font-size: 13px;
@@ -396,6 +473,38 @@ def apply_style(app: QApplication) -> None:
         QLineEdit {{
             font-size: 13px;
             padding: 2px 4px;
+            border: 1px solid rgb(180, 180, 180);
+            border-radius: 0px;
+            background-color: #ffffff;
+        }}
+
+        /* Measurement tag/customize-menu title and description fields —
+           same bordered-field, square-cornered look as every other
+           QLineEdit/QPlainTextEdit in the app (see below); the popup is
+           its own rectangular window now, so there's no rounded frame
+           left to match. */
+
+        /* Plain text edits (measurement descriptions, etc.) — same
+           bordered-field look as QLineEdit, since Qt gives it no
+           border of its own by default. */
+        QPlainTextEdit {{
+            font-size: 13px;
+            padding: 2px 4px;
+            border: 1px solid rgb(180, 180, 180);
+            border-radius: 0px;
+            background-color: #ffffff;
+        }}
+
+        /* Measurement tab — customize-menu popup opened from a tag on
+           the preview itself. A genuine top-level window styled to match
+           the app's sidebar panels: the same near-white panel fill the
+           collapsible sections use over the window background, the same
+           1px group-box border, and square corners (a rectangular OS
+           window has none of its own to match). Its fields (line edits,
+           combos, spin boxes, sliders, buttons) inherit the app-wide
+           control styling, so only the panel shell needs stating here. */
+        QFrame#MeasurementCustomizeMenu {{
+            background: rgb(245, 246, 248);
             border: 1px solid rgb(180, 180, 180);
             border-radius: 0px;
         }}

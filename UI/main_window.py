@@ -15,9 +15,11 @@ from PySide6.QtWidgets import (
 from UI.tabs.logs_tab import LogsTab
 from UI.tabs.project_tab import ProjectTab
 from UI.tabs.navigate_tab import NavigateTab
+from UI.tabs.measurement_tab import MeasurementTab
 from UI.tabs.calibration_tab import CalibrationTab
 from UI.widgets.camera_preview import CameraPreview
 from UI.widgets.update_notifier import UpdateNotifier
+from UI.widgets.changelog_dialog import ChangelogDialog
 from UI.settings.settings_main import SettingsButton, SettingsDialog
 
 from common.app_context import get_app_context
@@ -76,8 +78,10 @@ class MainWindow(QMainWindow):
         self.tabs.setDocumentMode(True)
 
         self.navigate_tab = NavigateTab()
+        self.measurement_tab = MeasurementTab()
         self.project_tab = ProjectTab()
         self.tabs.addTab(self.navigate_tab, "Navigate")
+        self.tabs.addTab(self.measurement_tab, "Measurement")
         self.tabs.addTab(self.project_tab, "Project")
         self.tabs.addTab(CalibrationTab(), "Calibration")
         self.tabs.addTab(LogsTab(), "Logs")
@@ -91,6 +95,28 @@ class MainWindow(QMainWindow):
         if self.app_context.updater is not None:
             self._update_notifier = UpdateNotifier(self.app_context.updater, self)
             self.app_context.register_update_notifier(self._update_notifier)
+
+        self._show_changelog_if_updated()
+
+    # ------------------------------------------------------------------
+    # Changelog on update
+    # ------------------------------------------------------------------
+
+    def _show_changelog_if_updated(self) -> None:
+        """Pop the changelog once on a version change or a fresh install.
+
+        FieldWeaveSettingsManager sets show_patchnotes when the saved
+        config's version doesn't match the running version, and
+        AppContext sets first_start when no config file existed yet.
+        Deferred with singleShot so the main window is shown first and
+        the dialog opens on top of it rather than blocking construction.
+        """
+        settings = self.app_context.settings
+        if settings is None or not (settings.show_patchnotes or settings.first_start):
+            return
+        settings.show_patchnotes = False
+        settings.first_start = False
+        QTimer.singleShot(0, lambda: ChangelogDialog(self).exec())
 
     # ------------------------------------------------------------------
     # Motion state wiring

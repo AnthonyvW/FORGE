@@ -1,23 +1,34 @@
 """
 Background update checker/installer for FieldWeave.
 
-The Updater runs git/pip work on a background thread and only ever mutates
-plain attributes on itself (guarded by a lock). It never touches widgets or
-emits Qt signals. A polling QTimer on the main thread (UI/widgets/update_notifier.py)
-reads this state and drives all dialogs and notifications.
+The Updater checks GitHub Releases for a newer version than the one
+currently running, and - if the user accepts - checks out that release's
+tag and reinstalls dependencies. All git/network work runs on a background
+thread and only ever mutates plain attributes on itself (guarded by a
+lock). It never touches widgets or emits Qt signals. A polling QTimer on
+the main thread (UI/widgets/update_notifier.py) reads this state and
+drives all dialogs and notifications.
 """
 
 from __future__ import annotations
 
+import json
 import os
 import subprocess
 import sys
 import threading
+import urllib.request
 from pathlib import Path
+from urllib.error import HTTPError, URLError
 
+from common.fieldweaveConfig import FIELDWEAVE_VERSION
 from common.logger import info, warning, error
 
 _ERROR_MESSAGE_LIMIT = 500
+_GITHUB_OWNER = "AnthonyvW"
+_GITHUB_REPO = "FieldWeave"
+_LATEST_RELEASE_URL = f"https://api.github.com/repos/{_GITHUB_OWNER}/{_GITHUB_REPO}/releases/latest"
+_GITHUB_REQUEST_TIMEOUT = 10
 
 
 class UpdateStatus:
@@ -31,15 +42,29 @@ class UpdateStatus:
     UPDATE_FAILED = "update_failed"
 
 
+def _parse_version(version: str) -> tuple[int, ...]:
+    """Parse a dotted version string ("1.2.0", "v1.2.0-beta") into a comparable tuple of ints."""
+    parts = []
+    for chunk in version.strip().lstrip("vV").split("."):
+        digits = ""
+        for char in chunk:
+            if not char.isdigit():
+                break
+            digits += char
+        parts.append(int(digits) if digits else 0)
+    return tuple(parts)
+
+
 class Updater:
     def __init__(self, repo_dir: Path | None = None) -> None:
         self._repo_dir = repo_dir or Path.cwd()
         self._lock = threading.Lock()
 
         self._status: str = UpdateStatus.IDLE
-        self._local_commit: str = ""
-        self._remote_commit: str = ""
-        self._commits_behind: int = 0
+        self._latest_version: str = ""
+        self._release_tag: str = ""
+        self._release_title: str = ""
+        self._release_notes: str = ""
         self._error_message: str = ""
 
         self._check_thread: threading.Thread | None = None
@@ -55,9 +80,19 @@ class Updater:
             return self._status
 
     @property
-    def commits_behind(self) -> int:
+    def latest_version(self) -> str:
         with self._lock:
-            return self._commits_behind
+            return self._latest_version
+
+    @property
+    def release_title(self) -> str:
+        with self._lock:
+            return self._release_title
+
+    @property
+    def release_notes(self) -> str:
+        with self._lock:
+            return self._release_notes
 
     @property
     def error_message(self) -> str:
@@ -73,12 +108,8 @@ class Updater:
     # ------------------------------------------------------------------
 
     def start_check(self) -> bool:
-        """Kick off a background update check. Returns False if a check/update is already running."""
+        """Kick off a background release check. Returns False if a check/update is already running."""
         if self.is_busy():
-            return False
-
-        if not self._is_git_checkout():
-            self._fail_check("Not running from a git checkout - update checking unavailable")
             return False
 
         self._set_status(UpdateStatus.CHECKING)
@@ -87,7 +118,7 @@ class Updater:
         return True
 
     def start_update(self) -> bool:
-        """Kick off a background git pull + dependency install. Returns False if already busy."""
+        """Kick off a background checkout of the last-checked release, then a dependency install. Returns False if already busy."""
         if self.is_busy():
             return False
 
@@ -95,8 +126,14 @@ class Updater:
             self._fail_update("Not running from a git checkout - update unavailable")
             return False
 
+        with self._lock:
+            tag = self._release_tag
+        if not tag:
+            self._fail_update("No release found to update to - run a check first")
+            return False
+
         self._set_status(UpdateStatus.UPDATING)
-        self._update_thread = threading.Thread(target=self._run_update, daemon=True)
+        self._update_thread = threading.Thread(target=self._run_update, args=(tag,), daemon=True)
         self._update_thread.start()
         return True
 
@@ -109,34 +146,36 @@ class Updater:
     # ------------------------------------------------------------------
 
     def _run_check(self) -> None:
-        success, detail = self._git_fetch()
-        if not success:
-            self._fail_check(f"Could not reach git remote - {detail}")
+        try:
+            release = self._fetch_latest_release()
+        except (URLError, HTTPError, ValueError, OSError) as exc:
+            self._fail_check(f"Could not reach GitHub - {exc}")
             return
 
-        local = self._git_rev_parse("HEAD")
-        remote = self._git_rev_parse("@{u}")
-
-        if not local or not remote:
-            self._fail_check(
-                "Could not determine local/remote commit - is the current branch tracking a remote?"
-            )
+        tag = release.get("tag_name", "")
+        if not tag:
+            self._fail_check("Latest release has no tag")
             return
 
-        behind = self._git_commits_behind(local, remote)
+        latest_version = tag.lstrip("vV")
 
         with self._lock:
-            self._local_commit = local
-            self._remote_commit = remote
-            self._commits_behind = behind
-            self._status = UpdateStatus.UPDATE_AVAILABLE if behind > 0 else UpdateStatus.UP_TO_DATE
+            self._latest_version = latest_version
+            self._release_tag = tag
+            self._release_title = release.get("name") or tag
+            self._release_notes = release.get("body") or ""
+            self._status = (
+                UpdateStatus.UPDATE_AVAILABLE
+                if _parse_version(latest_version) > _parse_version(FIELDWEAVE_VERSION)
+                else UpdateStatus.UP_TO_DATE
+            )
 
-        info(f"Update check complete: {behind} commit(s) behind")
+        info(f"Update check complete: latest release is {latest_version}, running {FIELDWEAVE_VERSION}")
 
-    def _run_update(self) -> None:
-        success, detail = self._git_pull()
+    def _run_update(self, tag: str) -> None:
+        success, detail = self._git_checkout_release(tag)
         if not success:
-            self._fail_update(f"git pull failed - {detail}")
+            self._fail_update(f"Could not switch to release {tag} - {detail}")
             return
 
         success, detail = self._install_requirements()
@@ -147,7 +186,22 @@ class Updater:
         with self._lock:
             self._status = UpdateStatus.UPDATE_COMPLETE
 
-        info("Update applied successfully - restart required")
+        info(f"Updated to release {tag} - restart required")
+
+    # ------------------------------------------------------------------
+    # GitHub API
+    # ------------------------------------------------------------------
+
+    def _fetch_latest_release(self) -> dict:
+        request = urllib.request.Request(
+            _LATEST_RELEASE_URL,
+            headers={
+                "Accept": "application/vnd.github+json",
+                "User-Agent": f"FieldWeave-Updater/{FIELDWEAVE_VERSION}",
+            },
+        )
+        with urllib.request.urlopen(request, timeout=_GITHUB_REQUEST_TIMEOUT) as response:
+            return json.loads(response.read().decode("utf-8"))
 
     # ------------------------------------------------------------------
     # Git / pip helpers. These shell out to external tools, so failures
@@ -158,7 +212,7 @@ class Updater:
     def _is_git_checkout(self) -> bool:
         return (self._repo_dir / ".git").exists()
 
-    def _run_git(self, args: list[str], timeout: int) -> tuple[bool, str, str]:
+    def _run_git(self, args: list[str], timeout: int, log_errors: bool = True) -> tuple[bool, str, str]:
         """Returns (success, stdout, stderr). On launch failure, stderr holds the reason."""
         command = " ".join(["git", *args])
 
@@ -180,36 +234,21 @@ class Updater:
         stdout = result.stdout.strip()
         stderr = result.stderr.strip()
 
-        if result.returncode != 0:
+        if result.returncode != 0 and log_errors:
             error(f"'{command}' exited {result.returncode}\nstdout: {stdout}\nstderr: {stderr}")
 
         return result.returncode == 0, stdout, stderr
 
-    def _git_fetch(self) -> tuple[bool, str]:
-        success, _, stderr = self._run_git(["fetch"], timeout=30)
-        return success, self._summarize(stderr) if not success else ""
-
-    def _git_rev_parse(self, ref: str) -> str:
-        success, stdout, stderr = self._run_git(["rev-parse", ref], timeout=10)
+    def _git_checkout_release(self, tag: str) -> tuple[bool, str]:
+        success, _, stderr = self._run_git(["fetch", "--tags"], timeout=30)
         if not success:
-            warning(f"git rev-parse {ref} failed: {stderr}")
-            return ""
-        return stdout
+            return False, self._summarize(stderr)
 
-    def _git_commits_behind(self, local: str, remote: str) -> int:
-        if local == remote:
-            return 0
-        success, stdout, stderr = self._run_git(["rev-list", "--count", f"{local}..{remote}"], timeout=10)
-        if not success or not stdout.isdigit():
-            warning(f"git rev-list failed: {stderr}")
-            return 0
-        return int(stdout)
+        success, stdout, stderr = self._run_git(["checkout", tag], timeout=30)
+        if not success:
+            return False, self._summarize(stderr or stdout)
 
-    def _git_pull(self) -> tuple[bool, str]:
-        success, stdout, stderr = self._run_git(["pull"], timeout=60)
-        if success:
-            return True, ""
-        return False, self._summarize(stderr or stdout)
+        return True, ""
 
     def _install_requirements(self) -> tuple[bool, str]:
         requirements = self._repo_dir / "requirements.txt"

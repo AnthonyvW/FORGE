@@ -31,6 +31,7 @@ from motion.models import Position
 from motion.routines.tree_core_imaging_routine import TreeCoreImagingRoutine
 from post_processing.routines.focus_stack_routine import FocusStackRoutineConfig
 from UI.widgets.automation.output_folder_widget import OutputFolderWidget
+from UI.widgets.utilities.open_filesystem_object_button import OpenFolderButton
 
 _NM_PER_MM = 1_000_000
 _CSV_MAX_ROWS = 20
@@ -406,6 +407,7 @@ class TreeCoreWidget(QWidget):
         self._controls_widget: QWidget
         self._pause_resume_btn: QPushButton
         self._stop_btn: QPushButton
+        self._open_folder_btn: OpenFolderButton
         self._poll_timer: QTimer
         self._slot_spin: QSpinBox
         self._start_btn: QPushButton
@@ -506,6 +508,9 @@ class TreeCoreWidget(QWidget):
 
         self._controls_widget.setVisible(False)
         main_layout.addWidget(self._controls_widget)
+
+        self._open_folder_btn = OpenFolderButton()
+        main_layout.addWidget(self._open_folder_btn)
 
         main_layout.addStretch(1)
 
@@ -1273,6 +1278,7 @@ class TreeCoreWidget(QWidget):
             focus_stack_config=focus_stack_config,
         )
         ctx.motion.start_routine(self._routine)
+        self._open_folder_btn.set_folder(output_path)
         self._enter_running_state()
 
     def _on_pause_resume_clicked(self) -> None:
@@ -1378,6 +1384,7 @@ class TreeCoreWidget(QWidget):
 
     def _enter_running_state(self) -> None:
         self._start_btn.setEnabled(False)
+        self._start_btn.setVisible(False)
         self._output_folder.setEnabled(False)
         self._cal_scale_toggle.setEnabled(False)
         self._cal_goto_btn.setEnabled(False)
@@ -1393,6 +1400,7 @@ class TreeCoreWidget(QWidget):
     def _exit_running_state(self) -> None:
         self._poll_timer.stop()
         self._start_btn.setEnabled(self._is_slot_calibrated())
+        self._start_btn.setVisible(True)
         self._output_folder.setEnabled(True)
         self._cal_scale_toggle.setEnabled(True)
         self._optimal_focus_radio.setEnabled(True)

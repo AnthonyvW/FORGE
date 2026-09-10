@@ -8,7 +8,65 @@ from PySide6.QtGui import QColor, QImage, QPainter, QPen, QPixmap, QTransform
 from PySide6.QtWidgets import QPushButton, QWidget
 
 from UI.style import ZOOM_PREVIEW_VIEWPORT_COLOR
+from UI.widgets.preview_overlay.large_image_source import FrameSource
+from UI.widgets.preview_overlay.loaded_image_overlay import LoadedImageOverlay
 from UI.widgets.preview_overlay.overlay_base import Overlay
+
+
+class _LiveFrameSource(FrameSource):
+    """
+    Wraps a live camera frame — already small enough to sit fully
+    resident in memory — so ZoomPreviewOverlay can crop/pan/zoom against
+    it with the same interface used for a tiled LargeImageSource.
+    """
+
+    def __init__(self, frame: np.ndarray) -> None:
+        self._frame = frame
+
+    def dims(self) -> tuple[int, int]:
+        return self._frame.shape[:2]
+
+    def thumbnail(self) -> np.ndarray:
+        return self._frame
+
+    def region(self, box: tuple[int, int, int, int], step: int) -> np.ndarray:
+        x0, y0, x1, y1 = box
+        return np.ascontiguousarray(self._frame[y0:y1:step, x0:x1:step])
+
+    def version(self) -> int:
+        # A new live frame always arrives via a new _LiveFrameSource
+        # wrapper (see ZoomPreviewOverlay._frame), so there's nothing
+        # this needs to track — the draw cache already keys on crop and
+        # rect size, unchanged from before this class existed.
+        return 0
+
+
+class _PanZoomState:
+    """
+    Mutable pan/zoom position for one frame source.
+
+    ZoomPreviewOverlay keeps one of these per source (live feed, loaded
+    image) rather than a single shared position, since the two can differ
+    wildly in resolution and aspect ratio — reusing one position across
+    both would leave the zoom level and center fraction computed for one
+    source's dimensions applied to the other's, cropping the wrong region
+    entirely once the loaded image is disabled again.
+    """
+
+    def __init__(self, min_zoom: float) -> None:
+        self._min_zoom = min_zoom
+        self.zoom: float = min_zoom
+        self.center_x: float = 0.5
+        self.center_y: float = 0.5
+        self.dragging: bool = False
+        self.drag_last: QPoint | None = None
+
+    def reset(self) -> None:
+        self.zoom = self._min_zoom
+        self.center_x = 0.5
+        self.center_y = 0.5
+        self.dragging = False
+        self.drag_last = None
 
 
 class ZoomPreviewOverlay(Overlay):
@@ -30,29 +88,56 @@ class ZoomPreviewOverlay(Overlay):
     distinguishes a click from a drag by movement distance and, for a
     click, maps it to a full-resolution pixel via
     ``widget_pos_to_full_pixel`` instead of the plain un-zoomed scale.
+
+    ``_frame`` normally holds the last live camera frame pushed via
+    ``update_full``. When a ``LoadedImageOverlay`` is registered via
+    ``set_loaded_image_overlay`` and enabled, ``_frame`` switches to
+    that overlay's ``source`` instead — a ``LargeImageSource`` that
+    decodes tiles on demand rather than holding a full array, since a
+    loaded image can be far larger than a camera frame. This overlay
+    draws itself on top of ``LoadedImageOverlay`` (see ``OverlayLabel._paint_overlays``),
+    so without the switch a zoomed live frame would occlude the loaded
+    image the operator actually wants to inspect. ``_state`` switches
+    alongside it to the matching ``_PanZoomState``, so the two sources'
+    zoom/pan positions never bleed into one another.
     """
 
     _MIN_ZOOM: float = 1.0
     _MAX_ZOOM: float = 8.0
     _ZOOM_STEP: float = 1.15
 
+    # Below this many source pixels, the shrinking dimension's crop is
+    # just being blown up rather than showing more real detail — the
+    # floor _max_zoom won't zoom past.
+    _MIN_CROP_PX: int = 32
+
+    # Fraction of the current crop's size nudged per arrow-key press.
+    _ARROW_PAN_STEP_FRAC: float = 0.05
+
     _MINIMAP_MAX_WIDTH: int = 120
     _MINIMAP_MARGIN: int = 10
 
     def __init__(self) -> None:
         super().__init__()
-        self._frame: np.ndarray | None = None
-        self._zoom: float = self._MIN_ZOOM
-        self._center_x: float = 0.5
-        self._center_y: float = 0.5
-        self._dragging: bool = False
-        self._drag_last: QPoint | None = None
+        self._live_frame: np.ndarray | None = None
+        self._loaded_image_overlay: LoadedImageOverlay | None = None
+        self._live_state = _PanZoomState(self._MIN_ZOOM)
+        self._loaded_state = _PanZoomState(self._MIN_ZOOM)
         self._crop: tuple[int, int, int, int] | None = None
+
+        # draw() cache — see _rebuild_draw_cache. Keyed on the crop and
+        # the rect it was rendered for, since neither changes on every
+        # paint (e.g. an unrelated overlay toggling, the focus relay
+        # firing) while zoomed/panned, only when the viewport itself moves.
+        self._draw_cache_crop: tuple[int, int, int, int] | None = None
+        self._draw_cache_size: tuple[int, int] | None = None
+        self._draw_cache_version: int | None = None
+        self._draw_cache_pixmap: QPixmap | None = None
 
     @property
     def zoomed(self) -> bool:
         """True once zoomed in past the fully-zoomed-out level."""
-        return self._zoom > self._MIN_ZOOM
+        return self._state.zoom > self._MIN_ZOOM
 
     @property
     def active(self) -> bool:
@@ -60,15 +145,47 @@ class ZoomPreviewOverlay(Overlay):
         return self.zoomed
 
     def reset(self) -> None:
-        self._zoom = self._MIN_ZOOM
-        self._center_x = 0.5
-        self._center_y = 0.5
-        self._dragging = False
-        self._drag_last = None
+        """Reset the pan/zoom position of whichever source is currently shown."""
+        self._state.reset()
         self._crop = None
 
+    def reset_loaded(self) -> None:
+        """
+        Reset the loaded-image pan/zoom position specifically, regardless
+        of whether the overlay is enabled yet — unlike ``reset()``, which
+        resets whichever state ``_state`` currently resolves to. A new
+        image should always open at the fully-zoomed-out view even when
+        it's loaded before CaptureControlWidget switches the overlay on.
+        """
+        self._loaded_state.reset()
+        if self._loaded_active:
+            self._crop = None
+
     def update_full(self, frame: np.ndarray) -> None:
-        self._frame = frame
+        self._live_frame = frame
+
+    def set_loaded_image_overlay(self, overlay: LoadedImageOverlay | None) -> None:
+        """
+        Register the overlay to crop/zoom into instead of the live feed
+        while it's enabled — see the class docstring's note on ``_frame``.
+        """
+        self._loaded_image_overlay = overlay
+
+    @property
+    def _loaded_active(self) -> bool:
+        return self._loaded_image_overlay is not None and self._loaded_image_overlay.enabled
+
+    @property
+    def _frame(self) -> FrameSource | None:
+        if self._loaded_active:
+            return self._loaded_image_overlay.source
+        if self._live_frame is None:
+            return None
+        return _LiveFrameSource(self._live_frame)
+
+    @property
+    def _state(self) -> _PanZoomState:
+        return self._loaded_state if self._loaded_active else self._live_state
 
     def zoom(self, steps: int, widget_rect: QRect, anchor: QPoint | None = None) -> None:
         """
@@ -84,42 +201,70 @@ class ZoomPreviewOverlay(Overlay):
         if steps == 0 or self._frame is None:
             return
 
+        state = self._state
         anchor_state = self._pos_to_full_pixel_and_rel(anchor, widget_rect) if anchor is not None else None
 
         factor = self._ZOOM_STEP ** steps
-        self._zoom = min(self._MAX_ZOOM, max(self._MIN_ZOOM, self._zoom * factor))
+        state.zoom = min(self._max_zoom(widget_rect), max(self._MIN_ZOOM, state.zoom * factor))
 
         if anchor_state is not None:
             full_px, full_py, rel_x, rel_y, _, _ = anchor_state
             size = self._crop_size(widget_rect)
             if size is not None:
                 crop_w, crop_h = size
-                h, w = self._frame.shape[:2]
-                self._center_x = (full_px - crop_w * (rel_x - 0.5)) / w
-                self._center_y = (full_py - crop_h * (rel_y - 0.5)) / h
+                h, w = self._frame.dims()
+                state.center_x = (full_px - crop_w * (rel_x - 0.5)) / w
+                state.center_y = (full_py - crop_h * (rel_y - 0.5)) / h
 
         self._clamp_center(widget_rect)
 
+    def _max_zoom(self, widget_rect: QRect) -> float:
+        """
+        Highest zoom level worth allowing for the current frame.
+
+        ``_MAX_ZOOM`` alone was tuned for the live camera's resolution —
+        fine there, but a loaded image can be many times larger, and a
+        fixed multiplier left no way to actually get in close on one.
+        Scale the ceiling with the frame instead: how far zoom can go
+        before the shrinking dimension's crop (see ``_crop_size``) drops
+        below ``_MIN_CROP_PX``, never below the original fixed ceiling
+        so live-camera zoom behaves exactly as before.
+        """
+        if self._frame is None or widget_rect.width() <= 0 or widget_rect.height() <= 0:
+            return self._MAX_ZOOM
+
+        h, w = self._frame.dims()
+        if w == 0 or h == 0:
+            return self._MAX_ZOOM
+
+        target_aspect = widget_rect.width() / widget_rect.height()
+        sensor_aspect = w / h
+        shrinking_dim = h if sensor_aspect <= target_aspect else w
+
+        return max(self._MAX_ZOOM, shrinking_dim / self._MIN_CROP_PX)
+
     def begin_drag(self, pos: QPoint) -> None:
-        self._dragging = True
-        self._drag_last = pos
+        state = self._state
+        state.dragging = True
+        state.drag_last = pos
 
     def drag_to(self, pos: QPoint, widget_rect: QRect) -> None:
-        if not self._dragging or self._drag_last is None or self._frame is None:
+        state = self._state
+        if not state.dragging or state.drag_last is None or self._frame is None:
             return
 
         crop = self._current_crop(widget_rect)
         if crop is None:
             return
         _, _, crop_w, crop_h = crop
-        h, w = self._frame.shape[:2]
+        h, w = self._frame.dims()
         display_rect = self._fit_rect(crop_w, crop_h, widget_rect)
         if display_rect.width() <= 0 or display_rect.height() <= 0:
             return
 
-        dx = pos.x() - self._drag_last.x()
-        dy = pos.y() - self._drag_last.y()
-        self._drag_last = pos
+        dx = pos.x() - state.drag_last.x()
+        dy = pos.y() - state.drag_last.y()
+        state.drag_last = pos
 
         # A screen-pixel delta covers (delta / display_rect size) of the
         # crop, which itself covers (crop size / sensor size) of the full
@@ -127,13 +272,14 @@ class ZoomPreviewOverlay(Overlay):
         # (crop_w/w is not simply 1/zoom: see ``_crop_size``.)
         norm_dx = (dx / display_rect.width()) * (crop_w / w)
         norm_dy = (dy / display_rect.height()) * (crop_h / h)
-        self._center_x -= norm_dx
-        self._center_y -= norm_dy
+        state.center_x -= norm_dx
+        state.center_y -= norm_dy
         self._clamp_center(widget_rect)
 
     def end_drag(self) -> None:
-        self._dragging = False
-        self._drag_last = None
+        state = self._state
+        state.dragging = False
+        state.drag_last = None
 
     def _crop_size(self, widget_rect: QRect) -> tuple[int, int] | None:
         """
@@ -143,8 +289,8 @@ class ZoomPreviewOverlay(Overlay):
         At zoom == 1, this is always the entire, un-cropped sensor frame:
         whichever dimension the sensor already fully fills relative to
         *widget_rect*'s aspect ratio (the one that would letterbox in the
-        plain, un-zoomed view) keeps shrinking by ``self._zoom`` exactly as
-        before. The other dimension grows to try to match *widget_rect*'s
+        plain, un-zoomed view) keeps shrinking by ``self._state.zoom``
+        exactly as before. The other dimension grows to try to match *widget_rect*'s
         aspect ratio, capped at the sensor's own extent — it can only do so
         once the shrinking dimension has freed up enough of the sensor's
         remaining field of view, which is why bars shrink progressively as
@@ -153,7 +299,7 @@ class ZoomPreviewOverlay(Overlay):
         if self._frame is None or widget_rect.width() <= 0 or widget_rect.height() <= 0:
             return None
 
-        h, w = self._frame.shape[:2]
+        h, w = self._frame.dims()
         if w == 0 or h == 0:
             return None
 
@@ -161,10 +307,10 @@ class ZoomPreviewOverlay(Overlay):
         sensor_aspect = w / h
 
         if sensor_aspect <= target_aspect:
-            crop_h = h / self._zoom
+            crop_h = h / self._state.zoom
             crop_w = min(w, crop_h * target_aspect)
         else:
-            crop_w = w / self._zoom
+            crop_w = w / self._state.zoom
             crop_h = min(h, crop_w / target_aspect)
 
         return max(1, int(crop_w)), max(1, int(crop_h))
@@ -175,10 +321,11 @@ class ZoomPreviewOverlay(Overlay):
         if size is None:
             return None
         crop_w, crop_h = size
-        h, w = self._frame.shape[:2]
+        h, w = self._frame.dims()
+        state = self._state
 
-        x0 = min(max(int(self._center_x * w - crop_w / 2), 0), w - crop_w)
-        y0 = min(max(int(self._center_y * h - crop_h / 2), 0), h - crop_h)
+        x0 = min(max(int(state.center_x * w - crop_w / 2), 0), w - crop_w)
+        y0 = min(max(int(state.center_y * h - crop_h / 2), 0), h - crop_h)
         return x0, y0, crop_w, crop_h
 
     def _clamp_center(self, widget_rect: QRect) -> None:
@@ -186,12 +333,13 @@ class ZoomPreviewOverlay(Overlay):
         if size is None:
             return
         crop_w, crop_h = size
-        h, w = self._frame.shape[:2]
+        h, w = self._frame.dims()
+        state = self._state
 
         half_w_frac = min(0.5, crop_w / (2 * w))
         half_h_frac = min(0.5, crop_h / (2 * h))
-        self._center_x = min(1.0 - half_w_frac, max(half_w_frac, self._center_x))
-        self._center_y = min(1.0 - half_h_frac, max(half_h_frac, self._center_y))
+        state.center_x = min(1.0 - half_w_frac, max(half_w_frac, state.center_x))
+        state.center_y = min(1.0 - half_h_frac, max(half_h_frac, state.center_y))
 
     @staticmethod
     def _fit_rect(content_w: int, content_h: int, container: QRect) -> QRect:
@@ -245,8 +393,23 @@ class ZoomPreviewOverlay(Overlay):
         if not self.active or self._crop is None:
             return None
 
-        x0, y0, crop_w, crop_h = self._crop
-        h, w = self._frame.shape[:2]
+        h, w = self._frame.dims()
+        scale_x, scale_y, translate_x, translate_y = self._transform_params(self._crop, (h, w), rect)
+
+        transform = QTransform()
+        transform.translate(translate_x, translate_y)
+        transform.scale(scale_x, scale_y)
+        return transform
+
+    @staticmethod
+    def _transform_params(
+        crop: tuple[int, int, int, int],
+        dims: tuple[int, int],
+        rect: QRect,
+    ) -> tuple[float, float, float, float]:
+        """Shared math behind paint_transform and widget_pos_for_rect_point — see either for what this means."""
+        x0, y0, crop_w, crop_h = crop
+        h, w = dims
 
         crop_frac_x0 = x0 / w
         crop_frac_y0 = y0 / h
@@ -257,11 +420,28 @@ class ZoomPreviewOverlay(Overlay):
         scale_y = 1.0 / crop_frac_h
         translate_x = rect.left() * (1 - scale_x) - crop_frac_x0 * rect.width() * scale_x
         translate_y = rect.top() * (1 - scale_y) - crop_frac_y0 * rect.height() * scale_y
+        return scale_x, scale_y, translate_x, translate_y
 
-        transform = QTransform()
-        transform.translate(translate_x, translate_y)
-        transform.scale(scale_x, scale_y)
-        return transform
+    def widget_pos_for_rect_point(self, point: QPointF, rect: QRect, widget_rect: QRect) -> QPointF:
+        """
+        Forward-map *point*, given in the same un-zoomed, within-*rect*
+        space overlay ``draw()`` methods use, to its actual on-screen
+        position — the inverse of what ``widget_pos_to_full_pixel`` does
+        for a click. Lets an overlay hit-test its own drawn markers (e.g.
+        measurement endpoints) against a real mouse position.
+
+        Recomputes the crop fresh from *widget_rect* rather than reusing
+        ``paint_transform``'s cache, so it's safe to call from a mouse
+        handler between paints, not just during one.
+        """
+        if not self.active or self._frame is None:
+            return point
+        crop = self._current_crop(widget_rect)
+        if crop is None:
+            return point
+        h, w = self._frame.dims()
+        scale_x, scale_y, translate_x, translate_y = self._transform_params(crop, (h, w), rect)
+        return QPointF(point.x() * scale_x + translate_x, point.y() * scale_y + translate_y)
 
     def widget_pos_to_full_pixel(self, pos: QPoint, widget_rect: QRect) -> tuple[float, float, int, int] | None:
         """
@@ -291,7 +471,7 @@ class ZoomPreviewOverlay(Overlay):
         if crop is None:
             return None
         x0, y0, crop_w, crop_h = crop
-        h, w = self._frame.shape[:2]
+        h, w = self._frame.dims()
 
         display_rect = self._fit_rect(crop_w, crop_h, widget_rect)
         if display_rect.width() <= 0 or display_rect.height() <= 0:
@@ -317,22 +497,141 @@ class ZoomPreviewOverlay(Overlay):
         x0, y0, crop_w, crop_h = crop
         return x0 + crop_w / 2, y0 + crop_h / 2
 
+    def pan_step(self, dx: int, dy: int, widget_rect: QRect) -> bool:
+        """
+        Nudge the pan position by a fraction of the current crop size —
+        drives arrow-key panning. Only meaningful once zoomed in, same
+        as click-and-drag panning; returns False otherwise so the caller
+        can leave arrow keys to whatever else wants them (e.g. focus
+        navigation) rather than swallowing the keypress.
+        """
+        if not self.active or self._frame is None:
+            return False
+        size = self._crop_size(widget_rect)
+        if size is None:
+            return False
+        crop_w, crop_h = size
+        h, w = self._frame.dims()
+        state = self._state
+        state.center_x += dx * self._ARROW_PAN_STEP_FRAC * crop_w / w
+        state.center_y += dy * self._ARROW_PAN_STEP_FRAC * crop_h / h
+        self._clamp_center(widget_rect)
+        return True
+
+    def current_scale_xy(self) -> tuple[float, float]:
+        """
+        The (scale_x, scale_y) that ``paint_transform`` is currently
+        applying — (1.0, 1.0) when not zoomed. Uses the crop cached by
+        the most recent ``display_rect`` call, same as ``paint_transform``
+        itself.
+
+        The two can differ: at some zoom levels the crop's aspect ratio
+        doesn't yet exactly match the widget's, so the displayed crop is
+        intentionally stretched non-uniformly to fill the letterbox
+        progressively — see ``_crop_size``. A marker that needs to stay a
+        true circle on screen (not an ellipse riding along with that
+        stretch) needs both axes rather than a single scale factor; one
+        that only needs its overall size corrected (stroke widths) can
+        average the two. See ``MeasurementOverlay._draw_stroke``.
+        """
+        if not self.active or self._crop is None or self._frame is None:
+            return 1.0, 1.0
+        _, _, crop_w, crop_h = self._crop
+        h, w = self._frame.dims()
+        if crop_w <= 0 or crop_h <= 0:
+            return 1.0, 1.0
+        return w / crop_w, h / crop_h
+
+    def extract_current_view(self) -> np.ndarray | None:
+        """
+        The current pan/zoom viewport's pixels, extracted directly from
+        the source at full resolution — not decimated for on-screen
+        display the way ``_rebuild_draw_cache``'s draw cache is, since a
+        caller here wants the real content, not a fast paint. None when
+        not zoomed (the caller should fall back to the plain, un-zoomed
+        full frame) or there's no frame yet. Used by CameraPreview's
+        preview-resolution image export, so "export the current preview"
+        actually reflects whatever crop is currently shown rather than
+        always the fully zoomed-out view.
+        """
+        if not self.active or self._crop is None or self._frame is None:
+            return None
+        x0, y0, crop_w, crop_h = self._crop
+        return np.ascontiguousarray(self._frame.region((x0, y0, x0 + crop_w, y0 + crop_h), 1))
+
+    def current_frame_dims(self) -> tuple[int, int] | None:
+        """
+        The full source frame's (width, height), or None if there's no
+        frame yet. Unlike ``current_scale_xy``, this doesn't depend on
+        zoom state — it's for overlays converting between the x/y
+        fraction space measurements are stored in and true, aspect-
+        correct pixel distances (e.g. a circle's radius), which needs
+        the frame's real aspect ratio regardless of whether it's zoomed.
+        """
+        if self._frame is None:
+            return None
+        h, w = self._frame.dims()
+        return w, h
+
     def draw(self, painter: QPainter, rect: QRect) -> None:
-        if self._crop is None:
+        if self._crop is None or self._frame is None:
             return
+
+        size = (rect.width(), rect.height())
+        version = self._frame.version()
+        if (
+            self._crop != self._draw_cache_crop
+            or size != self._draw_cache_size
+            or version != self._draw_cache_version
+        ):
+            self._rebuild_draw_cache(rect, version)
+
+        if self._draw_cache_pixmap is not None:
+            painter.drawPixmap(rect.x(), rect.y(), self._draw_cache_pixmap)
+
+    def _rebuild_draw_cache(self, rect: QRect, version: int) -> None:
+        """
+        Build the pixmap for the current crop and cache it against that
+        crop, rect size, and frame version — see the cache fields'
+        comment in __init__. The version check is what notices a
+        LargeImageSource tile finished decoding in the background (see
+        FrameSource.version) and repaints with it even though the crop
+        and rect haven't otherwise changed; for a live camera frame,
+        version is always 0 and has no effect, unchanged from before.
+
+        Also decimates the crop by a cheap array stride before copying it,
+        down to roughly twice *rect*'s own resolution, when the crop is
+        much larger than that. Without it, a crop taken early in a zoom
+        (still most of a gigapixel-scale loaded image) was being copied
+        and smooth-scaled down from its full source resolution on every
+        single frame, when only a small fraction of those source pixels
+        could ever appear in *rect* anyway. The stride shrinks toward 1 as
+        zoom increases and the crop approaches rect's own size, so full
+        source detail is still used once it actually matters.
+        """
         x0, y0, crop_w, crop_h = self._crop
 
-        crop_arr = np.ascontiguousarray(self._frame[y0:y0 + crop_h, x0:x0 + crop_w])
+        step_x = max(1, crop_w // max(1, rect.width() * 2))
+        step_y = max(1, crop_h // max(1, rect.height() * 2))
+        step = min(step_x, step_y)
 
-        q_image = QImage(crop_arr.data, crop_w, crop_h, crop_w * 3, QImage.Format.Format_RGB888).copy()
-        pixmap = QPixmap.fromImage(q_image)
-        scaled = pixmap.scaled(
+        crop_arr = np.ascontiguousarray(self._frame.region((x0, y0, x0 + crop_w, y0 + crop_h), step))
+        h, w = crop_arr.shape[:2]
+
+        # QPixmap.fromImage copies the pixel data into its own storage
+        # before this call returns, so the QImage doesn't need its own
+        # defensive .copy() of crop_arr — that would just be a second
+        # full copy of what can still be a very large buffer.
+        pixmap = QPixmap.fromImage(QImage(crop_arr.data, w, h, w * 3, QImage.Format.Format_RGB888))
+        self._draw_cache_pixmap = pixmap.scaled(
             rect.width(),
             rect.height(),
             Qt.AspectRatioMode.IgnoreAspectRatio,
             Qt.TransformationMode.SmoothTransformation,
         )
-        painter.drawPixmap(rect.x(), rect.y(), scaled)
+        self._draw_cache_crop = self._crop
+        self._draw_cache_size = (rect.width(), rect.height())
+        self._draw_cache_version = version
 
     def draw_foreground(self, painter: QPainter, rect: QRect) -> None:
         """
@@ -344,11 +643,11 @@ class ZoomPreviewOverlay(Overlay):
         Only shown once actually zoomed in: at the fully-zoomed-out level
         the viewport box would cover the whole minimap anyway.
         """
-        if self._crop is None or not self.zoomed:
+        if self._crop is None or not self.zoomed or self._frame is None:
             return
         x0, y0, crop_w, crop_h = self._crop
-        h, w = self._frame.shape[:2]
-        self._draw_minimap(painter, rect, w, h, x0, y0, crop_w, crop_h)
+        h, w = self._frame.dims()
+        self._draw_minimap(painter, rect, w, h, x0, y0, crop_w, crop_h, self._frame.thumbnail())
 
     def _draw_minimap(
         self,
@@ -360,14 +659,36 @@ class ZoomPreviewOverlay(Overlay):
         crop_y: int,
         crop_w: int,
         crop_h: int,
+        thumbnail: np.ndarray,
     ) -> None:
-        """Draw a small thumbnail of the full frame with a box marking the current viewport."""
-        mini_w = min(self._MINIMAP_MAX_WIDTH, full_w)
-        mini_h = int(mini_w * full_h / full_w)
+        """
+        Draw a small thumbnail of the full frame with a box marking the
+        current viewport.
+
+        Sized to fit both ``_MINIMAP_MAX_WIDTH`` and a third of *rect* —
+        the camera viewport — in each dimension, so the minimap never
+        crowds out the view it's overlaid on even in a small or narrow
+        preview pane.
+
+        *thumbnail* may be at a different resolution than full_w/full_h
+        (a live frame is passed as-is; a loaded image's is the small
+        resident preview) — its own aspect ratio matches the full frame's
+        either way, and it's stretched to mini_w/mini_h regardless.
+        """
+        if full_w <= 0 or full_h <= 0 or rect.width() <= 0 or rect.height() <= 0:
+            return
+
+        max_w = min(self._MINIMAP_MAX_WIDTH, full_w, rect.width() / 3)
+        max_h = rect.height() / 3
+        scale = min(max_w / full_w, max_h / full_h)
+        mini_w = int(full_w * scale)
+        mini_h = int(full_h * scale)
         if mini_w <= 0 or mini_h <= 0:
             return
 
-        thumb_image = QImage(self._frame.data, full_w, full_h, full_w * 3, QImage.Format.Format_RGB888)
+        thumb_arr = np.ascontiguousarray(thumbnail)
+        thumb_h, thumb_w = thumb_arr.shape[:2]
+        thumb_image = QImage(thumb_arr.data, thumb_w, thumb_h, thumb_w * 3, QImage.Format.Format_RGB888)
         thumb = QPixmap.fromImage(thumb_image).scaled(
             mini_w,
             mini_h,

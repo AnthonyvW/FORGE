@@ -169,6 +169,11 @@ class ViewImageWidget(QWidget):
     # Public interface
     # ------------------------------------------------------------------
 
+    def show_folder(self, output_folder: str) -> None:
+        """Reveal just the Open Folder button, e.g. while a routine is still running."""
+        self._open_folder_btn.set_folder(output_folder)
+        self.setVisible(True)
+
     def show_result(self, output_folder: str, image_path: str | None = None) -> None:
         """
         Reveal the widget after a routine finishes.

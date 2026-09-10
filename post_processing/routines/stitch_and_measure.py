@@ -989,7 +989,7 @@ class StitchAndMeasureRoutine(PostProcessingRoutine):
                 f.write("\n".join(lines) + "\n")
             debug(f"StitchAndMeasureRoutine: DPI written to {dpi_txt_path}")
 
-        if dpi is not None and self._save_dpi and not self._standalone:
+        if dpi is not None and qa_pass and self._save_dpi and not self._standalone:
             mv = ctx.machine_vision
             mv.settings.dpi = dpi
             mv.save_settings()

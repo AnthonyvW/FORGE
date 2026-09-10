@@ -684,7 +684,7 @@ class FocusStackWidget(QWidget):
             self._last_stacked_path = str(Path(output_folder) / f"stacked.{ext}")
         else:
             self._last_stacked_path = None
-        self._results_widget.hide_result()
+        self._results_widget.show_folder(output_folder)
         self._enter_running_state()
 
     def _on_pause_resume_clicked(self) -> None:
@@ -707,6 +707,7 @@ class FocusStackWidget(QWidget):
 
     def _enter_running_state(self) -> None:
         self._start_btn.setEnabled(False)
+        self._start_btn.setVisible(False)
         self._set_start_btn.setEnabled(False)
         self._set_end_btn.setEnabled(False)
         self._output_folder.setEnabled(False)
@@ -722,6 +723,7 @@ class FocusStackWidget(QWidget):
     def _exit_running_state(self) -> None:
         self._poll_timer.stop()
         self._start_btn.setEnabled(True)
+        self._start_btn.setVisible(True)
         self._set_start_btn.setEnabled(True)
         self._set_end_btn.setEnabled(True)
         self._output_folder.setEnabled(True)

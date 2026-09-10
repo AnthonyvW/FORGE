@@ -1,11 +1,12 @@
 from __future__ import annotations
 
 import numpy as np
-from PySide6.QtCore import Qt, Slot, QRect, QPoint, QRectF, QEvent
-from PySide6.QtGui import QImage, QPixmap, QPainter, QPen, QColor, QWheelEvent, QMouseEvent, QPainterPath
+from PySide6.QtCore import Qt, Slot, Signal, QRect, QPoint, QRectF, QEvent, QTimer
+from PySide6.QtGui import QImage, QPixmap, QPainter, QPen, QColor, QWheelEvent, QMouseEvent, QKeyEvent, QEnterEvent, QPainterPath
 from PySide6.QtWidgets import (
-    QAbstractSpinBox, QApplication, QComboBox, QFrame, QLabel, QLineEdit, QPlainTextEdit,
-    QPushButton, QTextEdit, QVBoxLayout, QWidget, QSizePolicy,
+    QAbstractSpinBox, QApplication, QComboBox, QFrame, QHBoxLayout, QLabel,
+    QLineEdit, QMessageBox, QPlainTextEdit, QPushButton, QTextEdit, QVBoxLayout,
+    QWidget, QSizePolicy,
 )
 
 from common.app_context import get_app_context
@@ -13,11 +14,25 @@ from common.logger import info, error, warning
 from UI.widgets.preview_overlay.channel import ChannelButton, ChannelOverlay
 from UI.widgets.preview_overlay.machine_vision import MachineVisionButton
 from UI.widgets.preview_overlay.click_to_move import ClickToMoveOverlay
+from UI.widgets.preview_overlay.coordinate_space import CoordinateSpace, IdentityCoordinateSpace
 from UI.widgets.preview_overlay.crosshair import CrosshairButton, CrosshairOverlay
 from UI.widgets.preview_overlay.focus import FocusOverlay
 from UI.widgets.preview_overlay.inspect_calibration import InspectCalibrationOverlay
 from UI.widgets.preview_overlay.grid import GridButton, GridOverlay
+from UI.widgets.preview_overlay.input_tool import InputContext, ToolDispatcher
+from UI.widgets.preview_overlay.interaction_mode import PreviewModeController
+from UI.widgets.preview_overlay.large_image_source import LargeImageSource
+from UI.widgets.preview_overlay.loaded_image_overlay import LoadedImageOverlay
+from UI.widgets.preview_overlay.measurement_interaction import MeasurementInteraction
+from UI.widgets.preview_overlay.measurement_overlay import MeasurementOverlay, MeasurementOverlayController
 from UI.widgets.preview_overlay.overlay_base import Overlay
+from UI.widgets.preview_overlay.preview_input_tools import (
+    ClickToMoveTool,
+    MeasurementEndpointDragTool,
+    MeasurementPlacementTool,
+    MeasurementTagInteractionTool,
+    ZoomPanTool,
+)
 from UI.widgets.preview_overlay.red_mark_detection_overlay import RedMarkDetectionOverlay
 from UI.widgets.preview_overlay.background_detection import BackgroundDetectionOverlay
 from UI.widgets.preview_overlay.focus_stack_preview import FocusStackPreviewOverlay
@@ -101,15 +116,39 @@ class OverlayLabel(QLabel):
     see ``ZoomPreviewOverlay.active``.
     """
 
-    _ZOOM_DRAG_THRESHOLD_PX: int = 4
-
     def __init__(self, parent: QWidget | None = None) -> None:
         super().__init__(parent)
         self._overlays: list[Overlay] = []
         self._click_handler: ClickToMoveOverlay | None = None
         self._zoom_handler: ZoomPreviewOverlay | None = None
-        self._zoom_press_pos: QPoint | None = None
-        self._zoom_dragging: bool = False
+        self._loaded_image_overlay: LoadedImageOverlay | None = None
+        self._measurement_handler: MeasurementOverlay | None = None
+        self._measurement_interaction: MeasurementInteraction | None = None
+        self._measurement_active: bool = False
+        self._click_to_move_suppressed: bool = False
+        self._content_dims: tuple[int, int] | None = None
+        self._tool_dispatcher: ToolDispatcher | None = None
+        self._placement_tool: MeasurementPlacementTool | None = None
+
+        # Grabbed on hover (see enterEvent) rather than left at the
+        # default NoFocus, so the Delete key reaches keyPressEvent while
+        # the cursor sits over a measurement tag without requiring a
+        # click first — matches the hover-to-reveal-X affordance itself
+        # needing no click either.
+        self.setFocusPolicy(Qt.FocusPolicy.StrongFocus)
+
+    def set_content_dims(self, dims: tuple[int, int] | None) -> None:
+        """
+        Override the aspect ratio the letterbox fits against, for content
+        whose own pixel dimensions differ from whatever pixmap this label
+        still happens to hold — namely the loaded-image overlay, which
+        never calls setPixmap() itself (see CameraPreview._render_display's
+        early return while it's enabled), so without this the letterbox
+        would stay shaped for whatever live camera frame was on screen
+        right before switching into loaded-image mode. Pass None to go
+        back to sizing from the actual pixmap.
+        """
+        self._content_dims = dims
 
     def add_overlay(self, overlay: Overlay) -> None:
         self._overlays.append(overlay)
@@ -123,14 +162,106 @@ class OverlayLabel(QLabel):
         is active so the cursor gives visual feedback.
         """
         self._click_handler = handler
-        self.setCursor(
-            Qt.CursorShape.CrossCursor if handler is not None
-            else Qt.CursorShape.ArrowCursor
-        )
+        self._update_cursor()
 
     def set_zoom_handler(self, handler: ZoomPreviewOverlay | None) -> None:
         """Register the overlay that should receive drag-to-pan events."""
         self._zoom_handler = handler
+
+    def set_loaded_image_overlay(self, overlay: LoadedImageOverlay | None) -> None:
+        """
+        Register the overlay whose ``enabled`` state suppresses click-to-move.
+
+        A loaded image has no calibration of its own, so a click on it must
+        never resolve to a stage move — see ``_click_to_move_allowed``.
+        """
+        self._loaded_image_overlay = overlay
+        self._update_cursor()
+
+    def set_click_to_move_suppressed(self, suppressed: bool) -> None:
+        """
+        Force-disable click-to-move regardless of the loaded-image overlay.
+
+        Used by MeasurementTab while it's the visible tab: click-to-move
+        must stay off there even for the live feed, not only while a
+        loaded image is actually showing — see ``_click_to_move_allowed``.
+        """
+        self._click_to_move_suppressed = suppressed
+        self._update_cursor()
+
+    def set_measurement_handler(self, handler: MeasurementOverlay | None) -> None:
+        """Register the overlay that receives measurement placement click events."""
+        self._measurement_handler = handler
+
+    def set_measurement_interaction(self, interaction: MeasurementInteraction | None) -> None:
+        """Register the controller for this overlay's own tag hover/click/delete UI and its customize-menu popup — see MeasurementInteraction. Event handlers below just forward to it."""
+        self._measurement_interaction = interaction
+
+    def set_measurement_mode_active(self, active: bool) -> None:
+        """
+        Whether the measurement tab is the one currently showing this
+        preview — gates measurement placement the same way
+        ``set_click_to_move_suppressed`` gates click-to-move, so a kind
+        left selected in ``MeasurementsWidget`` can't place measurements
+        while some other tab happens to be showing this shared preview.
+
+        Mouse tracking is only needed while placing a measurement — the
+        preview has to follow the cursor between clicks, with no button
+        held — so it's switched on/off here rather than left running for
+        the widget's whole lifetime.
+        """
+        self._measurement_active = active
+        self.setMouseTracking(active)
+        if self._placement_tool is not None:
+            self._placement_tool.reset()
+        if self._measurement_handler is not None:
+            self._measurement_handler.cancel_placement()
+            self._measurement_handler.end_endpoint_drag()
+            self._measurement_handler.end_tag_drag()
+        if self._measurement_interaction is not None:
+            self._measurement_interaction.set_active(active)
+
+    @property
+    def click_to_move_suppressed(self) -> bool:
+        """Current value set by set_click_to_move_suppressed — read by PreviewModeController to snapshot state before a mode push."""
+        return self._click_to_move_suppressed
+
+    @property
+    def measurement_mode_active(self) -> bool:
+        """Current value set by set_measurement_mode_active — read by PreviewModeController to snapshot state before a mode push."""
+        return self._measurement_active
+
+    @property
+    def _click_to_move_allowed(self) -> bool:
+        if self._click_to_move_suppressed:
+            return False
+        return self._loaded_image_overlay is None or not self._loaded_image_overlay.enabled
+
+    def _update_cursor(self) -> None:
+        active = self._click_handler is not None and self._click_to_move_allowed
+        self.setCursor(Qt.CursorShape.CrossCursor if active else Qt.CursorShape.ArrowCursor)
+
+    def refresh_cursor(self) -> None:
+        """Public entry point for external code that just changed something _click_to_move_allowed depends on (e.g. OverlayController toggling the loaded-image overlay's enabled flag directly) without going through one of the set_* methods above."""
+        self._update_cursor()
+
+    def enterEvent(self, event: QEnterEvent) -> None:
+        super().enterEvent(event)
+        if self._measurement_interaction is not None and self._measurement_interaction.wants_focus_on_hover():
+            # Grabbed so Delete reaches keyPressEvent purely from
+            # hovering a tag, with no click needed first.
+            self.setFocus(Qt.FocusReason.MouseFocusReason)
+
+    def leaveEvent(self, event: QEvent) -> None:
+        super().leaveEvent(event)
+        if self._measurement_interaction is not None:
+            self._measurement_interaction.handle_leave()
+
+    def keyPressEvent(self, event: QKeyEvent) -> None:
+        if self._tool_dispatcher is not None and self._tool_dispatcher.key_press(event, self._build_input_context()):
+            event.accept()
+            return
+        super().keyPressEvent(event)
 
     def _overlay_active(self, overlay: Overlay) -> bool:
         """
@@ -144,7 +275,7 @@ class OverlayLabel(QLabel):
             return overlay.active
         return overlay.enabled
 
-    def _display_rect(self, pixmap: QPixmap) -> QRect:
+    def _display_rect(self, pixmap: QPixmap | None) -> QRect:
         """
         Return the rect overlays should draw and interact against.
 
@@ -154,8 +285,9 @@ class OverlayLabel(QLabel):
         which shrinks toward the letterboxed rect at low zoom and grows
         to fill the widget entirely once the crop's aspect ratio catches
         up (see ``ZoomPreviewOverlay._crop_size``). Otherwise it's the
-        plain pixmap's aspect-correct-fit sub-rect within the widget
-        (``_image_rect``).
+        aspect-correct-fit sub-rect within the widget, sized from
+        ``_content_dims`` when set (see ``set_content_dims``) or else the
+        plain pixmap (``_image_rect``).
         """
         if self._zoom_handler is not None and self._zoom_handler.active:
             display_rect = self._zoom_handler.display_rect(self.rect())
@@ -163,98 +295,89 @@ class OverlayLabel(QLabel):
                 return display_rect
         return self._image_rect(pixmap)
 
+    def display_rect(self) -> QRect:
+        """Public wrapper around _display_rect for external callers (see MeasurementInteraction) that just want the current rect against the current pixmap, without needing to know that parameter exists."""
+        return self._display_rect(self.pixmap())
+
+    def init_tools(self) -> None:
+        """
+        Build this label's ToolDispatcher from whichever handlers have
+        already been registered via set_click_handler/set_zoom_handler/
+        set_measurement_handler/set_measurement_interaction — call once,
+        after all of those. Registration order below is the gesture-
+        priority ordering: the first tool that claims a given event wins,
+        so a click landing on an existing measurement's tag/endpoint
+        takes priority over starting a new one, which takes priority
+        over panning or moving the stage.
+        """
+        placement_tool = MeasurementPlacementTool(
+            measurement=self._measurement_handler,
+            zoom=self._zoom_handler,
+            video_label=self,
+            active=lambda: self._measurement_active,
+        )
+        self._placement_tool = placement_tool
+
+        dispatcher = ToolDispatcher()
+        dispatcher.register(MeasurementTagInteractionTool(
+            interaction=self._measurement_interaction,
+            measurement=self._measurement_handler,
+            video_label=self,
+            active=lambda: self._measurement_active,
+            placement_pending=lambda: placement_tool.pending,
+        ))
+        dispatcher.register(MeasurementEndpointDragTool(
+            measurement=self._measurement_handler,
+            interaction=self._measurement_interaction,
+            video_label=self,
+            active=lambda: self._measurement_active,
+        ))
+        dispatcher.register(placement_tool)
+        dispatcher.register(ZoomPanTool(
+            zoom=self._zoom_handler,
+            click=self._click_handler,
+            video_label=self,
+            click_to_move_allowed=lambda: self._click_to_move_allowed,
+        ))
+        dispatcher.register(ClickToMoveTool(
+            click=self._click_handler,
+            allowed=lambda: self._click_to_move_allowed,
+        ))
+        self._tool_dispatcher = dispatcher
+
+    def _build_input_context(self) -> InputContext:
+        pixmap = self.pixmap()
+        has_pixmap = pixmap is not None and not pixmap.isNull() and pixmap.width() > 0 and pixmap.height() > 0
+        parent = self.parent()
+        return InputContext(
+            widget_rect=self.rect(),
+            display_rect=self._display_rect(pixmap if has_pixmap else None),
+            has_pixmap=has_pixmap,
+            has_content=self._has_content(),
+            full_width=getattr(parent, "_current_full_width", 0),
+            full_height=getattr(parent, "_current_full_height", 0),
+        )
+
     def mousePressEvent(self, event: QMouseEvent) -> None:
-        if (
-            self._zoom_handler is not None
-            and self._zoom_handler.active
-            and event.button() == Qt.MouseButton.LeftButton
-        ):
-            self._zoom_press_pos = event.position().toPoint()
-            self._zoom_dragging = False
+        if self._tool_dispatcher is not None and self._tool_dispatcher.mouse_press(event, self._build_input_context()):
             event.accept()
             return
-
-        if (
-            self._click_handler is not None
-            and self._click_handler.enabled
-            and event.button() == Qt.MouseButton.LeftButton
-            and self.pixmap() is not None
-            and not self.pixmap().isNull()
-        ):
-            image_rect = self._display_rect(self.pixmap())
-            parent = self.parent()
-            full_w = getattr(parent, "_current_full_width", 0)
-            full_h = getattr(parent, "_current_full_height", 0)
-            if full_w > 0 and full_h > 0:
-                self._click_handler.handle_click(
-                    event.position().toPoint().x(),
-                    event.position().toPoint().y(),
-                    image_rect,
-                    full_w,
-                    full_h,
-                )
-                event.accept()
-                return
         super().mousePressEvent(event)
 
+    def _has_content(self) -> bool:
+        """Whether there's anything on screen for the zoom overlay to pan against — a live pixmap, or a loaded image (see set_content_dims)."""
+        pixmap = self.pixmap()
+        has_pixmap = pixmap is not None and not pixmap.isNull() and pixmap.width() > 0 and pixmap.height() > 0
+        return has_pixmap or self._content_dims is not None
+
     def mouseMoveEvent(self, event: QMouseEvent) -> None:
-        if (
-            self._zoom_handler is not None
-            and self._zoom_handler.active
-            and event.buttons() & Qt.MouseButton.LeftButton
-            and self._zoom_press_pos is not None
-            and self.pixmap() is not None
-            and not self.pixmap().isNull()
-        ):
-            pos = event.position().toPoint()
-
-            if not self._zoom_dragging:
-                delta = pos - self._zoom_press_pos
-                if (
-                    abs(delta.x()) > self._ZOOM_DRAG_THRESHOLD_PX
-                    or abs(delta.y()) > self._ZOOM_DRAG_THRESHOLD_PX
-                ):
-                    self._zoom_dragging = True
-                    self._zoom_handler.begin_drag(self._zoom_press_pos)
-
-            if self._zoom_dragging:
-                self._zoom_handler.drag_to(pos, self.rect())
-                self.update()
-
+        if self._tool_dispatcher is not None and self._tool_dispatcher.mouse_move(event, self._build_input_context()):
             event.accept()
             return
         super().mouseMoveEvent(event)
 
     def mouseReleaseEvent(self, event: QMouseEvent) -> None:
-        if (
-            self._zoom_handler is not None
-            and self._zoom_handler.active
-            and event.button() == Qt.MouseButton.LeftButton
-        ):
-            if self._zoom_dragging:
-                self._zoom_handler.end_drag()
-            elif (
-                self._click_handler is not None
-                and self._click_handler.enabled
-                and self._zoom_press_pos is not None
-                and self.pixmap() is not None
-                and not self.pixmap().isNull()
-            ):
-                display_rect = self._display_rect(self.pixmap())
-                if display_rect.contains(self._zoom_press_pos):
-                    full_pixel = self._zoom_handler.widget_pos_to_full_pixel(
-                        self._zoom_press_pos, self.rect()
-                    )
-                    if full_pixel is not None:
-                        full_px, full_py, full_w, full_h = full_pixel
-                        ref = self._zoom_handler.current_view_center_full_pixel(self.rect())
-                        ref_x, ref_y = ref if ref is not None else (None, None)
-                        self._click_handler.handle_full_pixel_click(
-                            full_px, full_py, full_w, full_h, ref_x, ref_y
-                        )
-
-            self._zoom_press_pos = None
-            self._zoom_dragging = False
+        if self._tool_dispatcher is not None and self._tool_dispatcher.mouse_release(event, self._build_input_context()):
             event.accept()
             return
         super().mouseReleaseEvent(event)
@@ -283,18 +406,26 @@ class OverlayLabel(QLabel):
     def paintEvent(self, event) -> None:
         super().paintEvent(event)
 
-        if self.pixmap() is None or self.pixmap().isNull():
-            return
-
         pixmap = self.pixmap()
-        if pixmap.width() == 0 or pixmap.height() == 0:
+        has_pixmap = pixmap is not None and not pixmap.isNull() and pixmap.width() > 0 and pixmap.height() > 0
+        if not has_pixmap and self._content_dims is None:
             return
 
-        display_rect = self._display_rect(pixmap)
+        display_rect = self._display_rect(pixmap if has_pixmap else None)
 
         painter = QPainter(self)
         painter.setRenderHint(QPainter.RenderHint.Antialiasing)
+        self._paint_overlays(painter, display_rect)
+        painter.end()
 
+        if self._measurement_interaction is not None:
+            self._measurement_interaction.handle_paint_finished()
+
+    def _paint_overlays(self, painter: QPainter, display_rect: QRect) -> None:
+        """
+        Draw every active overlay against *display_rect*, in this
+        label's own coordinate space — called from ``paintEvent``.
+        """
         pen = QPen(QColor(0, 0, 0, 180))
         pen.setWidth(2)
         painter.setPen(pen)
@@ -324,17 +455,21 @@ class OverlayLabel(QLabel):
             if self._overlay_active(overlay):
                 overlay.draw_foreground(painter, self.rect())
 
-        painter.end()
-
-    def _image_rect(self, pixmap: QPixmap) -> QRect:
+    def _image_rect(self, pixmap: QPixmap | None) -> QRect:
         widget_rect = self.rect()
-        pixmap_rect = pixmap.rect()
-        scale = min(
-            widget_rect.width() / pixmap_rect.width(),
-            widget_rect.height() / pixmap_rect.height(),
-        )
-        scaled_width = int(pixmap_rect.width() * scale)
-        scaled_height = int(pixmap_rect.height() * scale)
+        if self._content_dims is not None:
+            content_w, content_h = self._content_dims
+        elif pixmap is not None:
+            content_w, content_h = pixmap.width(), pixmap.height()
+        else:
+            return widget_rect
+
+        if content_w <= 0 or content_h <= 0:
+            return widget_rect
+
+        scale = min(widget_rect.width() / content_w, widget_rect.height() / content_h)
+        scaled_width = int(content_w * scale)
+        scaled_height = int(content_h * scale)
         x = (widget_rect.width() - scaled_width) // 2
         y = (widget_rect.height() - scaled_height) // 2
         return QRect(x, y, scaled_width, scaled_height)
@@ -351,6 +486,7 @@ class OverlayController:
 
     def __init__(self, preview: CameraPreview) -> None:
         self._preview = preview
+        self._measurement = MeasurementOverlayController(preview._measurement_overlay, preview._video_label.update)
 
     @property
     def crosshair(self) -> bool:
@@ -379,6 +515,8 @@ class OverlayController:
     @focus.setter
     def focus(self, enabled: bool) -> None:
         self._preview._focus_overlay.set_enabled(enabled)
+        if enabled:
+            self._preview._refresh_loaded_image_analysis()
         self._preview._video_label.update()
 
     @property
@@ -388,6 +526,8 @@ class OverlayController:
     @inspect_calibration.setter
     def inspect_calibration(self, enabled: bool) -> None:
         self._preview._inspect_calibration_overlay.set_enabled(enabled)
+        if enabled:
+            self._preview._refresh_loaded_image_analysis()
         self._preview._video_label.update()
 
     @property
@@ -397,6 +537,8 @@ class OverlayController:
     @red_mark.setter
     def red_mark(self, enabled: bool) -> None:
         self._preview._red_mark_overlay.set_enabled(enabled)
+        if enabled:
+            self._preview._refresh_loaded_image_analysis()
         self._preview._video_label.update()
 
     @property
@@ -406,6 +548,8 @@ class OverlayController:
     @background.setter
     def background(self, enabled: bool) -> None:
         self._preview._background_overlay.set_enabled(enabled)
+        if enabled:
+            self._preview._refresh_loaded_image_analysis()
         self._preview._video_label.update()
 
     @property
@@ -421,6 +565,83 @@ class OverlayController:
     def focus_stack_preview(self) -> FocusStackPreviewOverlay:
         """Direct access to the focus stack preview overlay."""
         return self._preview._focus_stack_preview_overlay
+
+    @property
+    def measurement(self) -> MeasurementOverlayController:
+        """Measurement/DPI/calibration control surface — see MeasurementOverlayController."""
+        return self._measurement
+
+    @property
+    def loaded_image_enabled(self) -> bool:
+        return self._preview._loaded_image_overlay.enabled
+
+    @loaded_image_enabled.setter
+    def loaded_image_enabled(self, enabled: bool) -> None:
+        """
+        Show or hide the measurement tab's loaded-image overlay.
+
+        Only MeasurementTab / CaptureControlWidget should ever set this —
+        see LoadedImageOverlay's docstring on why it must stay off outside
+        that tab.
+        """
+        self._preview._loaded_image_overlay.set_enabled(enabled)
+        self._sync_content_dims()
+        self._preview._refresh_loaded_image_analysis()
+        self._preview._video_label.refresh_cursor()
+        self._preview._video_label.update()
+
+    def set_loaded_image(self, source: LargeImageSource | None) -> None:
+        """
+        Replace the image shown by the loaded-image overlay.
+
+        Placed measurements are positions on the *current* loaded image,
+        so they'd be meaningless once it's swapped out — if any exist,
+        confirms with the user before discarding them and proceeding.
+        Does nothing (leaves the current image in place) if they decline.
+        """
+        overlay = self._preview._measurement_overlay
+        if overlay.has_loaded_measurements and not self._confirm_discard_measurements():
+            return
+        overlay.clear_loaded()
+        self._preview._loaded_image_overlay.set_source(source)
+        self._preview._zoom_preview_overlay.reset_loaded()
+        self._sync_content_dims()
+        self._preview._refresh_loaded_image_analysis()
+        self._preview._video_label.update()
+
+    def _confirm_discard_measurements(self) -> bool:
+        box = QMessageBox(self._preview)
+        box.setIcon(QMessageBox.Icon.Question)
+        box.setWindowTitle("Discard Measurements?")
+        box.setText("Loading a new image will clear all measurements on the current image. Continue?")
+        box.setStandardButtons(QMessageBox.StandardButton.Yes | QMessageBox.StandardButton.Cancel)
+        box.setDefaultButton(QMessageBox.StandardButton.Cancel)
+        return box.exec() == QMessageBox.StandardButton.Yes
+
+    def _sync_content_dims(self) -> None:
+        """
+        Keep the video label's letterbox sized for whatever the loaded
+        image's own aspect ratio actually is while its overlay is shown —
+        see OverlayLabel.set_content_dims for why this can't just come
+        from the label's own pixmap.
+        """
+        overlay = self._preview._loaded_image_overlay
+        label = self._preview._video_label
+        if overlay.enabled and overlay.source is not None:
+            label.set_content_dims((overlay.source.source_width, overlay.source.source_height))
+            # QLabel's own base-class paintEvent draws whatever raw
+            # pixmap is still set on it — at that pixmap's own natural
+            # centered position, entirely independent of display_rect —
+            # regardless of what our overlay logic computes. Nothing
+            # re-populates it while this mode stays enabled (see
+            # CameraPreview._render_display's early return), so it would
+            # otherwise keep showing the last live camera frame around
+            # the edges of a loaded image with a different aspect ratio.
+            # Clearing it here is enough; the next live frame sets it
+            # again the moment this mode turns back off.
+            label.setPixmap(QPixmap())
+        else:
+            label.set_content_dims(None)
 
     def set_channel(
         self,
@@ -474,8 +695,10 @@ class CameraPreview(QFrame):
 
         self._current_full_width: int = 0
         self._current_full_height: int = 0
+        self._last_full_image: QImage | None = None
 
         self._preview_hidden: bool = False
+        self._scroll_zooms_mode: bool = False
 
         self._video_label = OverlayLabel()
         self._video_label.setObjectName("VideoLabel")
@@ -510,7 +733,16 @@ class CameraPreview(QFrame):
         self._click_to_move_overlay = ClickToMoveOverlay()
         self._focus_stack_preview_overlay = FocusStackPreviewOverlay()
         self._zoom_preview_overlay = ZoomPreviewOverlay()
+        self._loaded_image_overlay = LoadedImageOverlay()
+        self._zoom_preview_overlay.set_loaded_image_overlay(self._loaded_image_overlay)
+        self._measurement_overlay = MeasurementOverlay()
+        self._measurement_overlay.set_zoom_handler(self._zoom_preview_overlay)
+        self._measurement_overlay.set_loaded_image_overlay(self._loaded_image_overlay)
 
+        # Added first so it paints as the background: every other overlay
+        # (crosshair, grid, a future measurement-marker overlay) then draws
+        # on top of it exactly as it would over the live feed.
+        self._video_label.add_overlay(self._loaded_image_overlay)
         self._video_label.add_overlay(self._zoom_preview_overlay)
         self._video_label.add_overlay(self._crosshair_overlay)
         self._video_label.add_overlay(self._grid_overlay)
@@ -520,6 +752,7 @@ class CameraPreview(QFrame):
         self._video_label.add_overlay(self._background_overlay)
         self._video_label.add_overlay(self._click_to_move_overlay)
         self._video_label.add_overlay(self._focus_stack_preview_overlay)
+        self._video_label.add_overlay(self._measurement_overlay)
 
         self._crosshair_button = CrosshairButton(self)
         self._crosshair_button.move(10, 10)
@@ -565,10 +798,17 @@ class CameraPreview(QFrame):
         self._zoom_reset_button.raise_()
         self._zoom_reset_button.reset_zoom.connect(self._on_zoom_reset)
 
+        self._measurement_interaction = MeasurementInteraction(self._measurement_overlay, self._video_label, self)
+
         self._overlays = OverlayController(self)
+        self._mode_controller = PreviewModeController(self)
 
         self._video_label.set_click_handler(self._click_to_move_overlay)
         self._video_label.set_zoom_handler(self._zoom_preview_overlay)
+        self._video_label.set_loaded_image_overlay(self._loaded_image_overlay)
+        self._video_label.set_measurement_handler(self._measurement_overlay)
+        self._video_label.set_measurement_interaction(self._measurement_interaction)
+        self._video_label.init_tools()
 
         self._focus_overlay._relay.result_ready.connect(self._video_label.update)
         self._inspect_calibration_overlay._relay.result_ready.connect(self._video_label.update)
@@ -577,6 +817,199 @@ class CameraPreview(QFrame):
 
         self._connect_to_camera_manager()
         QApplication.instance().installEventFilter(self)
+
+        # Tiles for a loaded LargeImageSource decode in the background —
+        # see LargeImageSource.version — so nothing else here calls
+        # _video_label.update() when one lands. This timer is what
+        # notices and repaints while zoomed into a loaded image.
+        self._loaded_image_seen_version = -1
+        self._loaded_image_poll_timer = QTimer(self)
+        self._loaded_image_poll_timer.setInterval(100)
+        self._loaded_image_poll_timer.timeout.connect(self._poll_loaded_image_source)
+        self._loaded_image_poll_timer.start()
+
+    def _poll_loaded_image_source(self) -> None:
+        if not self._loaded_image_overlay.enabled:
+            return
+        source = self._loaded_image_overlay.source
+        if source is None:
+            return
+        version = source.version()
+        if version != self._loaded_image_seen_version:
+            self._loaded_image_seen_version = version
+            self._video_label.update()
+
+    def _current_full_frame_image(self) -> QImage | None:
+        """
+        The current full-resolution base image — the loaded image's own
+        true-resolution pixels if one is active, otherwise the last live
+        frame — with no measurements burned in. None if there's nothing
+        to export yet. Shared by export_plain_image and
+        export_measurement_image.
+        """
+        loaded_source = self._loaded_image_overlay.source if self._loaded_image_overlay.enabled else None
+        if loaded_source is not None:
+            full_h, full_w = loaded_source.dims()
+            if full_w <= 0 or full_h <= 0:
+                return None
+            array = loaded_source.region((0, 0, full_w, full_h), 1)
+            return QImage(
+                array.data, array.shape[1], array.shape[0], array.strides[0], QImage.Format.Format_RGB888
+            ).copy()
+        if self._last_full_image is None:
+            return None
+        return self._last_full_image.copy()
+
+    def export_plain_image(self) -> QImage | None:
+        """
+        The current full-resolution base image with no measurements
+        burned in at all — pairs with a measurements JSON sidecar
+        (MeasurementOverlayController.export_measurements_to_file)
+        rather than baking measurements into pixels. Returns None if
+        there's nothing to export yet.
+        """
+        return self._current_full_frame_image()
+
+    def export_measurement_image(self) -> QImage | None:
+        """
+        Render the current full-resolution frame — the loaded image if
+        one is active, otherwise the last live frame — with every placed
+        measurement burned in, using the exact same per-kind draw code
+        the live interactive preview uses (via IdentityCoordinateSpace)
+        rather than a separate export renderer. In-progress drafts and
+        a manual calibration line are never included — see
+        MeasurementOverlay.draw_placed_measurements_with_coordinate_space.
+        Returns None if there's nothing to export yet.
+        """
+        image = self._current_full_frame_image()
+        if image is None:
+            return None
+        return self._burn_in_measurements(image)
+
+    def _current_preview_frame_image(self) -> QImage | None:
+        """
+        Preview-resolution base image — the loaded image's own resident
+        thumbnail if one is active, otherwise the last live frame scaled
+        to the video label's current displayed size — with no
+        measurements burned in. None if there's nothing to export yet.
+        Shared by export_preview_image and export_preview_measurement_image.
+
+        While zoomed/panned (see ZoomPreviewOverlay), crops to the
+        current viewport first via ZoomPreviewOverlay.extract_current_view,
+        then scales that crop — not the whole frame — to the video
+        label's display size, so the export actually matches what's on
+        screen right now instead of always the fully zoomed-out view.
+
+        Deliberately doesn't paint the label's own active overlays (the
+        old "Take Photo with UI" screenshot approach did) — that would
+        also draw ZoomPreviewOverlay's own crop/minimap chrome, which
+        doesn't belong in an exported image.
+        """
+        lw = self._video_label.width()
+        lh = self._video_label.height()
+        if lw <= 0 or lh <= 0:
+            return None
+
+        self._zoom_preview_overlay.display_rect(self._video_label.rect())
+        crop_array = self._zoom_preview_overlay.extract_current_view()
+        if crop_array is not None:
+            image = QImage(
+                crop_array.data, crop_array.shape[1], crop_array.shape[0], crop_array.strides[0],
+                QImage.Format.Format_RGB888,
+            ).copy()
+            return image.scaled(lw, lh, Qt.AspectRatioMode.KeepAspectRatio, Qt.TransformationMode.SmoothTransformation)
+
+        if self._loaded_image_overlay.enabled:
+            source = self._loaded_image_overlay.source
+            if source is None or source.preview is None:
+                return None
+            array = np.ascontiguousarray(source.preview)
+            return QImage(
+                array.data, array.shape[1], array.shape[0], array.strides[0], QImage.Format.Format_RGB888
+            ).copy()
+        if self._last_full_image is None:
+            return None
+        return self._last_full_image.scaled(
+            lw, lh, Qt.AspectRatioMode.KeepAspectRatio, Qt.TransformationMode.SmoothTransformation,
+        )
+
+    def export_preview_image(self) -> QImage | None:
+        """The current preview-resolution base image with no measurements burned in — the preview-resolution sibling to export_plain_image. Returns None if there's nothing to export yet."""
+        return self._current_preview_frame_image()
+
+    def export_preview_measurement_image(self) -> QImage | None:
+        """
+        Preview-resolution sibling to export_measurement_image — same
+        base image as export_preview_image, with measurements burned in
+        the same way export_measurement_image does. While zoomed, burns
+        measurements in via ZoomPreviewOverlay itself (rather than a
+        plain IdentityCoordinateSpace) so their position and on-screen-
+        constant stroke width match the live, zoomed view exactly.
+        Returns None if there's nothing to export yet.
+        """
+        image = self._current_preview_frame_image()
+        if image is None:
+            return None
+        coords = self._zoom_preview_overlay if self._zoom_preview_overlay.active else None
+        return self._burn_in_measurements(image, coords)
+
+    def _burn_in_measurements(self, image: QImage, coords: CoordinateSpace | None = None) -> QImage:
+        """
+        Paint every placed measurement onto *image* (already the exact
+        size to export at) — shared by export_measurement_image and
+        export_preview_measurement_image. *coords* defaults to a plain
+        IdentityCoordinateSpace sized to *image* itself (the full-
+        resolution export's case — there's no pan/zoom viewport at all,
+        just a 1:1 target). export_preview_measurement_image instead
+        passes the live ZoomPreviewOverlay when zoomed, whose
+        paint_transform maps the "as if rect were the whole frame"
+        drawing convention every overlay uses onto *image*'s actual
+        (cropped) content — see MeasurementOverlay's own class docstring.
+        """
+        rect = QRect(0, 0, image.width(), image.height())
+        if coords is None:
+            coords = IdentityCoordinateSpace((image.width(), image.height()))
+        painter = QPainter(image)
+        painter.setRenderHint(QPainter.RenderHint.Antialiasing)
+        transform = coords.paint_transform(rect)
+        if transform is not None:
+            painter.setTransform(transform, True)
+        self._measurement_overlay.draw_placed_measurements_with_coordinate_space(painter, rect, coords)
+        painter.end()
+        return image
+
+    def _refresh_loaded_image_analysis(self) -> None:
+        """
+        Feed a frame from the loaded static image to whichever
+        machine-vision overlays (focus, inspect-calibration, red-mark,
+        background) are currently enabled.
+
+        ``_render_display`` early-returns while the loaded-image overlay
+        is shown (see its own comment there) so these overlays never see
+        a live per-frame call to ``update_full`` — without this, toggling
+        one on over a loaded image draws nothing at all. Call this only
+        from explicit trigger points (a loaded image or one of these
+        overlays being toggled on) rather than any per-frame path, so
+        the early return's whole point — not redoing this work at the
+        live frame rate — still holds.
+        """
+        if not self._loaded_image_overlay.enabled:
+            return
+        source = self._loaded_image_overlay.source
+        if source is None:
+            return
+        full_h, full_w = source.dims()
+        if full_w <= 0 or full_h <= 0:
+            return
+        array = source.region((0, 0, full_w, full_h), 1)
+        for overlay in (
+            self._focus_overlay,
+            self._inspect_calibration_overlay,
+            self._red_mark_overlay,
+            self._background_overlay,
+        ):
+            if overlay.enabled:
+                overlay.update_full(array)
 
     @property
     def overlays(self) -> OverlayController:
@@ -590,6 +1023,20 @@ class CameraPreview(QFrame):
                 preview.overlays.crosshair = True
         """
         return self._overlays
+
+    @property
+    def modes(self) -> PreviewModeController:
+        """
+        Interaction-mode control surface — see PreviewModeController.
+
+        Push a PreviewModeSpec when a tab/wizard step becomes the one
+        showing this preview, and pop the returned token when it stops:
+
+            token = get_app_context().camera_preview.modes.push(MEASUREMENT_MODE)
+            ...
+            token.pop()
+        """
+        return self._mode_controller
 
     def _connect_to_camera_manager(self) -> None:
         ctx = get_app_context()
@@ -638,6 +1085,7 @@ class CameraPreview(QFrame):
         self._red_mark_overlay.set_enabled(red_mark)
         self._inspect_calibration_overlay.set_enabled(scale)
         self._background_overlay.set_enabled(background)
+        self._refresh_loaded_image_analysis()
         self._video_label.update()
 
     def _on_zoom_step(self, direction: int) -> None:
@@ -761,6 +1209,16 @@ class CameraPreview(QFrame):
         if self._preview_hidden:
             return
 
+        if self._loaded_image_overlay.enabled:
+            # The loaded-image overlay is drawn as the background layer
+            # over this label's own pixmap (see __init__), so the live
+            # frame is fully hidden behind it. Decoding, filtering, and
+            # rescaling every incoming live frame anyway was pure wasted
+            # work — the real cost behind the measurement tab bogging
+            # down once a large image was loaded, since that work kept
+            # running at the live frame rate regardless.
+            return
+
         self._current_full_width = width
         self._current_full_height = height
 
@@ -771,6 +1229,12 @@ class CameraPreview(QFrame):
 
         if self._channel_overlay.needs_filter:
             image = self._channel_overlay.apply(image)
+
+        # Kept for export_measurement_image() — the only other reference
+        # to a full-resolution frame (full_arr, just below) is a raw
+        # numpy view of this same QImage's buffer, not something that
+        # survives past this method.
+        self._last_full_image = image
 
         # image.bits() returns a raw pointer; keep image alive in a local
         # so the GC cannot collect it while ptr is still being read.
@@ -860,7 +1324,7 @@ class CameraPreview(QFrame):
         direction = 1 if delta > 0 else -1
         ctrl_held = bool(event.modifiers() & Qt.KeyboardModifier.ControlModifier)
 
-        if ctrl_held:
+        if ctrl_held or self._scroll_zooms:
             anchor = self._video_label.mapFrom(self, event.position().toPoint())
             self._zoom_preview_overlay.zoom(direction, self._video_label.rect(), anchor)
             self._video_label.update()
@@ -876,24 +1340,55 @@ class CameraPreview(QFrame):
         ctx.motion.move("z", self._SCROLL_STEP_NM * direction)
         event.accept()
 
+    @property
+    def _scroll_zooms(self) -> bool:
+        """
+        Whether plain (non-ctrl) scroll should zoom instead of moving Z.
+
+        True whenever there's no live stage feed to sensibly scroll Z
+        against — the active PreviewModeSpec says so (e.g. Measurement
+        mode), or a loaded image is being shown regardless of which mode
+        is active.
+        """
+        return self._scroll_zooms_mode or self._loaded_image_overlay.enabled
+
     _TEXT_INPUT_TYPES = (QLineEdit, QTextEdit, QPlainTextEdit, QAbstractSpinBox)
+
+    _ARROW_PAN_DELTAS = {
+        Qt.Key.Key_Left: (-1, 0),
+        Qt.Key.Key_Right: (1, 0),
+        Qt.Key.Key_Up: (0, -1),
+        Qt.Key.Key_Down: (0, 1),
+    }
 
     def eventFilter(self, obj, event) -> bool:
         """
-        Application-wide +/- zoom shortcut.
+        Application-wide +/- zoom and arrow-key pan shortcuts.
 
         Installed on the QApplication instance rather than handled per-
-        widget so it fires no matter which widget in the window has
+        widget so they fire no matter which widget in the window has
         focus, not just the video label — as long as this preview is
         visible and the focused widget isn't a text field the person
-        could be typing into.
+        could be typing into. Arrow-key panning additionally only takes
+        the keypress once actually zoomed in — see
+        ``ZoomPreviewOverlay.pan_step`` — so arrow keys are left alone
+        for normal focus navigation otherwise.
         """
-        if event.type() == QEvent.Type.KeyPress and self.isVisible():
+        if event.type() == QEvent.Type.KeyPress and self.isVisible() and not self._text_input_focused():
             key = event.key()
-            if key in (Qt.Key.Key_Plus, Qt.Key.Key_Equal, Qt.Key.Key_Minus) and not self._text_input_focused():
+            if key in (Qt.Key.Key_Plus, Qt.Key.Key_Equal, Qt.Key.Key_Minus):
                 self._on_zoom_step(-1 if key == Qt.Key.Key_Minus else 1)
                 return True
+            if key in self._ARROW_PAN_DELTAS and self._on_arrow_pan(key):
+                return True
         return super().eventFilter(obj, event)
+
+    def _on_arrow_pan(self, key) -> bool:
+        dx, dy = self._ARROW_PAN_DELTAS[key]
+        if not self._zoom_preview_overlay.pan_step(dx, dy, self._video_label.rect()):
+            return False
+        self._video_label.update()
+        return True
 
     def _text_input_focused(self) -> bool:
         widget = QApplication.focusWidget()
@@ -905,6 +1400,9 @@ class CameraPreview(QFrame):
         info("Preview: cleanup starting...")
 
         QApplication.instance().removeEventFilter(self)
+        self._loaded_image_poll_timer.stop()
+        if self._loaded_image_overlay.source is not None:
+            self._loaded_image_overlay.source.close()
 
         ctx = get_app_context()
         camera_manager = ctx.camera_manager

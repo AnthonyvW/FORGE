@@ -1,7 +1,7 @@
 from __future__ import annotations
 
 from abc import ABC, abstractmethod
-from dataclasses import dataclass, asdict, field
+from dataclasses import dataclass, field, fields
 from enum import Enum
 from pathlib import Path
 from typing import Any, NamedTuple, TYPE_CHECKING
@@ -190,6 +190,10 @@ class CameraSettings(ABC):
     
     def get_still_resolutions(self) -> list['CameraResolution']:
         return []
+
+    @abstractmethod
+    def get_current_still_resolution(self) -> tuple[int, int, int]:
+        pass
     
     @abstractmethod
     def get_exposure_time(self) -> int:
@@ -213,28 +217,60 @@ class CameraSettings(ABC):
         """
         Get camera metadata for image saving.
 
-        Retrieves current settings to be embedded in saved images.
+        Retrieves current settings to be embedded in saved images. Walks
+        get_metadata() rather than the raw dataclass fields, since that is
+        the authoritative list of settings a given camera exposes — a
+        subclass's fields (e.g. Amscope fan/TEC controls) only show up here
+        if get_metadata() declares them.
 
         Returns:
             Dictionary containing camera metadata including the model name
-            (if a camera is attached) and all serialisable settings fields.
+            (if a camera is attached) and every setting registered via
+            get_metadata().
         """
         metadata: dict[str, Any] = {}
 
         if self._camera is not None:
             metadata["model"] = self._camera.model
 
-        settings_dict = asdict(self)
+        for meta in self.get_metadata():
+            if not hasattr(self, meta.name):
+                continue
 
-        settings_dict.pop("version", None)
-
-        for key, value in settings_dict.items():
+            value = getattr(self, meta.name)
             if hasattr(value, "_asdict"):
-                settings_dict[key] = value._asdict()
+                value = value._asdict()
+            elif isinstance(value, Enum):
+                value = value.value
 
-        metadata.update(settings_dict)
+            metadata[meta.name] = value
 
         return metadata
+
+    def field_default(self, name: str) -> Any:
+        """The dataclass-declared default for *name*, or None if there isn't one.
+
+        Used as the "normal" baseline for direction_code() — the factory
+        default rather than the middle of the field's valid range, since a
+        hardware-probed range (see UsbCameraSettings) isn't necessarily
+        centered on where the camera actually ships.
+        """
+        for f in fields(self):
+            if f.name == name:
+                return f.default
+        return None
+
+    def direction_code(self, name: str) -> int:
+        """EXIF Contrast/Saturation-style code (0=Normal, 1=Low, 2=High) for
+        field *name*, relative to its dataclass default.
+        """
+        value = getattr(self, name)
+        default = self.field_default(name)
+        if value > default:
+            return 2
+        if value < default:
+            return 1
+        return 0
 
     def supports_histogram(self) -> bool:
         """

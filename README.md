@@ -9,7 +9,7 @@
 
 FieldWeave is an open-source, gigapixel imaging system built on a modified off-the-shelf 3D printer. It automates sample capture, focus stacking, and DPI calibration, producing high resolution images across a wide range of fields. See it in action on the [FieldWeave website](https://www.fieldweave.com), which includes an interactive gallery for browsing full-resolution scans.
 
-**If FieldWeave is useful to you, please consider supporting its development. See [Support FieldWeave](#support-fieldweave) below.**
+**If FieldWeave is useful to you, please consider giving it a star and supporting its development. See [Support FieldWeave](#support-fieldweave) below.**
 
 ## Features
 
