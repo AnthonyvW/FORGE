@@ -415,6 +415,7 @@ class LargeImageSource(FrameSource):
         self.source_height = 0
         self.preview: np.ndarray | None = None
         self._version = 0
+        self.open_error: str | None = None
 
         self._reduced_source: _ReducedSource | None = None
         self._resident: Image.Image | None = None
@@ -464,7 +465,8 @@ class LargeImageSource(FrameSource):
             else:
                 self._load_resident()
                 self.preview = self._build_preview_from_resident()
-        except Exception:
+        except Exception as exc:
+            self.open_error = f"{type(exc).__name__}: {exc}"
             return False
 
         return True

@@ -129,6 +129,7 @@ class CaptureControlWidget(QWidget):
         self._load_source: LargeImageSource | None = None
         self._load_path: Path | None = None
         self._load_dpi: float | None = None
+        self._load_error: str | None = None
         self._load_switching_in = False
         self._load_toast_id: int | None = None
 
@@ -593,6 +594,7 @@ class CaptureControlWidget(QWidget):
         """
         source = LargeImageSource(str(path))
         success = source.open()
+        error_message = None if success else source.open_error
         if not success:
             source.close()
 
@@ -605,6 +607,7 @@ class CaptureControlWidget(QWidget):
         self._load_success = success
         self._load_path = path
         self._load_dpi = dpi
+        self._load_error = error_message
         self._load_pending = True
 
     def _poll_load_state(self) -> None:
@@ -617,6 +620,7 @@ class CaptureControlWidget(QWidget):
         source = self._load_source
         path = self._load_path
         dpi = self._load_dpi
+        load_error = self._load_error
         self._load_source = None
 
         self._hide_overlay()
@@ -626,7 +630,8 @@ class CaptureControlWidget(QWidget):
         ctx = get_app_context()
 
         if not success:
-            warning(f"CaptureControlWidget: failed to load image {path}")
+            detail = load_error or "unknown error"
+            warning(f"CaptureControlWidget: failed to load image {path}: {detail}")
             if ctx.toast:
                 ctx.toast.error(f"Could not read image: {path.name}", title="Load Image Failed", dismiss_id=self._load_toast_id)
             self._load_toast_id = None
