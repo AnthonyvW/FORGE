@@ -18,6 +18,14 @@ if str(_REPO_ROOT) not in sys.path:
 
 from motion.motion_config import AreaScanSettings, MotionSystemSettingsManager  # noqa: E402
 
+# The manager's default root_dir ("./config/motion_system") is resolved against
+# the process's current working directory, which matches the main FieldWeave
+# app (always launched from the repo root) but not this standalone script,
+# which may be run from anywhere. Pin it to the repo's actual config folder so
+# it finds the settings that were really saved instead of silently falling
+# back to defaults.
+_MOTION_SETTINGS_MANAGER = MotionSystemSettingsManager(root_dir=_REPO_ROOT / "config" / "motion_system")
+
 Image.MAX_IMAGE_PIXELS = None
 
 THUMB_SOURCE = (100, 75)
@@ -625,7 +633,7 @@ class SourceImagePanel(tk.Frame):
             messagebox.showerror("focusweave not found",
                                  "The 'focusweave' command was not found on your PATH.")
             return
-        area_scan_settings = MotionSystemSettingsManager().load().z_stack_area_scan
+        area_scan_settings = _MOTION_SETTINGS_MANAGER.load().z_stack_area_scan
         cmd = [
             "focusweave", str(self._source_folder), "--output", str(self._stacked_path),
             *area_scan_focusweave_args(area_scan_settings),
