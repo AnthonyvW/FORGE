@@ -2,11 +2,18 @@ from __future__ import annotations
 
 import re
 import subprocess
+import sys
 import tkinter as tk
 from pathlib import Path
 from tkinter import filedialog, messagebox, ttk
 
 from PIL import Image, ImageTk
+
+_REPO_ROOT = Path(__file__).resolve().parents[2]
+if str(_REPO_ROOT) not in sys.path:
+    sys.path.insert(0, str(_REPO_ROOT))
+
+from motion.motion_config import AreaScanSettings, MotionSystemSettingsManager  # noqa: E402
 
 Image.MAX_IMAGE_PIXELS = None
 
@@ -41,6 +48,29 @@ def find_source_folder(root: Path, filename: str) -> Path | None:
     y_trunc, x_trunc = parsed
     candidate = root / f"x{x_trunc}0000_y{y_trunc}0000"
     return candidate if candidate.is_dir() else None
+
+
+def area_scan_focusweave_args(settings: AreaScanSettings) -> list[str]:
+    """Build focusweave CLI flags matching the saved area scan focus stack settings.
+
+    Mirrors AreaScanSettingsWidget._build_focus_stack_config() in
+    UI/widgets/automation/area_scan_widget.py so a manual re-run produces the
+    same result as the original area scan.
+    """
+    args: list[str] = []
+    if settings.no_align:
+        args.append("--no-align")
+    if settings.keep_size:
+        args.append("--keep-size")
+    if settings.crop:
+        args.append("--crop")
+    args += ["--sharpness", str(settings.sharpness)]
+    if settings.cull_enabled:
+        args += ["--cull", str(settings.cull_threshold)]
+    args += ["--workers", str(settings.workers)]
+    if settings.slab_enabled:
+        args += ["--slab", str(settings.slab_size), str(settings.slab_overlap)]
+    return args
 
 
 def set_cell_bg(cell: tk.Frame, color: str) -> None:
@@ -559,7 +589,11 @@ class SourceImagePanel(tk.Frame):
     def _rerun_focusweave(self) -> None:
         if self._source_folder is None or self._stacked_path is None:
             return
-        cmd = ["focusweave", str(self._source_folder), "--output", str(self._stacked_path)]
+        area_scan_settings = MotionSystemSettingsManager().load().z_stack_area_scan
+        cmd = [
+            "focusweave", str(self._source_folder), "--output", str(self._stacked_path),
+            *area_scan_focusweave_args(area_scan_settings),
+        ]
         self._status.configure(text=f"Running: {' '.join(cmd)}")
         self.update_idletasks()
         try:
