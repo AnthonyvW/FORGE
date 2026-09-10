@@ -94,6 +94,10 @@ class CameraManager(QObject):
         # Latest numpy frame written by the USB capture thread; read by poll timer on main thread
         self._pending_usb_frame: np.ndarray | None = None
 
+        # Set by CaptureControlWidget while a loaded image (not the live
+        # feed) is what's actually on screen -- see set_preview_delivery_paused.
+        self._preview_delivery_paused = False
+
         self._is_streaming = False
         self._last_enumerated_count: int | None = None
 
@@ -342,6 +346,22 @@ class CameraManager(QObject):
         self.streaming_started.emit(width, height)
         return True
 
+    def set_preview_delivery_paused(self, paused: bool) -> None:
+        """
+        Skip processing incoming preview frames entirely while nothing is
+        displaying them -- called by CaptureControlWidget alongside
+        CameraPreview.overlays.loaded_image_enabled.
+
+        Hardware capture keeps running (stopping/restarting streaming for
+        every mode switch risks reconnect delay and losing exposure/focus
+        state), but _usb_frame_callback drops each frame before paying for
+        its BGR->RGB conversion -- previously done on every frame the SDK
+        pushed regardless of whether the live feed was even on screen, which
+        competed for CPU with tile decoding while a loaded pyramid image was
+        being viewed.
+        """
+        self._preview_delivery_paused = paused
+
     def stop_streaming(self) -> bool:
         if not self._is_streaming:
             debug("Streaming not active")
@@ -471,9 +491,11 @@ class CameraManager(QObject):
         Only writes plain data — no signals, no GUI calls.
         The poll timer on the main thread drains _pending_usb_frame.
         """
-        import cv2  # noqa: PLC0415
         if not isinstance(context, CameraManager):
             return
+        if context._preview_delivery_paused:
+            return
+        import cv2  # noqa: PLC0415
         context._pending_usb_frame = cv2.cvtColor(frame, cv2.COLOR_BGR2RGB)
 
     @Slot()
@@ -535,7 +557,7 @@ class CameraManager(QObject):
             self._handle_disconnected()
 
     def _handle_image_event(self) -> None:
-        if not self._active_camera:
+        if not self._active_camera or self._preview_delivery_paused:
             return
 
         base_camera = self._active_camera.underlying_camera

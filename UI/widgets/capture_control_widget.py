@@ -171,10 +171,13 @@ class CaptureControlWidget(QWidget):
             self._ensure_live_dpi()
 
     def _sync_loaded_image_overlay(self) -> None:
-        preview = get_app_context().camera_preview
+        ctx = get_app_context()
+        showing_loaded_image = self._tab_active and self._mode == CaptureMode.LOADED_IMAGE
+        ctx.camera_manager.set_preview_delivery_paused(showing_loaded_image)
+        preview = ctx.camera_preview
         if preview is None:
             return
-        preview.overlays.loaded_image_enabled = self._tab_active and self._mode == CaptureMode.LOADED_IMAGE
+        preview.overlays.loaded_image_enabled = showing_loaded_image
 
     # ------------------------------------------------------------------
     # UI setup
