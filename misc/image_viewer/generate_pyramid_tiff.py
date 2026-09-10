@@ -8,7 +8,14 @@ regardless of image size -- unlike a numpy/tifffile approach, which has
 to hold the whole decoded raster (and every pyramid level) resident at
 once. This is what vips's own tiffsave does, equivalent to running:
 
-    vips tiffsave INPUT OUTPUT --tile --pyramid --compression jpeg
+    vips tiffsave INPUT OUTPUT --tile --pyramid --compression deflate
+
+Defaults to deflate: lossless (jpeg's default produced visible blocking
+on sharp edges -- it discards data) and, unlike zstd, built directly
+into libtiff rather than linked as an optional external codec, so it
+works on every libvips build without needing one compiled with zstd
+support (not guaranteed -- the prebuilt pyvips wheel on Windows lacks
+it, for one).
 
 Requires libvips itself, not just the pyvips Python binding:
     Debian/Ubuntu: sudo apt install libvips
@@ -26,7 +33,12 @@ from pathlib import Path
 
 import pyvips
 
-DEFAULT_TILE_SIZE = 256
+# Matches TILE_SIZE in UI/widgets/preview_overlay/large_image_source.py --
+# when they agree, most of that reader's virtual tile requests land on
+# exactly one on-disk segment instead of needing several to stitch
+# together, which under concurrent load means far fewer separate
+# lock-protected file reads to decode the same view.
+DEFAULT_TILE_SIZE = 512
 DEFAULT_QUALITY = 90
 
 
@@ -55,12 +67,14 @@ def main() -> None:
         help="Tile size for every pyramid level (default: %(default)s)",
     )
     parser.add_argument(
-        "--compression", default="jpeg",
-        help="libvips TIFF compression, e.g. jpeg, deflate, lzw, none (default: %(default)s)",
+        "--compression", default="deflate",
+        help="libvips TIFF compression: deflate, lzw, none, zstd (all lossless -- zstd may "
+             "not be available on every libvips build), or jpeg (lossy -- smaller files but "
+             "visible artifacts on sharp edges) (default: %(default)s)",
     )
     parser.add_argument(
         "--quality", type=int, default=DEFAULT_QUALITY,
-        help="JPEG quality, ignored for other compressions (default: %(default)s)",
+        help="JPEG quality, only used with --compression jpeg (default: %(default)s)",
     )
     args = parser.parse_args()
 
