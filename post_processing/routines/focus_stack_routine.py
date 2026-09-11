@@ -43,6 +43,7 @@ Typical usage — streaming::
 from __future__ import annotations
 
 import threading
+import time
 from dataclasses import dataclass
 from pathlib import Path
 from typing import Any, Callable, Generator
@@ -192,6 +193,12 @@ class FocusStackResult:
     frame_count: int
     result_rgb: np.ndarray
     """Final stacked image in RGB888 order, shape (H, W, 3), dtype uint8."""
+    duration_s: float = 0.0
+    """
+    Wall-clock time actually spent stacking, measured from when this routine
+    started running to completion - excludes any time spent waiting in the
+    post-processing queue behind other jobs.
+    """
 
 
 # ---------------------------------------------------------------------------
@@ -250,6 +257,7 @@ class QueuedFocusStackRoutine(PostProcessingRoutine):
         cfg = self.config
         input_dir = Path(self.input_folder)
         out_path = Path(self.output_path)
+        stack_start = time.monotonic()
 
         self._set_status("Stacking images", self._progress_start, 100)
 
@@ -316,6 +324,7 @@ class QueuedFocusStackRoutine(PostProcessingRoutine):
                 image_height=h,
                 frame_count=frame_count,
                 result_rgb=result.image,
+                duration_s=time.monotonic() - stack_start,
             ),
         )
 
@@ -501,6 +510,7 @@ class StreamingFocusStackRoutine(PostProcessingRoutine):
                 100,
             )
 
+        stack_start = time.monotonic()
         result: RunResult = stacker.finish(
             keep_size=cfg.keep_size,
             progress=_progress,
@@ -532,6 +542,7 @@ class StreamingFocusStackRoutine(PostProcessingRoutine):
                 image_height=h,
                 frame_count=self._frame_count,
                 result_rgb=result.image,
+                duration_s=time.monotonic() - stack_start,
             ),
         )
 

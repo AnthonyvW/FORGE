@@ -52,7 +52,6 @@ from __future__ import annotations
 import json
 import threading
 import time
-from collections import deque
 from pathlib import Path
 from typing import Generator, TYPE_CHECKING
 
@@ -413,38 +412,37 @@ class AreaScan(AutomationRoutine):
 
         dpi: float | None = None
         mv = getattr(ctx, "machine_vision", None)
-        if mv is not None:
-            mv_settings = getattr(mv, "settings", None)
-            if mv_settings is not None:
-                dpi = getattr(mv_settings, "dpi", None)
+        mv_settings = getattr(mv, "settings", None) if mv is not None else None
+        if mv_settings is not None:
+            dpi = getattr(mv_settings, "dpi", None)
 
         # Per-resolution capture-time tracking (resolution_index=0 below).
         resolution_key = camera.settings.get_resolution_key(0)
         baseline_avg_capture_s = camera.settings.get_average_capture_time_s(resolution_key)
 
-        # Per-resolution focus-stack seconds-per-image tracking.
-        area_scan_settings = ctx.motion.settings.z_stack_area_scan
+        # Per-resolution focus-stack seconds-per-image tracking, stored on the
+        # machine-vision settings (mv_settings may be None if that subsystem
+        # isn't available, in which case focus-stack timing is simply skipped).
         focus_stack_resolution_key = camera.settings.get_current_resolution_key()
         focus_stack_samples_recorded = False
 
         # Focus stacking runs on the post-processing manager's worker thread in
-        # parallel with imaging; completed stacks are recorded (as seconds per
-        # image, since stack size varies) so the ETA can factor them in once at
-        # least one has finished this run.
-        pending_focus_stack_starts: deque[float] = deque()
-
+        # parallel with imaging. Each routine reports its own actual processing
+        # duration (excluding time spent waiting in the queue) via
+        # FocusStackResult.duration_s, which is recorded here as seconds per
+        # image (since stack size varies) so the ETA can factor it in once at
+        # least one stack has finished this run.
         def _on_post_processing_complete(result: RoutineResult) -> None:
             nonlocal focus_stack_samples_recorded
-            if pending_focus_stack_starts:
-                start = pending_focus_stack_starts.popleft()
-                if result.success:
-                    duration_s = time.monotonic() - start
-                    fs_result = result.get("focus_stack")
-                    frame_count = fs_result.frame_count if fs_result is not None else z_slices_per_stack
-                    area_scan_settings.record_focus_stack_time_s(focus_stack_resolution_key, duration_s, frame_count)
-                    focus_stack_samples_recorded = True
+            if mv_settings is None or not result.success:
+                return
+            fs_result = result.get("focus_stack")
+            if fs_result is None:
+                return
+            mv_settings.record_focus_stack_time_s(focus_stack_resolution_key, fs_result.duration_s, fs_result.frame_count)
+            focus_stack_samples_recorded = True
 
-        if self._focus_stack_config is not None and post_processing is not None:
+        if self._focus_stack_config is not None and post_processing is not None and mv_settings is not None:
             post_processing.add_routine_complete_listener(_on_post_processing_complete)
 
         def _combined_eta(stacks_remaining: int, mean_stack_s: float) -> float:
@@ -456,7 +454,7 @@ class AreaScan(AutomationRoutine):
             imaging_eta = stacks_remaining * (mean_stack_s + _XY_TRAVEL_ETA_S)
             if not focus_stack_samples_recorded or post_processing is None:
                 return imaging_eta
-            per_image_s = area_scan_settings.get_focus_stack_time_per_image_s(focus_stack_resolution_key)
+            per_image_s = mv_settings.get_focus_stack_time_per_image_s(focus_stack_resolution_key)
             backlog = post_processing.queue_depth + (1 if post_processing.routine_running else 0)
             focus_stack_eta = (backlog + stacks_remaining) * z_slices_per_stack * per_image_s
             return max(imaging_eta, focus_stack_eta)
@@ -655,8 +653,6 @@ class AreaScan(AutomationRoutine):
             # runs them one at a time while imaging continues freely.
             if self._focus_stack_config is not None and stack_captures > 0:
                 if not self._check_stop():
-                    if post_processing is not None:
-                        pending_focus_stack_starts.append(time.monotonic())
                     self._enqueue_focus_stack(post_processing, subfolder)
 
             # ----------------------------------------------------------
@@ -697,7 +693,7 @@ class AreaScan(AutomationRoutine):
             if stacks_left > 0:
                 eta_note = "  (includes ~1 s/stack for XY travel"
                 if focus_stack_samples_recorded and post_processing is not None:
-                    per_image_s = area_scan_settings.get_focus_stack_time_per_image_s(focus_stack_resolution_key)
+                    per_image_s = mv_settings.get_focus_stack_time_per_image_s(focus_stack_resolution_key)
                     backlog = post_processing.queue_depth + (1 if post_processing.routine_running else 0)
                     eta_note += (
                         f"; focus stack backlog: {backlog}, mean {per_image_s * z_slices_per_stack:.1f}s/stack,"
@@ -721,7 +717,7 @@ class AreaScan(AutomationRoutine):
                 backlog = post_processing.queue_depth + (1 if post_processing.routine_running else 0)
                 remaining_eta = 0
                 if focus_stack_samples_recorded:
-                    per_image_s = area_scan_settings.get_focus_stack_time_per_image_s(focus_stack_resolution_key)
+                    per_image_s = mv_settings.get_focus_stack_time_per_image_s(focus_stack_resolution_key)
                     remaining_eta = round(backlog * z_slices_per_stack * per_image_s)
                 self._set_status(
                     f"Waiting for focus stacking to finish ({backlog} remaining)",
@@ -749,13 +745,13 @@ class AreaScan(AutomationRoutine):
         # ------------------------------------------------------------------
         # Persist any newly recorded focus-stack timing samples
         # ------------------------------------------------------------------
-        if focus_stack_samples_recorded:
-            if self.motion.save_settings():
-                per_image_s = area_scan_settings.get_focus_stack_time_per_image_s(focus_stack_resolution_key)
-                info(
-                    f"[AreaScan] Updated focus-stack time estimate for {focus_stack_resolution_key}:"
-                    f" {per_image_s:.3f}s/image"
-                )
+        if focus_stack_samples_recorded and mv is not None:
+            mv.save_settings()
+            per_image_s = mv_settings.get_focus_stack_time_per_image_s(focus_stack_resolution_key)
+            info(
+                f"[AreaScan] Updated focus-stack time estimate for {focus_stack_resolution_key}:"
+                f" {per_image_s:.3f}s/image"
+            )
 
         # ------------------------------------------------------------------
         # Final summary

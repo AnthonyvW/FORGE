@@ -536,6 +536,49 @@ class MachineVisionSettings:
     background: BackgroundDetectionSettings = field(default_factory=BackgroundDetectionSettings)
     """Parameters for the black-plastic background detection algorithm."""
 
+    focus_stack_time_samples_s: dict[str, list[float]] = field(default_factory=dict)
+    """
+    Rolling per-resolution focus-stack seconds-per-image samples (most recent
+    last, capped at MAX_FOCUS_STACK_TIME_SAMPLES), keyed by "WxH" (the
+    camera's still resolution). Automation routines (e.g. the area scan)
+    divide each completed stack's duration by its image count and record the
+    result here via record_focus_stack_time_s(); multiply
+    get_focus_stack_time_per_image_s() by a stack's image count to estimate
+    that stack's duration. Not surfaced in any settings UI - purely an
+    automatically tracked estimate.
+    """
+
+    # Unannotated so dataclass()/to_dict() don't treat these as per-instance
+    # fields.
+    #
+    # 0.5s/image is a rough starting point until real samples are recorded.
+    DEFAULT_FOCUS_STACK_TIME_PER_IMAGE_S = 0.5
+    MAX_FOCUS_STACK_TIME_SAMPLES = 20
+
+    def get_focus_stack_time_per_image_s(self, resolution_key: str) -> float:
+        """Mean recorded focus-stack seconds-per-image for *resolution_key*.
+
+        Returns ``DEFAULT_FOCUS_STACK_TIME_PER_IMAGE_S`` when no samples have
+        been recorded yet.
+        """
+        samples = self.focus_stack_time_samples_s.get(resolution_key)
+        if not samples:
+            return self.DEFAULT_FOCUS_STACK_TIME_PER_IMAGE_S
+        return sum(samples) / len(samples)
+
+    def record_focus_stack_time_s(self, resolution_key: str, duration_s: float, image_count: int) -> None:
+        """Record a completed focus stack's duration, normalised to seconds-per-image.
+
+        Keeps only the most recent ``MAX_FOCUS_STACK_TIME_SAMPLES`` samples for
+        *resolution_key*. No-op if *image_count* is not positive.
+        """
+        if image_count <= 0:
+            return
+        samples = self.focus_stack_time_samples_s.setdefault(resolution_key, [])
+        samples.append(duration_s / image_count)
+        if len(samples) > self.MAX_FOCUS_STACK_TIME_SAMPLES:
+            del samples[: len(samples) - self.MAX_FOCUS_STACK_TIME_SAMPLES]
+
     def validate(self) -> None:
         self.focus.validate()
         self.camera_calibration.validate()
@@ -696,6 +739,11 @@ class MachineVisionSettingsManager(ConfigManager[MachineVisionSettings]):
             z_nm=icp_data.get("z_nm", 0),
         )
 
+        raw_focus_stack_time_samples = data.get("focus_stack_time_samples_s", {})
+        focus_stack_time_samples_s = (
+            raw_focus_stack_time_samples if isinstance(raw_focus_stack_time_samples, dict) else {}
+        )
+
         return MachineVisionSettings(
             dpi=data.get("dpi"),
             focus=focus,
@@ -704,6 +752,7 @@ class MachineVisionSettingsManager(ConfigManager[MachineVisionSettings]):
             inspection_calibration_position=inspection_calibration_position,
             red_mark=_load_red_mark(data.get("red_mark", {})),
             background=_load_background(data.get("background", {})),
+            focus_stack_time_samples_s=focus_stack_time_samples_s,
         )
 
     def to_dict(self, settings: MachineVisionSettings) -> dict[str, Any]:
@@ -790,4 +839,5 @@ class MachineVisionSettingsManager(ConfigManager[MachineVisionSettings]):
                 "val_std_max": bg.val_std_max,
                 "scale": bg.scale,
             },
+            "focus_stack_time_samples_s": settings.focus_stack_time_samples_s,
         }

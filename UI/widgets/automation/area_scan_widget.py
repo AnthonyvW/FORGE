@@ -22,7 +22,7 @@ from PySide6.QtCore import Qt, QTimer
 from camera.settings.camera_settings import CameraSettings
 from common.app_context import get_app_context
 from common.logger import warning, error
-from motion.motion_config import AreaScanSettings
+from machine_vision.machine_vision_config import MachineVisionSettings
 from motion.routines.area_scan import AreaScan
 from post_processing.routines.focus_stack_routine import FocusStackRoutineConfig
 from UI.widgets.utilities.open_filesystem_object_button import OpenFolderButton
@@ -53,20 +53,20 @@ def _get_time_per_image_s() -> float:
 def _get_focus_stack_time_per_image_s() -> float:
     """Mean focus-stack seconds-per-image for the resolution the area scan will use.
 
-    Falls back to ``AreaScanSettings.DEFAULT_FOCUS_STACK_TIME_PER_IMAGE_S``
+    Falls back to ``MachineVisionSettings.DEFAULT_FOCUS_STACK_TIME_PER_IMAGE_S``
     before any focus-stack history has been recorded for that resolution, or
-    if the camera/motion controller isn't ready yet.
+    if the camera/machine-vision subsystem isn't ready yet.
     """
     ctx = get_app_context()
     camera = ctx.camera
-    motion = ctx.motion
-    if camera is None or motion is None or motion.settings is None:
-        return AreaScanSettings.DEFAULT_FOCUS_STACK_TIME_PER_IMAGE_S
+    mv = ctx.machine_vision
+    if camera is None or mv is None or mv.settings is None:
+        return MachineVisionSettings.DEFAULT_FOCUS_STACK_TIME_PER_IMAGE_S
     try:
         resolution_key = camera.settings.get_current_resolution_key()
     except RuntimeError:
-        return AreaScanSettings.DEFAULT_FOCUS_STACK_TIME_PER_IMAGE_S
-    return motion.settings.z_stack_area_scan.get_focus_stack_time_per_image_s(resolution_key)
+        return MachineVisionSettings.DEFAULT_FOCUS_STACK_TIME_PER_IMAGE_S
+    return mv.settings.get_focus_stack_time_per_image_s(resolution_key)
 
 
 def _format_duration(total_seconds: int) -> str:
