@@ -1,14 +1,12 @@
 from __future__ import annotations
 
 import math
-import time
 
 import numpy as np
 from PySide6.QtCore import QPoint, QPointF, QRect, QRectF, Qt, Signal
 from PySide6.QtGui import QColor, QImage, QPainter, QPen, QPixmap, QTransform
 from PySide6.QtWidgets import QPushButton, QWidget
 
-from common.logger import warning
 from UI.style import ZOOM_PREVIEW_VIEWPORT_COLOR
 from UI.widgets.preview_overlay.large_image_source import FrameSource
 from UI.widgets.preview_overlay.loaded_image_overlay import LoadedImageOverlay
@@ -625,14 +623,7 @@ class ZoomPreviewOverlay(Overlay):
         step_y = max(1, crop_h // max(1, rect.height()))
         step = min(step_x, step_y)
 
-        t0 = time.monotonic()
         crop_arr = np.ascontiguousarray(self._frame.region((x0, y0, x0 + crop_w, y0 + crop_h), step))
-        elapsed = time.monotonic() - t0
-        if elapsed > 0.03:
-            warning(
-                f"ZoomPreviewOverlay: slow region() on main thread: {elapsed:.3f}s "
-                f"crop=({crop_w}x{crop_h}) step={step} rect=({rect.width()}x{rect.height()})"
-            )
         h, w = crop_arr.shape[:2]
 
         # QPixmap.fromImage copies the pixel data into its own storage

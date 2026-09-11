@@ -3,7 +3,6 @@ from __future__ import annotations
 import math
 import os
 import threading
-import time
 from abc import ABC, abstractmethod
 from collections import OrderedDict
 from collections.abc import Callable
@@ -12,8 +11,6 @@ from concurrent.futures import Future, ThreadPoolExecutor
 import numpy as np
 import tifffile
 from PIL import Image
-
-from common.logger import debug, warning
 
 # image routinely exceeds Pillow's default decompression-bomb threshold
 Image.MAX_IMAGE_PIXELS = None
@@ -198,8 +195,6 @@ class _PyramidTiffBackend(_ReducedSource):
         self._whole_level_cache_lock = threading.Lock()
         self._levels = self._build_level_table()
         self.covers_native = self._compute_covers_native()
-        for i, lv in enumerate(self._levels):
-            debug(f"LargeImageSource: level {i}: {lv['width']}x{lv['height']} tiled={lv['page'].is_tiled}")
 
     def _build_level_table(self) -> list[dict]:
         series = self._tf.series[0]
@@ -297,14 +292,11 @@ class _PyramidTiffBackend(_ReducedSource):
         tc0, tc1 = left // tile_w, (right - 1) // tile_w
         tr0, tr1 = top // tile_h, (bottom - 1) // tile_h
 
-        t0 = time.monotonic()
-        segment_count = 0
         for tr in range(tr0, tr1 + 1):
             for tc in range(tc0, tc1 + 1):
                 index = tr * cols + tc
                 if index >= len(offsets):
                     continue
-                segment_count += 1
                 seg = self._read_segment(page, index, offsets, counts)
                 if seg is None:
                     continue
@@ -322,12 +314,6 @@ class _PyramidTiffBackend(_ReducedSource):
                 out[dst_top:dst_top + (src_bottom - src_top), dst_left:dst_left + (src_right - src_left)] = (
                     seg[src_top:src_bottom, src_left:src_right]
                 )
-        elapsed = time.monotonic() - t0
-        if elapsed > 0.05:
-            warning(
-                f"LargeImageSource: _decode_tiled_region read {segment_count} segments "
-                f"in {elapsed:.3f}s ({elapsed / max(1, segment_count) * 1000:.1f}ms/segment)"
-            )
         return out
 
     def _get_whole_level(self, level_index: int, page) -> np.ndarray:
@@ -338,17 +324,8 @@ class _PyramidTiffBackend(_ReducedSource):
             cached = self._whole_level_cache.get(level_index)
             if cached is not None:
                 return cached
-            # Every other tile at this level blocks on _whole_level_cache_lock
-            # until this finishes -- a slow decode here shows up as several
-            # different tiles all reporting similar multi-second times in
-            # _decode_tile's own logging, since their wait is included.
-            t0 = time.monotonic()
             with self._file_lock:
                 arr = self._tf.series[0].levels[level_index].asarray()
-            warning(
-                f"LargeImageSource: non-tiled level {level_index} full decode "
-                f"({arr.shape[1]}x{arr.shape[0]}) took {time.monotonic() - t0:.2f}s"
-            )
             self._whole_level_cache[level_index] = arr
             return arr
 
@@ -438,11 +415,9 @@ def _detect_reduced_source(
     zoomed-out shortcut).
     """
     if source_format in ("JPEG", "MPO"):
-        debug(f"LargeImageSource: reduced source = JPEG draft() decode ({filename})")
         return _JpegDraftBackend(filename)
 
     if source_format != "TIFF":
-        debug(f"LargeImageSource: reduced source = none ({source_format} has no cheap zoomed-out path)")
         return None
 
     tf = None
@@ -450,18 +425,11 @@ def _detect_reduced_source(
         tf = tifffile.TiffFile(filename)
         series = tf.series[0]
         if series.is_pyramidal:
-            backend = _PyramidTiffBackend(tf, source_width, source_height)
-            debug(
-                f"LargeImageSource: reduced source = pyramid TIFF, {len(backend._levels)} levels, "
-                f"covers_native={backend.covers_native} ({filename})"
-            )
-            return backend
-        debug(f"LargeImageSource: reduced source = none (TIFF has {len(series.levels)} level(s) -- not a pyramid)")
+            return _PyramidTiffBackend(tf, source_width, source_height)
         tf.close()
-    except (OSError, ValueError, KeyError) as exc:
+    except (OSError, ValueError, KeyError):
         # A corrupt or unusual pyramid tag just means treating the file as
         # a flat TIFF via the resident-decode fallback below.
-        debug(f"LargeImageSource: pyramid detection failed, falling back to flat TIFF: {exc!r}")
         if tf is not None:
             tf.close()
     return None
@@ -574,18 +542,8 @@ class LargeImageSource(FrameSource):
             return
         with self._resident_lock:
             if not self._resident_loaded:
-                # For a large source with no reduced-resolution backend (or
-                # a pyramid TIFF whose level 0 isn't tiled), this decodes
-                # the *entire* image at once -- worth knowing if it's ever
-                # what's actually behind a slow load, since every other
-                # decode path here only ever touches one tile at a time.
-                t0 = time.monotonic()
                 self._resident.load()
                 self._resident_loaded = True
-                warning(
-                    f"LargeImageSource: full resident decode of {self.filename} "
-                    f"took {time.monotonic() - t0:.2f}s ({self.source_width}x{self.source_height})"
-                )
 
     def _build_preview_from_resident(self) -> np.ndarray:
         ratio = min(PREVIEW_MAX / self.source_width, PREVIEW_MAX / self.source_height, 1.0)
@@ -754,7 +712,6 @@ class LargeImageSource(FrameSource):
         level, tx, ty = key
         needed_level, needed_keys = self._current_needed
         if level == needed_level and key not in needed_keys:
-            debug(f"LargeImageSource: skipping stale tile level={level} ({tx},{ty}) -- no longer needed")
             with self._cache_lock:
                 self._pending.discard(key)
                 self._pending_futures.pop(key, None)
@@ -768,24 +725,16 @@ class LargeImageSource(FrameSource):
         bottom = min(self.source_height, top + tile_source_size)
 
         array = None
-        t0 = time.monotonic()
-        path = "?"
         try:
             if not self._closed and right > left and bottom > top:
                 box = (left, top, right, bottom)
                 use_reduced = self._reduced_source is not None and (scale > 1 or self._reduced_source.covers_native)
-                path = "reduced" if use_reduced else "resident"
                 array = (
                     self._reduced_source.decode_region(level, box) if use_reduced
                     else self._decode_from_resident(box, level)
                 )
         except Exception:
             array = None
-        elapsed = time.monotonic() - t0
-        if elapsed > 0.05:
-            warning(f"LargeImageSource: slow tile decode level={level} ({tx},{ty}) via {path}: {elapsed:.3f}s")
-        else:
-            debug(f"LargeImageSource: tile decode level={level} ({tx},{ty}) via {path}: {elapsed * 1000:.1f}ms")
 
         with self._cache_lock:
             self._pending.discard(key)
