@@ -78,6 +78,26 @@ def _get_focus_stack_concurrency() -> int:
     return max(1, post_processing.post_processing_settings.max_concurrent_focus_stacks)
 
 
+def _get_overhead_times_s() -> tuple[float, float]:
+    """(xy_overhead_s, z_overhead_s): mean move+settle overhead per stack and
+    per Z slice, learned from completed scans.
+
+    Falls back to the configured settle times (a lower bound - actual move
+    time isn't known ahead of a scan) when no history has been recorded yet
+    or the motion controller isn't ready.
+    """
+    motion = get_app_context().motion
+    if motion is None or motion.settings is None:
+        return 0.0, 0.0
+    automation = motion.settings.automation
+    xy_fallback_s = automation.settle_travel_ms / 1000.0
+    z_fallback_s = automation.settle_z_ms / 1000.0
+    return (
+        automation.get_xy_overhead_time_s(xy_fallback_s),
+        automation.get_z_overhead_time_s(z_fallback_s),
+    )
+
+
 def _format_duration(total_seconds: int) -> str:
     hours, remainder = divmod(total_seconds, 3600)
     minutes, seconds = divmod(remainder, 60)
@@ -105,6 +125,8 @@ class _ConfirmAreaScanDialog(QDialog):
         step_decimals: int,
         output_folder: str,
         time_per_image_s: float,
+        xy_overhead_s: float,
+        z_overhead_s: float,
         focus_stack_enabled: bool,
         focus_stack_time_per_image_s: float,
         focus_stack_concurrency: int,
@@ -128,8 +150,11 @@ class _ConfirmAreaScanDialog(QDialog):
         total_stacks = n_x * n_y
         total_images = total_stacks * n_z
 
-        # Rough estimate of how long imaging alone will take.
-        imaging_seconds = math.ceil(total_images * time_per_image_s + total_stacks * 1.0)
+        # Rough estimate of how long imaging alone will take. Z overhead is
+        # per slice (i.e. per image); XY overhead is per stack.
+        imaging_seconds = math.ceil(
+            total_images * (time_per_image_s + z_overhead_s) + total_stacks * xy_overhead_s
+        )
         imaging_time_str = _format_duration(imaging_seconds)
 
         # Focus stacking runs in parallel with imaging, and up to
@@ -783,7 +808,10 @@ class AreaScanWidget(QWidget):
         total_stacks = n_x * n_y
         total_images = total_stacks * n_z
 
-        imaging_seconds = math.ceil(total_images * _get_time_per_image_s() + total_stacks * 1.0)
+        xy_overhead_s, z_overhead_s = _get_overhead_times_s()
+        imaging_seconds = math.ceil(
+            total_images * (_get_time_per_image_s() + z_overhead_s) + total_stacks * xy_overhead_s
+        )
         imaging_time_str = _format_duration(imaging_seconds)
 
         if self._fs_enable_check.isChecked():
@@ -909,6 +937,7 @@ class AreaScanWidget(QWidget):
 
         decimals = max(x.decimals, y.decimals, z.decimals)
 
+        xy_overhead_s, z_overhead_s = _get_overhead_times_s()
         dlg = _ConfirmAreaScanDialog(
             x_start=x_start,
             x_end=x_end,
@@ -922,6 +951,8 @@ class AreaScanWidget(QWidget):
             step_decimals=decimals,
             output_folder=output_folder,
             time_per_image_s=_get_time_per_image_s(),
+            xy_overhead_s=xy_overhead_s,
+            z_overhead_s=z_overhead_s,
             focus_stack_enabled=self._fs_enable_check.isChecked(),
             focus_stack_time_per_image_s=_get_focus_stack_time_per_image_s(),
             focus_stack_concurrency=_get_focus_stack_concurrency(),

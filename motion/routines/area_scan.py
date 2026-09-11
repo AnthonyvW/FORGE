@@ -6,21 +6,29 @@ every combination of (X, Y, Z).  Images are saved into per-XY subfolders
 inside the output directory.
 
 The routine reports elapsed time after each Z-stack and provides a running
-estimate of remaining time, incorporating a 1-second-per-remaining-stack
-travel-time allowance. Once at least one focus stack has completed, its mean
-duration is folded in too: since focus stacking runs on a background thread in
-parallel with imaging, the ETA is the larger of the remaining imaging time and
-the remaining focus-stack backlog rather than their sum.
+estimate of remaining time, based on the mean duration of stacks completed so
+far (which already includes real XY/Z move and settle time, not just capture).
+Once at least one focus stack has completed, its mean duration is folded in
+too: since focus stacking runs on a background thread in parallel with
+imaging, the ETA is the larger of the remaining imaging time and the
+remaining focus-stack backlog rather than their sum.
 
 If a :class:`FocusStackRoutineConfig` is supplied, a :class:`QueuedFocusStackRoutine`
 is launched for each XY subfolder after its Z-stack images have been saved to
 disk.  The stacked output is written to ``<subfolder>/stacked.<ext>`` where the
 extension comes from ``focus_stack_config.output_extension``.
 
-The camera's average still-capture time for the resolution in use is tracked
-via ``CameraSettings.record_capture_time_s`` (a rolling mean of the last 20
-captures) and, if it has drifted by more than 0.1 s by the end of the scan, the
-camera settings are re-saved with the updated value.
+Several timing figures are tracked as rolling averages and used to build
+pre-scan time estimates, since actual stage move time (unlike the configured
+settle time) can't be known ahead of time:
+
+- The camera's average still-capture time for the resolution in use, via
+  ``CameraSettings.record_capture_time_s``.
+- Per-stack XY move+settle overhead and per-slice Z move+settle overhead, via
+  ``AutomationSettings.record_xy_overhead_time_s`` / ``record_z_overhead_time_s``.
+
+Each is a rolling mean of the last 20 samples, re-saved to disk at the end of
+the scan if it drifted by more than 0.1 s.
 
 Usage::
 
@@ -67,9 +75,6 @@ if TYPE_CHECKING:
     from post_processing.post_processing_manager import PostProcessingManager
     from post_processing.routines.focus_stack_routine import FocusStackRoutineConfig
     from post_processing.routines.post_processing_routine import RoutineResult
-
-# Flat per-stack travel allowance folded into the imaging ETA, in seconds.
-_XY_TRAVEL_ETA_S = 1.0
 
 _NM_PER_MM = 1_000_000
 
@@ -251,9 +256,8 @@ class AreaScan(AutomationRoutine):
     After each completed Z-stack the routine logs:
     - how long that stack took,
     - how many stacks remain,
-    - an estimated time to completion (mean stack duration so far plus
-      1 second per remaining stack to account for XY travel, or the remaining
-      focus-stack backlog if that would take longer - see below).
+    - an estimated time to completion (mean stack duration so far, or the
+      remaining focus-stack backlog if that would take longer - see below).
 
     If *focus_stack_config* is provided, a :class:`QueuedFocusStackRoutine` is
     launched for each XY subfolder immediately after its images have been saved.
@@ -434,6 +438,13 @@ class AreaScan(AutomationRoutine):
         if mv_settings is not None:
             dpi = getattr(mv_settings, "dpi", None)
 
+        # XY/Z move+settle overhead tracking. The configured settle_*_ms values
+        # are a lower-bound fallback until real move+settle time is measured -
+        # actual stage move time depends on distance and hardware, so it can't
+        # be known ahead of a scan.
+        baseline_xy_overhead_s = automation.get_xy_overhead_time_s(travel_settle_ms / 1000.0)
+        baseline_z_overhead_s = automation.get_z_overhead_time_s(z_settle_ms / 1000.0)
+
         # Per-resolution capture-time tracking (resolution_index=0 below).
         resolution_key = camera.settings.get_resolution_key(0)
         baseline_avg_capture_s = camera.settings.get_average_capture_time_s(resolution_key)
@@ -479,7 +490,7 @@ class AreaScan(AutomationRoutine):
             concurrently, so the slower of the two determines when everything
             is actually done.
             """
-            imaging_eta = stacks_remaining * (mean_stack_s + _XY_TRAVEL_ETA_S)
+            imaging_eta = stacks_remaining * mean_stack_s
             if not focus_stack_samples_recorded or post_processing is None:
                 return imaging_eta
             per_image_s = mv_settings.get_focus_stack_time_per_image_s(focus_stack_resolution_key)
@@ -536,6 +547,7 @@ class AreaScan(AutomationRoutine):
             if settle_ms > 0:
                 time.sleep(settle_ms / 1000.0)
             xy_settle_s = time.monotonic() - xy_settle_start
+            automation.record_xy_overhead_time_s(xy_move_s + xy_settle_s)
 
             # ----------------------------------------------------------
             # Prepare subfolder for this XY position
@@ -611,6 +623,7 @@ class AreaScan(AutomationRoutine):
                 if z_settle_ms > 0:
                     time.sleep(z_settle_ms / 1000.0)
                 z_settle_s = time.monotonic() - z_settle_start
+                automation.record_z_overhead_time_s(z_move_s + z_settle_s)
 
                 actual_pos = self.motion.get_position()
                 filepath = subfolder / f"{actual_pos.z}.jpg"
@@ -722,15 +735,14 @@ class AreaScan(AutomationRoutine):
                 f"  (mean: {_fmt_duration(mean_stack_s)})"
             )
             if stacks_left > 0:
-                eta_note = "  (includes ~1 s/stack for XY travel"
+                eta_note = ""
                 if focus_stack_samples_recorded and post_processing is not None:
                     per_image_s = mv_settings.get_focus_stack_time_per_image_s(focus_stack_resolution_key)
                     backlog = post_processing.queue_depth + post_processing.active_queue_workers
-                    eta_note += (
-                        f"; focus stack backlog: {backlog}, mean {per_image_s * z_slices_per_stack:.1f}s/stack,"
-                        f" running in parallel with imaging"
+                    eta_note = (
+                        f"  (focus stack backlog: {backlog}, mean {per_image_s * z_slices_per_stack:.1f}s/stack,"
+                        f" running in parallel with imaging)"
                     )
-                eta_note += ")"
                 info(
                     f"[AreaScan]   Stacks remaining: {stacks_left}"
                     f"  |  ETA: {_fmt_duration(eta_s)}"
@@ -790,6 +802,26 @@ class AreaScan(AutomationRoutine):
                 f"[AreaScan] Updated focus-stack time estimate for {focus_stack_resolution_key}:"
                 f" {per_image_s:.3f}s/image"
             )
+
+        # ------------------------------------------------------------------
+        # Update the tracked XY/Z move+settle overhead if it moved enough to matter
+        # ------------------------------------------------------------------
+        final_xy_overhead_s = automation.get_xy_overhead_time_s(baseline_xy_overhead_s)
+        final_z_overhead_s = automation.get_z_overhead_time_s(baseline_z_overhead_s)
+        overhead_changed = (
+            abs(final_xy_overhead_s - baseline_xy_overhead_s) > 0.1
+            or abs(final_z_overhead_s - baseline_z_overhead_s) > 0.1
+        )
+        if overhead_changed:
+            if self.motion.save_settings():
+                info(
+                    f"[AreaScan] Updated XY overhead estimate:"
+                    f" {baseline_xy_overhead_s:.3f}s -> {final_xy_overhead_s:.3f}s/stack"
+                )
+                info(
+                    f"[AreaScan] Updated Z overhead estimate:"
+                    f" {baseline_z_overhead_s:.3f}s -> {final_z_overhead_s:.3f}s/slice"
+                )
 
         # ------------------------------------------------------------------
         # Final summary
