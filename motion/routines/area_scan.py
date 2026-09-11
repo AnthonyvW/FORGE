@@ -58,6 +58,7 @@ Usage::
 from __future__ import annotations
 
 import json
+import math
 import threading
 import time
 from pathlib import Path
@@ -489,15 +490,25 @@ class AreaScan(AutomationRoutine):
             stacking has produced at least one sample this run - the two run
             concurrently, so the slower of the two determines when everything
             is actually done.
+
+            The very last stack can't be focus-stacked before its own images
+            are captured, so completion can never be sooner than imaging
+            finishing plus that one stack's own stacking time - not simply
+            the larger of the two totals, which would let a fast-imaging,
+            slow-stacking scan appear done before its last stack is even
+            queued.
             """
             imaging_eta = stacks_remaining * mean_stack_s
             if not focus_stack_samples_recorded or post_processing is None:
                 return imaging_eta
             per_image_s = mv_settings.get_focus_stack_time_per_image_s(focus_stack_resolution_key)
+            single_stack_focus_s = z_slices_per_stack * per_image_s
             backlog = post_processing.queue_depth + post_processing.active_queue_workers
             concurrency = max(1, post_processing.post_processing_settings.max_concurrent_focus_stacks)
-            focus_stack_eta = (backlog + stacks_remaining) * z_slices_per_stack * per_image_s / concurrency
-            return max(imaging_eta, focus_stack_eta)
+            jobs_remaining = backlog + stacks_remaining
+            waves_remaining = math.ceil(jobs_remaining / concurrency) if jobs_remaining > 0 else 0
+            focus_stack_eta = waves_remaining * single_stack_focus_s
+            return max(imaging_eta + single_stack_focus_s, focus_stack_eta)
 
         for stack_idx, (target_x_nm, target_y_nm) in enumerate(xy_grid):
             if self._check_stop():
@@ -761,10 +772,11 @@ class AreaScan(AutomationRoutine):
             while not self._check_stop() and (post_processing.queue_depth > 0 or post_processing.active_queue_workers > 0):
                 backlog = post_processing.queue_depth + post_processing.active_queue_workers
                 remaining_eta = 0
-                if focus_stack_samples_recorded:
+                if focus_stack_samples_recorded and backlog > 0:
                     per_image_s = mv_settings.get_focus_stack_time_per_image_s(focus_stack_resolution_key)
                     concurrency = max(1, post_processing.post_processing_settings.max_concurrent_focus_stacks)
-                    remaining_eta = round(backlog * z_slices_per_stack * per_image_s / concurrency)
+                    waves = math.ceil(backlog / concurrency)
+                    remaining_eta = round(waves * z_slices_per_stack * per_image_s)
                 self._set_status(
                     f"Waiting for focus stacking to finish ({backlog} remaining)",
                     total_stacks,

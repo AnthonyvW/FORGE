@@ -42,7 +42,6 @@ Typical usage — streaming::
 
 from __future__ import annotations
 
-import os
 import threading
 import time
 from dataclasses import dataclass
@@ -141,12 +140,7 @@ class FocusStackRoutineConfig:
     sharpness:
         Weight sharpness exponent. Higher = harder winner-take-all selection.
     workers:
-        Number of parallel workers for stacking. 0 = no limit (use all
-        available cores). For :class:`QueuedFocusStackRoutine`, this is a
-        request rather than a hard value: it's automatically reduced so that
-        all concurrently running stacks together (see
-        ``PostProcessingSettings.max_concurrent_focus_stacks``) stay near the
-        CPU's core count - see ``QueuedFocusStackRoutine._effective_workers``.
+        Number of parallel workers for stacking.
     slab:
         (size, overlap) tuple to enable slabbing, or None to disable.
     recursive_slab:
@@ -259,24 +253,6 @@ class QueuedFocusStackRoutine(PostProcessingRoutine):
         span = self._progress_end - self._progress_start
         return self._progress_start + int(fraction * span)
 
-    def _effective_workers(self) -> int:
-        """Clamp this stack's worker count so that, even when every concurrent
-        focus-stack slot is busy at once, the total worker threads across all
-        of them stays near the CPU's core count.
-
-        Without this, a per-stack ``workers`` setting (especially 0 = "use
-        all available") combined with a high
-        ``max_concurrent_focus_stacks`` massively oversubscribes the CPU -
-        e.g. 5 concurrent stacks each claiming every core spins up 5x more
-        compute threads than there are cores, starving everything else
-        (including the GUI thread) of CPU time.
-        """
-        cpu_count = os.cpu_count() or 1
-        concurrency = max(1, self.settings.post_processing.max_concurrent_focus_stacks)
-        per_stack_budget = max(1, cpu_count // concurrency)
-        requested = self.config.workers if self.config.workers > 0 else cpu_count
-        return min(requested, per_stack_budget)
-
     def steps(self) -> Generator[None, None, None]:
         cfg = self.config
         input_dir = Path(self.input_folder)
@@ -309,7 +285,7 @@ class QueuedFocusStackRoutine(PostProcessingRoutine):
             min_shift=cfg.min_shift,
             levels=cfg.levels,
             sharpness=cfg.sharpness,
-            workers=self._effective_workers(),
+            workers=cfg.workers,
             slab=cfg.slab,
             only_slab=False,
             recursive_slab=cfg.recursive_slab,

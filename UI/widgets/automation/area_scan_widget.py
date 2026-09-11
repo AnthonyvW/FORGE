@@ -158,11 +158,17 @@ class _ConfirmAreaScanDialog(QDialog):
         imaging_time_str = _format_duration(imaging_seconds)
 
         # Focus stacking runs in parallel with imaging, and up to
-        # focus_stack_concurrency stacks run at once, so the total time is
-        # whichever of the two takes longer - not their sum.
+        # focus_stack_concurrency stacks run at once - but the very last
+        # stack can't be focus-stacked before its own images are captured,
+        # so the total is never sooner than imaging finishing plus that
+        # stack's own stacking time.
         if focus_stack_enabled:
-            focus_stack_seconds = total_stacks * n_z * focus_stack_time_per_image_s / focus_stack_concurrency
-            total_time_str = _format_duration(math.ceil(max(imaging_seconds, focus_stack_seconds)))
+            single_stack_focus_s = n_z * focus_stack_time_per_image_s
+            waves = math.ceil(total_stacks / focus_stack_concurrency) if total_stacks > 0 else 0
+            focus_stack_seconds = waves * single_stack_focus_s
+            total_time_str = _format_duration(
+                math.ceil(max(imaging_seconds + single_stack_focus_s, focus_stack_seconds))
+            )
 
         layout = QVBoxLayout(self)
         layout.setSpacing(12)
@@ -609,9 +615,7 @@ class AreaScanWidget(QWidget):
         self._workers_spin.setValue(3)
         self._workers_spin.setToolTip(
             "Number of parallel workers for stacking. 0 = no limit (use all available). "
-            "Higher values are faster but increase peak RAM by ~100 MiB per additional worker. "
-            "Automatically reduced when Concurrent stacks > 1, so all concurrently running "
-            "stacks together don't oversubscribe the CPU and starve the rest of the app."
+            "Higher values are faster but increase peak RAM by ~100 MiB per additional worker."
         )
         self._workers_spin.valueChanged.connect(
             lambda v: self._write_int_to_settings("workers", v)
@@ -632,10 +636,8 @@ class AreaScanWidget(QWidget):
         self._concurrent_stacks_spin.setValue(PostProcessingSettings.max_concurrent_focus_stacks)
         self._concurrent_stacks_spin.setToolTip(
             "How many focus stacks run at once. Higher values clear the backlog "
-            "faster at the cost of more simultaneous CPU/RAM use, and automatically "
-            "reduce each stack's Workers so the total stays near the CPU's core count "
-            "instead of overloading it and slowing down the rest of the app (including "
-            "this UI)."
+            "faster at the cost of more simultaneous CPU/RAM use. Separate from "
+            "Workers, which controls parallelism within a single stack."
         )
         self._concurrent_stacks_spin.valueChanged.connect(self._write_concurrent_stacks_to_settings)
         self._concurrent_stacks_spin.valueChanged.connect(self._update_summary)
@@ -819,10 +821,13 @@ class AreaScanWidget(QWidget):
         imaging_time_str = _format_duration(imaging_seconds)
 
         if self._fs_enable_check.isChecked():
-            focus_stack_seconds = (
-                total_stacks * n_z * _get_focus_stack_time_per_image_s() / _get_focus_stack_concurrency()
+            single_stack_focus_s = n_z * _get_focus_stack_time_per_image_s()
+            concurrency = _get_focus_stack_concurrency()
+            waves = math.ceil(total_stacks / concurrency) if total_stacks > 0 else 0
+            focus_stack_seconds = waves * single_stack_focus_s
+            total_time_str = _format_duration(
+                math.ceil(max(imaging_seconds + single_stack_focus_s, focus_stack_seconds))
             )
-            total_time_str = _format_duration(math.ceil(max(imaging_seconds, focus_stack_seconds)))
             time_summary = f"Imaging: {imaging_time_str}  |  Total incl. stacking: {total_time_str}"
         else:
             time_summary = f"Est. time: {imaging_time_str}"
