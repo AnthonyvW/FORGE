@@ -10,6 +10,7 @@ method has its own saved state.
 
 from __future__ import annotations
 
+import threading
 from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Any, Literal, Union
@@ -551,9 +552,15 @@ class MachineVisionSettings:
     # Unannotated so dataclass()/to_dict() don't treat these as per-instance
     # fields.
     #
-    # 0.5s/image is a rough starting point until real samples are recorded.
-    DEFAULT_FOCUS_STACK_TIME_PER_IMAGE_S = 0.5
+    # 2.7s/image matches measured focus-stack throughput; used as a starting
+    # point until real samples are recorded for a given resolution.
+    DEFAULT_FOCUS_STACK_TIME_PER_IMAGE_S = 2.7
     MAX_FOCUS_STACK_TIME_SAMPLES = 20
+
+    # Guards record_focus_stack_time_s() - multiple focus stacks can now
+    # complete concurrently (PostProcessingSettings.max_concurrent_focus_stacks),
+    # so appending/trimming the shared sample list needs to be serialised.
+    _focus_stack_time_lock = threading.Lock()
 
     def get_focus_stack_time_per_image_s(self, resolution_key: str) -> float:
         """Mean recorded focus-stack seconds-per-image for *resolution_key*.
@@ -574,10 +581,11 @@ class MachineVisionSettings:
         """
         if image_count <= 0:
             return
-        samples = self.focus_stack_time_samples_s.setdefault(resolution_key, [])
-        samples.append(duration_s / image_count)
-        if len(samples) > self.MAX_FOCUS_STACK_TIME_SAMPLES:
-            del samples[: len(samples) - self.MAX_FOCUS_STACK_TIME_SAMPLES]
+        with self._focus_stack_time_lock:
+            samples = self.focus_stack_time_samples_s.setdefault(resolution_key, [])
+            samples.append(duration_s / image_count)
+            if len(samples) > self.MAX_FOCUS_STACK_TIME_SAMPLES:
+                del samples[: len(samples) - self.MAX_FOCUS_STACK_TIME_SAMPLES]
 
     def validate(self) -> None:
         self.focus.validate()

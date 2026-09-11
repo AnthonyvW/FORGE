@@ -35,8 +35,18 @@ class PostProcessingSettings:
         default_factory=StitchAndMeasureSettings
     )
 
+    max_concurrent_focus_stacks: int = 3
+    """
+    How many queued post-processing routines (e.g. focus stacks) the manager
+    runs at once. Higher values finish a backlog faster at the cost of more
+    simultaneous CPU/RAM use; each stack's own ``workers`` setting controls
+    parallelism within a single stack independently of this.
+    """
+
     def validate(self) -> None:
         self.stitch_and_measure.validate()
+        if self.max_concurrent_focus_stacks < 1:
+            raise ValueError("max_concurrent_focus_stacks must be >= 1")
 
 
 @dataclass
@@ -105,7 +115,12 @@ class FieldWeaveSettingsManager(ConfigManager[FieldWeaveSettings]):
         stitch_settings = StitchAndMeasureSettings(
             **{k: v for k, v in sm_data.items() if k in sm_fields}
         )
-        post_settings = PostProcessingSettings(stitch_and_measure=stitch_settings)
+        post_settings = PostProcessingSettings(
+            stitch_and_measure=stitch_settings,
+            max_concurrent_focus_stacks=pp_data.get(
+                "max_concurrent_focus_stacks", PostProcessingSettings.max_concurrent_focus_stacks
+            ),
+        )
 
         settings = FieldWeaveSettings(
             version=data.get("version", FieldWeaveSettings.version),
@@ -130,5 +145,6 @@ class FieldWeaveSettingsManager(ConfigManager[FieldWeaveSettings]):
                     "auto_rotate": sm.auto_rotate,
                     "save_debug_overlay": sm.save_debug_overlay,
                 },
+                "max_concurrent_focus_stacks": settings.post_processing.max_concurrent_focus_stacks,
             },
         }

@@ -21,6 +21,7 @@ from PySide6.QtCore import Qt, QTimer
 
 from camera.settings.camera_settings import CameraSettings
 from common.app_context import get_app_context
+from common.fieldweaveConfig import PostProcessingSettings
 from common.logger import warning, error
 from machine_vision.machine_vision_config import MachineVisionSettings
 from motion.routines.area_scan import AreaScan
@@ -69,6 +70,14 @@ def _get_focus_stack_time_per_image_s() -> float:
     return mv.settings.get_focus_stack_time_per_image_s(resolution_key)
 
 
+def _get_focus_stack_concurrency() -> int:
+    """How many focus stacks the post-processing manager runs at once."""
+    post_processing = get_app_context().post_processing
+    if post_processing is None:
+        return PostProcessingSettings.max_concurrent_focus_stacks
+    return max(1, post_processing.post_processing_settings.max_concurrent_focus_stacks)
+
+
 def _format_duration(total_seconds: int) -> str:
     hours, remainder = divmod(total_seconds, 3600)
     minutes, seconds = divmod(remainder, 60)
@@ -98,6 +107,7 @@ class _ConfirmAreaScanDialog(QDialog):
         time_per_image_s: float,
         focus_stack_enabled: bool,
         focus_stack_time_per_image_s: float,
+        focus_stack_concurrency: int,
         parent: QWidget | None = None,
     ) -> None:
         super().__init__(parent)
@@ -122,11 +132,11 @@ class _ConfirmAreaScanDialog(QDialog):
         imaging_seconds = math.ceil(total_images * time_per_image_s + total_stacks * 1.0)
         imaging_time_str = _format_duration(imaging_seconds)
 
-        # Focus stacking runs in parallel with imaging on its own worker
-        # thread, so the total time is whichever of the two takes longer -
-        # not their sum.
+        # Focus stacking runs in parallel with imaging, and up to
+        # focus_stack_concurrency stacks run at once, so the total time is
+        # whichever of the two takes longer - not their sum.
         if focus_stack_enabled:
-            focus_stack_seconds = total_stacks * n_z * focus_stack_time_per_image_s
+            focus_stack_seconds = total_stacks * n_z * focus_stack_time_per_image_s / focus_stack_concurrency
             total_time_str = _format_duration(math.ceil(max(imaging_seconds, focus_stack_seconds)))
 
         layout = QVBoxLayout(self)
@@ -741,7 +751,9 @@ class AreaScanWidget(QWidget):
         imaging_time_str = _format_duration(imaging_seconds)
 
         if self._fs_enable_check.isChecked():
-            focus_stack_seconds = total_stacks * n_z * _get_focus_stack_time_per_image_s()
+            focus_stack_seconds = (
+                total_stacks * n_z * _get_focus_stack_time_per_image_s() / _get_focus_stack_concurrency()
+            )
             total_time_str = _format_duration(math.ceil(max(imaging_seconds, focus_stack_seconds)))
             time_summary = f"Imaging: {imaging_time_str}  |  Total incl. stacking: {total_time_str}"
         else:
@@ -876,6 +888,7 @@ class AreaScanWidget(QWidget):
             time_per_image_s=_get_time_per_image_s(),
             focus_stack_enabled=self._fs_enable_check.isChecked(),
             focus_stack_time_per_image_s=_get_focus_stack_time_per_image_s(),
+            focus_stack_concurrency=_get_focus_stack_concurrency(),
             parent=self,
         )
         if dlg.exec() != QDialog.DialogCode.Accepted:

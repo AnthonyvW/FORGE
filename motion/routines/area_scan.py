@@ -455,8 +455,9 @@ class AreaScan(AutomationRoutine):
             if not focus_stack_samples_recorded or post_processing is None:
                 return imaging_eta
             per_image_s = mv_settings.get_focus_stack_time_per_image_s(focus_stack_resolution_key)
-            backlog = post_processing.queue_depth + (1 if post_processing.routine_running else 0)
-            focus_stack_eta = (backlog + stacks_remaining) * z_slices_per_stack * per_image_s
+            backlog = post_processing.queue_depth + post_processing.active_queue_workers
+            concurrency = max(1, post_processing.post_processing_settings.max_concurrent_focus_stacks)
+            focus_stack_eta = (backlog + stacks_remaining) * z_slices_per_stack * per_image_s / concurrency
             return max(imaging_eta, focus_stack_eta)
 
         for stack_idx, (target_x_nm, target_y_nm) in enumerate(xy_grid):
@@ -694,7 +695,7 @@ class AreaScan(AutomationRoutine):
                 eta_note = "  (includes ~1 s/stack for XY travel"
                 if focus_stack_samples_recorded and post_processing is not None:
                     per_image_s = mv_settings.get_focus_stack_time_per_image_s(focus_stack_resolution_key)
-                    backlog = post_processing.queue_depth + (1 if post_processing.routine_running else 0)
+                    backlog = post_processing.queue_depth + post_processing.active_queue_workers
                     eta_note += (
                         f"; focus stack backlog: {backlog}, mean {per_image_s * z_slices_per_stack:.1f}s/stack,"
                         f" running in parallel with imaging"
@@ -713,12 +714,13 @@ class AreaScan(AutomationRoutine):
 
         if self._focus_stack_config is not None and post_processing is not None:
             self._set_activity("Waiting for focus stacking to finish")
-            while not self._check_stop() and (post_processing.queue_depth > 0 or post_processing.routine_running):
-                backlog = post_processing.queue_depth + (1 if post_processing.routine_running else 0)
+            while not self._check_stop() and (post_processing.queue_depth > 0 or post_processing.active_queue_workers > 0):
+                backlog = post_processing.queue_depth + post_processing.active_queue_workers
                 remaining_eta = 0
                 if focus_stack_samples_recorded:
                     per_image_s = mv_settings.get_focus_stack_time_per_image_s(focus_stack_resolution_key)
-                    remaining_eta = round(backlog * z_slices_per_stack * per_image_s)
+                    concurrency = max(1, post_processing.post_processing_settings.max_concurrent_focus_stacks)
+                    remaining_eta = round(backlog * z_slices_per_stack * per_image_s / concurrency)
                 self._set_status(
                     f"Waiting for focus stacking to finish ({backlog} remaining)",
                     total_stacks,
