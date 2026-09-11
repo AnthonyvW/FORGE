@@ -22,6 +22,7 @@ from PySide6.QtCore import Qt, QTimer
 from camera.settings.camera_settings import CameraSettings
 from common.app_context import get_app_context
 from common.logger import warning, error
+from motion.motion_config import AreaScanSettings
 from motion.routines.area_scan import AreaScan
 from post_processing.routines.focus_stack_routine import FocusStackRoutineConfig
 from UI.widgets.utilities.open_filesystem_object_button import OpenFolderButton
@@ -49,6 +50,35 @@ def _get_time_per_image_s() -> float:
     return settings.get_average_capture_time_s(settings.get_resolution_key(0))
 
 
+def _get_focus_stack_time_per_image_s() -> float:
+    """Mean focus-stack seconds-per-image for the resolution the area scan will use.
+
+    Falls back to ``AreaScanSettings.DEFAULT_FOCUS_STACK_TIME_PER_IMAGE_S``
+    before any focus-stack history has been recorded for that resolution, or
+    if the camera/motion controller isn't ready yet.
+    """
+    ctx = get_app_context()
+    camera = ctx.camera
+    motion = ctx.motion
+    if camera is None or motion is None or motion.settings is None:
+        return AreaScanSettings.DEFAULT_FOCUS_STACK_TIME_PER_IMAGE_S
+    try:
+        resolution_key = camera.settings.get_current_resolution_key()
+    except RuntimeError:
+        return AreaScanSettings.DEFAULT_FOCUS_STACK_TIME_PER_IMAGE_S
+    return motion.settings.z_stack_area_scan.get_focus_stack_time_per_image_s(resolution_key)
+
+
+def _format_duration(total_seconds: int) -> str:
+    hours, remainder = divmod(total_seconds, 3600)
+    minutes, seconds = divmod(remainder, 60)
+    if hours:
+        return f"{hours}h {minutes}m {seconds}s"
+    if minutes:
+        return f"{minutes}m {seconds}s"
+    return f"{seconds}s"
+
+
 class _ConfirmAreaScanDialog(QDialog):
     """Modal dialog summarising the area scan parameters before starting."""
 
@@ -66,6 +96,8 @@ class _ConfirmAreaScanDialog(QDialog):
         step_decimals: int,
         output_folder: str,
         time_per_image_s: float,
+        focus_stack_enabled: bool,
+        focus_stack_time_per_image_s: float,
         parent: QWidget | None = None,
     ) -> None:
         super().__init__(parent)
@@ -86,16 +118,16 @@ class _ConfirmAreaScanDialog(QDialog):
         total_stacks = n_x * n_y
         total_images = total_stacks * n_z
 
-        # Rough estimate of how long it'll take
-        total_seconds = math.ceil(total_images * time_per_image_s + total_stacks * 1.0)
-        hours, remainder = divmod(total_seconds, 3600)
-        minutes, seconds = divmod(remainder, 60)
-        if hours:
-            time_str = f"{hours}h {minutes}m {seconds}s"
-        elif minutes:
-            time_str = f"{minutes}m {seconds}s"
-        else:
-            time_str = f"{seconds}s"
+        # Rough estimate of how long imaging alone will take.
+        imaging_seconds = math.ceil(total_images * time_per_image_s + total_stacks * 1.0)
+        imaging_time_str = _format_duration(imaging_seconds)
+
+        # Focus stacking runs in parallel with imaging on its own worker
+        # thread, so the total time is whichever of the two takes longer -
+        # not their sum.
+        if focus_stack_enabled:
+            focus_stack_seconds = total_stacks * n_z * focus_stack_time_per_image_s
+            total_time_str = _format_duration(math.ceil(max(imaging_seconds, focus_stack_seconds)))
 
         layout = QVBoxLayout(self)
         layout.setSpacing(12)
@@ -123,9 +155,13 @@ class _ConfirmAreaScanDialog(QDialog):
             ("Z step / slices", f"{z_step_mm:{fmt}} mm  ({n_z} slices)"),
             ("Total XY positions", str(total_stacks)),
             ("Total images", str(total_images)),
-            ("Estimated time", time_str),
-            ("Output folder", output_folder),
         ]
+        if focus_stack_enabled:
+            rows.append(("Imaging time", imaging_time_str))
+            rows.append(("Total time (with stacking)", total_time_str))
+        else:
+            rows.append(("Estimated time", imaging_time_str))
+        rows.append(("Output folder", output_folder))
 
         for label_text, value_text in rows:
             row = QWidget()
@@ -372,6 +408,7 @@ class AreaScanWidget(QWidget):
         self._fs_enable_check.stateChanged.connect(
             lambda v: self._write_check_to_settings("run_focus_stack", v)
         )
+        self._fs_enable_check.stateChanged.connect(self._update_summary)
         fs_layout.addWidget(self._fs_enable_check)
 
         self._fs_settings_widget = QWidget()
@@ -700,19 +737,19 @@ class AreaScanWidget(QWidget):
         total_stacks = n_x * n_y
         total_images = total_stacks * n_z
 
-        total_seconds = math.ceil(total_images * _get_time_per_image_s() + total_stacks * 1.0)
-        hours, remainder = divmod(total_seconds, 3600)
-        minutes, secs = divmod(remainder, 60)
-        if hours:
-            time_str = f"{hours}h {minutes}m {secs}s"
-        elif minutes:
-            time_str = f"{minutes}m {secs}s"
+        imaging_seconds = math.ceil(total_images * _get_time_per_image_s() + total_stacks * 1.0)
+        imaging_time_str = _format_duration(imaging_seconds)
+
+        if self._fs_enable_check.isChecked():
+            focus_stack_seconds = total_stacks * n_z * _get_focus_stack_time_per_image_s()
+            total_time_str = _format_duration(math.ceil(max(imaging_seconds, focus_stack_seconds)))
+            time_summary = f"Imaging: {imaging_time_str}  |  Total incl. stacking: {total_time_str}"
         else:
-            time_str = f"{secs}s"
+            time_summary = f"Est. time: {imaging_time_str}"
 
         self._summary_label.setText(
             f"Grid: {n_x} × {n_y} positions  |  {n_z} Z slices each  |  "
-            f"{total_images} images total  |  Est. time: {time_str}"
+            f"{total_images} images total  |  {time_summary}"
         )
         self._start_btn.setEnabled(True)
 
@@ -837,6 +874,8 @@ class AreaScanWidget(QWidget):
             step_decimals=decimals,
             output_folder=output_folder,
             time_per_image_s=_get_time_per_image_s(),
+            focus_stack_enabled=self._fs_enable_check.isChecked(),
+            focus_stack_time_per_image_s=_get_focus_stack_time_per_image_s(),
             parent=self,
         )
         if dlg.exec() != QDialog.DialogCode.Accepted:

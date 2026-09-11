@@ -199,6 +199,45 @@ class AreaScanSettings:
     slab_overlap: int = 5
     workers: int = 3
 
+    # Rolling per-resolution focus-stack seconds-per-image samples (most
+    # recent last, capped at MAX_FOCUS_STACK_TIME_SAMPLES), keyed by "WxH".
+    # AreaScan divides each completed stack's duration by its image count and
+    # records the result here - multiply by a stack's image count to estimate
+    # that stack's focus-stack duration. Not surfaced in the settings UI, it's
+    # purely an automatically tracked estimate.
+    focus_stack_time_samples_s: dict[str, list[float]] = field(default_factory=dict)
+
+    # Unannotated so dataclass()/asdict() don't treat these as per-instance
+    # fields.
+    #
+    # 2.0s/image is a rough starting point until real samples are recorded.
+    DEFAULT_FOCUS_STACK_TIME_PER_IMAGE_S = 2.0
+    MAX_FOCUS_STACK_TIME_SAMPLES = 20
+
+    def get_focus_stack_time_per_image_s(self, resolution_key: str) -> float:
+        """Mean recorded focus-stack seconds-per-image for *resolution_key*.
+
+        Returns ``DEFAULT_FOCUS_STACK_TIME_PER_IMAGE_S`` when no samples have
+        been recorded yet.
+        """
+        samples = self.focus_stack_time_samples_s.get(resolution_key)
+        if not samples:
+            return self.DEFAULT_FOCUS_STACK_TIME_PER_IMAGE_S
+        return sum(samples) / len(samples)
+
+    def record_focus_stack_time_s(self, resolution_key: str, duration_s: float, image_count: int) -> None:
+        """Record a completed focus stack's duration, normalised to seconds-per-image.
+
+        Keeps only the most recent ``MAX_FOCUS_STACK_TIME_SAMPLES`` samples for
+        *resolution_key*. No-op if *image_count* is not positive.
+        """
+        if image_count <= 0:
+            return
+        samples = self.focus_stack_time_samples_s.setdefault(resolution_key, [])
+        samples.append(duration_s / image_count)
+        if len(samples) > self.MAX_FOCUS_STACK_TIME_SAMPLES:
+            del samples[: len(samples) - self.MAX_FOCUS_STACK_TIME_SAMPLES]
+
 
 @dataclass
 class AutomationSettings:

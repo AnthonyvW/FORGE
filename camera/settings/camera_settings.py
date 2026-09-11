@@ -306,6 +306,16 @@ class CameraSettings(ABC):
         _, w, h = self.get_current_still_resolution()
         return f"{w}x{h}"
 
+    def get_current_resolution_key(self) -> str:
+        """Return a stable "WxH" key for whatever still resolution is
+        currently configured (via ``get_current_still_resolution()``).
+
+        Unlike ``get_resolution_key()``, this reflects the resolution actually
+        configured on the camera rather than a specific capture-call index.
+        """
+        _, w, h = self.get_current_still_resolution()
+        return f"{w}x{h}"
+
     def get_average_capture_time_s(self, resolution_key: str) -> float:
         """Mean of the recorded capture durations for *resolution_key*.
 
