@@ -240,6 +240,7 @@ class QueuedFocusStackRoutine(PostProcessingRoutine):
         self.config = config or FocusStackRoutineConfig()
         self._progress_start = progress_start
         self._progress_end = progress_end
+        self.job_name = f"Focus Stack ({Path(input_folder).name})"
 
     def _map_progress(self, fraction: float) -> int:
         span = self._progress_end - self._progress_start
@@ -397,6 +398,7 @@ class StreamingFocusStackRoutine(PostProcessingRoutine):
         self.config = config or FocusStackRoutineConfig()
         self._progress_start = progress_start
         self._progress_end = progress_end
+        self.job_name = f"Focus Stack ({Path(output_path).stem})"
 
         self._image_queue: list[np.ndarray] = []
         self._queue_lock = threading.Lock()
