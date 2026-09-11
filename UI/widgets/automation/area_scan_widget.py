@@ -593,6 +593,27 @@ class AreaScanWidget(QWidget):
         workers_layout.addStretch(1)
         advanced_layout.addWidget(workers_row)
 
+        concurrent_stacks_row = QWidget()
+        concurrent_stacks_layout = QHBoxLayout(concurrent_stacks_row)
+        concurrent_stacks_layout.setContentsMargins(0, 0, 0, 0)
+        concurrent_stacks_layout.setSpacing(8)
+        concurrent_stacks_layout.addWidget(QLabel("Concurrent stacks:"))
+        self._concurrent_stacks_spin = QSpinBox()
+        self._concurrent_stacks_spin.setFixedHeight(28)
+        self._concurrent_stacks_spin.setMinimum(1)
+        self._concurrent_stacks_spin.setMaximum(16)
+        self._concurrent_stacks_spin.setValue(PostProcessingSettings.max_concurrent_focus_stacks)
+        self._concurrent_stacks_spin.setToolTip(
+            "How many focus stacks run at once. Higher values clear the backlog "
+            "faster at the cost of more simultaneous CPU/RAM use. Separate from "
+            "Workers, which controls parallelism within a single stack."
+        )
+        self._concurrent_stacks_spin.valueChanged.connect(self._write_concurrent_stacks_to_settings)
+        self._concurrent_stacks_spin.valueChanged.connect(self._update_summary)
+        concurrent_stacks_layout.addWidget(self._concurrent_stacks_spin)
+        concurrent_stacks_layout.addStretch(1)
+        advanced_layout.addWidget(concurrent_stacks_row)
+
         fs_settings_layout.addWidget(self._advanced_widget)
         fs_layout.addWidget(self._fs_settings_widget)
         self._fs_settings_widget.setVisible(False)
@@ -629,6 +650,14 @@ class AreaScanWidget(QWidget):
     # ------------------------------------------------------------------
 
     def _populate_from_settings(self) -> None:
+        post_processing = get_app_context().post_processing
+        if post_processing is not None:
+            self._concurrent_stacks_spin.blockSignals(True)
+            self._concurrent_stacks_spin.setValue(
+                post_processing.post_processing_settings.max_concurrent_focus_stacks
+            )
+            self._concurrent_stacks_spin.blockSignals(False)
+
         motion = get_app_context().motion
         if motion is None or motion.settings is None:
             return
@@ -697,6 +726,13 @@ class AreaScanWidget(QWidget):
         if motion is None or motion.settings is None:
             return
         setattr(motion.settings.z_stack_area_scan, key, value != 0)
+
+    def _write_concurrent_stacks_to_settings(self, value: int) -> None:
+        post_processing = get_app_context().post_processing
+        if post_processing is None:
+            return
+        post_processing.post_processing_settings.max_concurrent_focus_stacks = value
+        post_processing.save_settings()
 
     # ------------------------------------------------------------------
     # Helpers
