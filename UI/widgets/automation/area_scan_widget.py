@@ -609,7 +609,9 @@ class AreaScanWidget(QWidget):
         self._workers_spin.setValue(3)
         self._workers_spin.setToolTip(
             "Number of parallel workers for stacking. 0 = no limit (use all available). "
-            "Higher values are faster but increase peak RAM by ~100 MiB per additional worker."
+            "Higher values are faster but increase peak RAM by ~100 MiB per additional worker. "
+            "Automatically reduced when Concurrent stacks > 1, so all concurrently running "
+            "stacks together don't oversubscribe the CPU and starve the rest of the app."
         )
         self._workers_spin.valueChanged.connect(
             lambda v: self._write_int_to_settings("workers", v)
@@ -630,8 +632,10 @@ class AreaScanWidget(QWidget):
         self._concurrent_stacks_spin.setValue(PostProcessingSettings.max_concurrent_focus_stacks)
         self._concurrent_stacks_spin.setToolTip(
             "How many focus stacks run at once. Higher values clear the backlog "
-            "faster at the cost of more simultaneous CPU/RAM use. Separate from "
-            "Workers, which controls parallelism within a single stack."
+            "faster at the cost of more simultaneous CPU/RAM use, and automatically "
+            "reduce each stack's Workers so the total stays near the CPU's core count "
+            "instead of overloading it and slowing down the rest of the app (including "
+            "this UI)."
         )
         self._concurrent_stacks_spin.valueChanged.connect(self._write_concurrent_stacks_to_settings)
         self._concurrent_stacks_spin.valueChanged.connect(self._update_summary)
