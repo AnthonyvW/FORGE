@@ -19,6 +19,7 @@ from PySide6.QtWidgets import (
 )
 from PySide6.QtCore import Qt, QTimer
 
+from camera.settings.camera_settings import CameraSettings
 from common.app_context import get_app_context
 from common.logger import warning, error
 from motion.routines.area_scan import AreaScan
@@ -31,7 +32,22 @@ from UI.widgets.automation.output_folder_widget import OutputFolderWidget
 # Confirmation dialog
 # ---------------------------------------------------------------------------
 
-TIME_PER_IMAGE = 1.5 # Actual time it takes is 1.3, but it takes 0.2 seconds to settle
+def _get_time_per_image_s() -> float:
+    """Mean still-capture duration for the resolution the area scan will use.
+
+    Falls back to ``CameraSettings.DEFAULT_CAPTURE_TIME_S`` before any capture
+    history has been recorded for that resolution, or if the camera isn't
+    ready yet.
+    """
+    camera = get_app_context().camera
+    if camera is None:
+        return CameraSettings.DEFAULT_CAPTURE_TIME_S
+    try:
+        settings = camera.settings
+    except RuntimeError:
+        return CameraSettings.DEFAULT_CAPTURE_TIME_S
+    return settings.get_average_capture_time_s(settings.get_resolution_key(0))
+
 
 class _ConfirmAreaScanDialog(QDialog):
     """Modal dialog summarising the area scan parameters before starting."""
@@ -49,6 +65,7 @@ class _ConfirmAreaScanDialog(QDialog):
         z_step_mm: float,
         step_decimals: int,
         output_folder: str,
+        time_per_image_s: float,
         parent: QWidget | None = None,
     ) -> None:
         super().__init__(parent)
@@ -70,7 +87,7 @@ class _ConfirmAreaScanDialog(QDialog):
         total_images = total_stacks * n_z
 
         # Rough estimate of how long it'll take
-        total_seconds = math.ceil(total_images * TIME_PER_IMAGE + total_stacks * 1.0)
+        total_seconds = math.ceil(total_images * time_per_image_s + total_stacks * 1.0)
         hours, remainder = divmod(total_seconds, 3600)
         minutes, seconds = divmod(remainder, 60)
         if hours:
@@ -683,7 +700,7 @@ class AreaScanWidget(QWidget):
         total_stacks = n_x * n_y
         total_images = total_stacks * n_z
 
-        total_seconds = math.ceil(total_images * TIME_PER_IMAGE + total_stacks * 1.0)
+        total_seconds = math.ceil(total_images * _get_time_per_image_s() + total_stacks * 1.0)
         hours, remainder = divmod(total_seconds, 3600)
         minutes, secs = divmod(remainder, 60)
         if hours:
@@ -819,6 +836,7 @@ class AreaScanWidget(QWidget):
             z_step_mm=z.step_mm,
             step_decimals=decimals,
             output_folder=output_folder,
+            time_per_image_s=_get_time_per_image_s(),
             parent=self,
         )
         if dlg.exec() != QDialog.DialogCode.Accepted:
