@@ -87,6 +87,8 @@ def _write_scan_profile(
     z_positions_count: int,
     dpi: float | None,
     total_elapsed_s: float,
+    imaging_elapsed_s: float,
+    focus_stacking_elapsed_s: float | None,
     stack_profiles: list[dict],
     total_images_captured: int,
     x_settle_ms: int,
@@ -127,6 +129,13 @@ def _write_scan_profile(
     else:
         timing_lines = "  No stacks completed."
 
+    focus_stacking_line = (
+        f"  Focus stacking elapsed: {_fmt_duration(focus_stacking_elapsed_s)}"
+        f" ({focus_stacking_elapsed_s:.3f} s)\n"
+        if focus_stacking_elapsed_s is not None
+        else ""
+    )
+
     description = (
         f"Z-Stack Area Scan - {output_folder.name}\n"
         f"  Grid: {x_count} X x {y_count} Y = {total_stacks} stacks,"
@@ -140,6 +149,9 @@ def _write_scan_profile(
         f"{dpi_line}\n"
         f"  Total elapsed: {_fmt_duration(total_elapsed_s)}"
         f" ({total_elapsed_s:.3f} s)\n"
+        f"  Imaging elapsed: {_fmt_duration(imaging_elapsed_s)}"
+        f" ({imaging_elapsed_s:.3f} s)\n"
+        f"{focus_stacking_line}"
         f"  Stacks completed: {len(stack_profiles)} / {total_stacks}\n"
         f"  Images captured: {total_images_captured}\n"
         f"{timing_lines}"
@@ -176,6 +188,12 @@ def _write_scan_profile(
         "summary": {
             "total_elapsed_s": round(total_elapsed_s, 3),
             "total_elapsed_formatted": _fmt_duration(total_elapsed_s),
+            "imaging_elapsed_s": round(imaging_elapsed_s, 3),
+            "imaging_elapsed_formatted": _fmt_duration(imaging_elapsed_s),
+            "focus_stacking_elapsed_s": round(focus_stacking_elapsed_s, 3) if focus_stacking_elapsed_s is not None else None,
+            "focus_stacking_elapsed_formatted": (
+                _fmt_duration(focus_stacking_elapsed_s) if focus_stacking_elapsed_s is not None else None
+            ),
             "stacks_completed": len(stack_profiles),
             "total_images_captured": total_images_captured,
             "stack_duration_min_s": round(min(durations), 3) if durations else None,
@@ -426,6 +444,13 @@ class AreaScan(AutomationRoutine):
         focus_stack_resolution_key = camera.settings.get_current_resolution_key()
         focus_stack_samples_recorded = False
 
+        # Wall-clock span of the focus-stacking work, for the final summary:
+        # from the first stack being enqueued to the last one completing.
+        # Recorded regardless of mv_settings availability so the summary can
+        # always report it.
+        focus_stack_first_enqueue_time: float | None = None
+        focus_stack_last_complete_time: float | None = None
+
         # Focus stacking runs on the post-processing manager's worker thread in
         # parallel with imaging. Each routine reports its own actual processing
         # duration (excluding time spent waiting in the queue) via
@@ -433,8 +458,11 @@ class AreaScan(AutomationRoutine):
         # image (since stack size varies) so the ETA can factor it in once at
         # least one stack has finished this run.
         def _on_post_processing_complete(result: RoutineResult) -> None:
-            nonlocal focus_stack_samples_recorded
-            if mv_settings is None or not result.success:
+            nonlocal focus_stack_samples_recorded, focus_stack_last_complete_time
+            if not result.success:
+                return
+            focus_stack_last_complete_time = time.monotonic()
+            if mv_settings is None:
                 return
             fs_result = result.get("focus_stack")
             if fs_result is None:
@@ -442,7 +470,7 @@ class AreaScan(AutomationRoutine):
             mv_settings.record_focus_stack_time_s(focus_stack_resolution_key, fs_result.duration_s, fs_result.frame_count)
             focus_stack_samples_recorded = True
 
-        if self._focus_stack_config is not None and post_processing is not None and mv_settings is not None:
+        if self._focus_stack_config is not None and post_processing is not None:
             post_processing.add_routine_complete_listener(_on_post_processing_complete)
 
         def _combined_eta(stacks_remaining: int, mean_stack_s: float) -> float:
@@ -654,6 +682,8 @@ class AreaScan(AutomationRoutine):
             # runs them one at a time while imaging continues freely.
             if self._focus_stack_config is not None and stack_captures > 0:
                 if not self._check_stop():
+                    if focus_stack_first_enqueue_time is None:
+                        focus_stack_first_enqueue_time = time.monotonic()
                     self._enqueue_focus_stack(post_processing, subfolder)
 
             # ----------------------------------------------------------
@@ -709,6 +739,8 @@ class AreaScan(AutomationRoutine):
             else:
                 info("[AreaScan]   All stacks complete.")
 
+        imaging_elapsed = time.monotonic() - routine_start
+
         self._set_activity("Returning home")
         self.motion.home()
 
@@ -732,6 +764,10 @@ class AreaScan(AutomationRoutine):
                 post_processing.stop_routine()
                 post_processing.clear_queue()
             post_processing.remove_routine_complete_listener(_on_post_processing_complete)
+
+        focus_stack_elapsed = 0.0
+        if focus_stack_first_enqueue_time is not None and focus_stack_last_complete_time is not None:
+            focus_stack_elapsed = focus_stack_last_complete_time - focus_stack_first_enqueue_time
 
         # ------------------------------------------------------------------
         # Update the tracked average capture time if it moved enough to matter
@@ -763,6 +799,9 @@ class AreaScan(AutomationRoutine):
 
         info("[AreaScan] ===== Scan complete =====")
         info(f"[AreaScan] Total duration:      {_fmt_duration(total_elapsed)}")
+        info(f"[AreaScan] Imaging time:        {_fmt_duration(imaging_elapsed)}")
+        if self._focus_stack_config is not None:
+            info(f"[AreaScan] Focus stacking time: {_fmt_duration(focus_stack_elapsed)}")
         info(f"[AreaScan] Stacks completed:    {stacks_completed_final} / {total_stacks}")
         info(f"[AreaScan] Images captured:     {total_images_captured}")
         info(f"[AreaScan] Output folder:       {self._output_folder}")
@@ -788,6 +827,8 @@ class AreaScan(AutomationRoutine):
             z_positions_count=z_slices_per_stack,
             dpi=dpi,
             total_elapsed_s=total_elapsed,
+            imaging_elapsed_s=imaging_elapsed,
+            focus_stacking_elapsed_s=focus_stack_elapsed if self._focus_stack_config is not None else None,
             stack_profiles=stack_profiles,
             total_images_captured=total_images_captured,
             x_settle_ms=x_settle_ms,
