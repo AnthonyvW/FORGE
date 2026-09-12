@@ -42,10 +42,16 @@ DEFAULT_TILE_SIZE = 512
 DEFAULT_QUALITY = 90
 
 
+def _report_progress(image: pyvips.Image, progress: pyvips.VipsProgress) -> None:
+    print(f"\rGenerating pyramidal TIFF: {progress.percent:3d}%", end="", flush=True)
+
+
 def write_pyramid_tiff(
     input_path: Path, output_path: Path, tile_size: int, compression: str, quality: int,
 ) -> None:
     image = pyvips.Image.new_from_file(str(input_path), access="sequential")
+    image.set_progress(True)
+    image.signal_connect("eval", _report_progress)
     image.tiffsave(
         str(output_path),
         tile=True,
@@ -56,6 +62,7 @@ def write_pyramid_tiff(
         Q=quality,
         bigtiff=True,
     )
+    print()
 
 
 def main() -> None:
