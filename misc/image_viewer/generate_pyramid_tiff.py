@@ -29,6 +29,7 @@ Usage:
 from __future__ import annotations
 
 import argparse
+import time
 from pathlib import Path
 
 import pyvips
@@ -42,8 +43,28 @@ DEFAULT_TILE_SIZE = 512
 DEFAULT_QUALITY = 90
 
 
-def _report_progress(image: pyvips.Image, progress: pyvips.VipsProgress) -> None:
-    print(f"\rGenerating pyramidal TIFF: {progress.percent:3d}%", end="", flush=True)
+class _ProgressReporter:
+    def __init__(self) -> None:
+        self.start_time = time.monotonic()
+        self.last_time = self.start_time
+        self.last_percent = 0
+        self.seconds_remaining: float | None = None
+
+    def __call__(self, image: pyvips.Image, progress: pyvips.VipsProgress) -> None:
+        now = time.monotonic()
+        percent = progress.percent
+        elapsed = now - self.start_time
+
+        # Reported percent otherwise repeats between callbacks, so only
+        # recompute the estimate on the callback where it actually advances.
+        if percent > self.last_percent:
+            seconds_per_percent = (now - self.last_time) / (percent - self.last_percent)
+            self.seconds_remaining = seconds_per_percent * (100 - percent)
+            self.last_time = now
+            self.last_percent = percent
+
+        eta = f", ~{self.seconds_remaining:.0f}s remaining" if self.seconds_remaining is not None else ""
+        print(f"\rGenerating pyramidal TIFF: {percent:3d}% (elapsed {elapsed:.0f}s{eta})", end="", flush=True)
 
 
 def write_pyramid_tiff(
@@ -51,7 +72,7 @@ def write_pyramid_tiff(
 ) -> None:
     image = pyvips.Image.new_from_file(str(input_path), access="sequential")
     image.set_progress(True)
-    image.signal_connect("eval", _report_progress)
+    image.signal_connect("eval", _ProgressReporter())
     image.tiffsave(
         str(output_path),
         tile=True,
